@@ -1,0 +1,60 @@
+# CREATOR Case PMSM — TU Graz open benchmark motor
+# 70 W, 4-pole, 6-slot, sintered ferrite, concentrated winding
+# Source: arXiv:2501.15921, DOI 10.3217/sns1d-77m43
+
+[motor]
+name = "CREATOR Case PMSM"
+type = "SPMSM"
+
+[circuit]
+n_p = 2
+R_s = 8.9462         # Ohm
+L_d = 0.2055         # H
+L_q = 0.3320         # H
+psi_f = 0.1144       # Wb
+J = 0.00011348       # kg m^2
+
+[winding]
+n_slots = 6
+N = 328              # turns per slot
+k_w = 0.866          # concentrated single-layer winding factor
+layers = 1
+
+[geometry]
+stator_od = 0.113    # m
+stator_id = 0.0478   # m
+rotor_od = 0.047     # m
+air_gap = 0.0004     # m
+L_stk = 0.0301       # m (stack length)
+magnet_width = 0.0176       # m (circumferential)
+magnet_thickness = 0.00435  # m (radial)
+magnet_span_deg = 45.0
+slot_height = 0.0196  # m
+slot_width = 0.0216   # m
+slot_opening_width = 0.00323  # m
+slot_opening_height = 0.00098 # m
+tooth_width = 0.0148  # m
+tooth_height = 0.020  # m
+
+[materials]
+steel_grade = "M250-35A"
+magnet_type = "sintered_ferrite"
+B_rem = 0.415         # T (from dataset Ferrite_BH.csv, H=0 intercept)
+mu_r_pm = 1.1         # from dataset Ferrite_properties.csv
+
+[drive]
+U_DC = 326.0          # V (max DC-link voltage)
+MAX_I_S = 0.42        # A (peak of 0.30 A rms max)
+W_REF = 209.4         # rad/s (2000 rpm mechanical)
+
+[rated]
+speed_rpm = 2000
+torque_Nm = 0.10
+I_rms_A = 0.21
+V_rms_V = 135.0
+j_s = 0.0             # FEM-domain value; needs geometry parameterization
+
+[provenance]
+doi = "10.3217/sns1d-77m43"
+paper = "arXiv:2501.15921"
+references = ["Dhakal et al., COMPEL 44(4), 2025"]

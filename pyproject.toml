@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "phasesweep"
+version = "0.1.0"
+description = "PMSM simulation for stator/rotor design exploration"
+requires-python = ">=3.12"
+authors = [{name = "Jone"}]
+license = {text = "LGPL-2.1-only"}
+readme = "README.md"
+keywords = ["motor", "pmsm", "bldc", "fem", "simulation"]
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "motulator",
+    "ngsolve",
+]
+
+[project.optional-dependencies]
+gpu = ["cupy-cuda12x"]
+test = ["pytest", "pytest-timeout"]
+
+[project.urls]
+Repository = "https://github.com/jonelay/phase-sweep"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
