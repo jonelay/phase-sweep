@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Generated output
+results/
+plots/
+*.png
+!docs/images/*.png
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
