@@ -1,149 +1,120 @@
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
+
+from phasesweep.geometry import geometry_from_toml
+from phasesweep.motor import DriveParams as DriveParamsDC
+from phasesweep.motor import Motor as MotorDC
 
 
-class MotorConfig(TypedDict):
-    n_p: int
-    R_s: float
-    L_d: float
-    L_q: float
-    psi_f: float
-    J: float
-    n_slots: int
-    j_s: float
+def _require_section(raw: dict[str, Any], section: str, path: Path) -> dict[str, Any]:
+    if section not in raw:
+        raise ValueError(f"{path}: missing required section [{section}]")
+    return raw[section]
 
 
-class FullMotorConfig(MotorConfig, total=False):
-    N: int
-    k_w: float
-    L_stk: float
+def _require_field(section_data: dict[str, Any], field: str, section: str, path: Path) -> Any:
+    if field not in section_data:
+        raise ValueError(
+            f"{path}: [{section}] missing required field '{field}'"
+        )
+    return section_data[field]
 
 
-class DriveParams(TypedDict):
-    U_DC: float
-    MAX_I_S: float
-    W_REF: float
+def load_motor(path: str | Path) -> MotorDC:
+    """Load a TOML motor definition file into a Motor dataclass.
 
-
-@dataclass
-class Motor:
-    config: FullMotorConfig
-    drive: DriveParams
-    name: str
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-def load_motor(path: str | Path) -> Motor:
-    """Load a TOML motor definition file."""
+    TOML values are SI (meters, ohms, henries, Wb, T, A) with two
+    conveniences: `I_rated_rms` is converted to peak (× √2) and
+    `slot_opening_ratio` to `slot_opening_width` at parse time.
+    Raises ValueError naming the file, section, and field on invalid input.
+    """
+    path = Path(path)
     with open(path, "rb") as f:
         raw = tomllib.load(f)
 
-    circuit = raw["circuit"]
-    winding = raw["winding"]
-    geometry = raw.get("geometry", {})
-    rated = raw.get("rated", {})
+    circuit = _require_section(raw, "circuit", path)
+    n_p = _require_field(circuit, "n_p", "circuit", path)
 
-    config: FullMotorConfig = {
-        "n_p": circuit["n_p"],
-        "R_s": circuit["R_s"],
-        "L_d": circuit["L_d"],
-        "L_q": circuit["L_q"],
-        "psi_f": circuit["psi_f"],
-        "J": circuit["J"],
-        "n_slots": winding["n_slots"],
-        "j_s": rated.get("j_s", 0.0),
-        "N": winding["N"],
-        "k_w": winding["k_w"],
-        "L_stk": geometry.get("L_stk", 0.10),
-    }
-
+    winding = raw.get("winding", {})
+    geometry_raw = raw.get("geometry", {})
+    materials = raw.get("materials", {})
     drive_raw = raw.get("drive", {})
-    drive: DriveParams = {
-        "U_DC": drive_raw.get("U_DC", U_DC),
-        "MAX_I_S": drive_raw.get("MAX_I_S", MAX_I_S),
-        "W_REF": drive_raw.get("W_REF", W_REF),
-    }
 
-    metadata: dict[str, Any] = {}
-    for section in ("geometry", "materials", "rated", "provenance"):
-        if section in raw:
-            metadata[section] = raw[section]
+    if not geometry_raw:
+        raise ValueError(f"{path}: missing required section [geometry]")
 
-    return Motor(
-        config=config,
-        drive=drive,
-        name=raw.get("motor", {}).get("name", Path(path).stem),
-        metadata=metadata,
-    )
+    topology = raw.get("motor", {}).get("topology", "inrunner")
+    if "n_slots" in winding:
+        if "n_slots" in geometry_raw and geometry_raw["n_slots"] != winding["n_slots"]:
+            raise ValueError(
+                f"{path}: n_slots mismatch: [geometry] has "
+                f"{geometry_raw['n_slots']}, [winding] has {winding['n_slots']}"
+            )
+        # Merge before building so a TOML slot_opening_ratio converts
+        # to width using the [winding] slot count
+        geometry_raw = {**geometry_raw, "n_slots": winding["n_slots"]}
+    try:
+        geo = geometry_from_toml(geometry_raw, topology)
+    except (ValueError, KeyError) as e:
+        raise ValueError(f"{path}: [geometry] {e}") from e
+
+    try:
+        drive = DriveParamsDC(
+            U_DC=drive_raw.get("U_DC", 540.0),
+            MAX_I_S=drive_raw.get("MAX_I_S", 20.0),
+            W_REF=drive_raw.get("W_REF", 2 * np.pi * 50),
+            I_LIMIT=drive_raw.get("I_LIMIT"),
+        )
+    except ValueError as e:
+        raise ValueError(f"{path}: [drive] {e}") from e
+
+    name = raw.get("motor", {}).get("name", path.stem)
+
+    I_rated = circuit.get("I_rated")
+    I_rated_rms = circuit.get("I_rated_rms")
+    if I_rated is None and I_rated_rms is not None:
+        from math import sqrt
+        I_rated = I_rated_rms * sqrt(2)
+
+    try:
+        return MotorDC(
+            name=name,
+            geometry=geo,
+            n_p=n_p,
+            R_s=circuit.get("R_s"),
+            L_d=circuit.get("L_d"),
+            L_q=circuit.get("L_q"),
+            psi_f=circuit.get("psi_f"),
+            J=circuit.get("J"),
+            B_rem=materials.get("B_rem"),
+            alpha_p=geometry_raw.get("alpha_p", 1.0),
+            mu_r_fe=materials.get("mu_r_fe", 1000.0),
+            mu_r_pm=materials.get("mu_r_pm", 1.05),
+            N=winding.get("N"),
+            k_w=winding.get("k_w"),
+            L_stk=geometry_raw.get("L_stk"),
+            I_rated=I_rated,
+            coils_series=winding.get("coils_series"),
+            drive=drive,
+        )
+    except ValueError as e:
+        raise ValueError(f"{path}: {e}") from e
 
 
-def load_motors(directory: str | Path = "motors") -> dict[str, Motor]:
-    """Load all .toml motor files from a directory."""
-    results: dict[str, Motor] = {}
+def load_motors(directory: str | Path = "motors") -> dict[str, MotorDC]:
+    """Load all .toml motor files from a directory. Skips files that fail validation."""
+    import logging
+    results: dict[str, MotorDC] = {}
     for p in sorted(Path(directory).glob("*.toml")):
-        motor = load_motor(p)
+        try:
+            motor = load_motor(p)
+        except (KeyError, ValueError) as e:
+            logging.warning("Skipping %s: %s", p.name, e)
+            continue
         results[motor.name] = motor
     return results
-
-
-CONFIGS: dict[str, FullMotorConfig] = {
-    "A: 4-pole SPMSM": FullMotorConfig(
-        n_p=2,
-        R_s=0.2,
-        L_d=4e-3,
-        L_q=4e-3,
-        psi_f=0.1,
-        J=0.002,
-        n_slots=12,
-        j_s=0.10,
-        N=50,
-        k_w=0.966,
-        L_stk=0.10,
-    ),
-    "B: 4-pole IPMSM": FullMotorConfig(
-        n_p=2,
-        R_s=0.2,
-        L_d=4e-3,
-        L_q=6e-3,
-        psi_f=0.1,
-        J=0.002,
-        n_slots=12,
-        j_s=0.10,
-        N=50,
-        k_w=0.966,
-        L_stk=0.10,
-    ),
-    "C: 8-pole SPMSM": FullMotorConfig(
-        n_p=4,
-        R_s=0.3,
-        L_d=2e-3,
-        L_q=2e-3,
-        psi_f=0.08,
-        J=0.002,
-        n_slots=24,
-        j_s=0.08,
-        N=50,
-        k_w=0.966,
-        L_stk=0.10,
-    ),
-}
-
-U_DC: float = 540
-MAX_I_S: float = 20
-T_STOP: float = 2.0
-W_REF: float = 2 * np.pi * 50
-
-SWEEP_BASE: dict[str, float | int] = dict(n_p=2, R_s=0.2, L_d=4e-3, J=0.002)
-SWEEP_LOAD: float = 3.0
-LOAD_T: float = 1.2
-T_STOP_SWEEP: float = 1.8
-
-PSI_F_VALS: NDArray[np.floating] = np.linspace(0.04, 0.22, 6)
-RATIO_VALS: NDArray[np.floating] = np.linspace(1.0, 3.0, 6)

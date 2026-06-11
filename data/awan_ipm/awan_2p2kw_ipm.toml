@@ -1,0 +1,57 @@
+# Awan 2.2-kW IPM — ABB M2BJ 100L 6 B3
+# 6-pole interior PM synchronous motor
+# Source: Awan (2019) doctoral dissertation, Tables 6.2 & 6.3
+#   Aalto University, ISBN 978-952-60-8765-8
+#   Publication VI: Awan et al., IEEE TIA 54(6), 2018, DOI 10.1109/TIA.2018.2862410
+#
+# This is a controls dissertation. The motor is a catalog ABB unit used as a
+# test bench. The paper publishes electrical parameters at the rated operating
+# point (constant-parameter / unsaturated model) but NO geometry, materials,
+# winding details, or inertia.
+
+[motor]
+name = "Awan 2.2-kW IPM"
+type = "IPM"
+
+[circuit]
+n_p = 3                # 75 Hz / (1500/60 rps) = 3 pole pairs (Table 6.2)
+R_s = 3.6              # Ohm (Table 6.2: 0.073 p.u.)
+L_d = 0.036            # H (Table 6.2: 36 mH, 0.34 p.u., rated operating point)
+L_q = 0.051            # H (Table 6.2: 51 mH, 0.48 p.u., rated operating point)
+psi_f = 0.545          # Wb (Table 6.2: 0.545 Vs, 0.85 p.u.)
+I_rated_rms = 4.3      # A (Table 6.2: rated peak = sqrt(2)*4.3 = 6.08 A)
+# J not published — ABB catalog motor, no inertia data in dissertation
+# n_slots, N, k_w not published — no winding data in dissertation
+# geometry not published — no stator/rotor dimensions in dissertation
+# B_rem, mu_r_fe not published — no material data in dissertation
+
+[drive]
+U_DC = 523.0            # V, sqrt(2) * 370 V rated line-to-line (Table 6.3)
+                        # Converter supply range 380-480 V (ACSM1); 523 V is
+                        # minimum DC bus to reach rated output voltage
+MAX_I_S = 6.08          # A, sqrt(2) * 4.3 A_rms (rated peak current, Table 6.2)
+W_REF = 157.08          # rad/s, 2*pi*1500/60 (rated mechanical speed, Table 6.2)
+
+[rated]
+speed_rpm = 1500        # Table 6.2
+torque_Nm = 14          # Table 6.2 (0.80 p.u.)
+frequency_Hz = 75       # Table 6.2
+power_kW = 2.2          # Table 6.3
+cos_phi = 0.9           # Table 6.3
+
+[provenance]
+source = "Awan (2019), Tables 6.2 & 6.3"
+doi = "10.1109/TIA.2018.2862410"
+isbn = "978-952-60-8765-8"
+institution = "Aalto University, Electric Drives Group"
+motor_model = "ABB M2BJ 100L 6 B3"
+converter = "ABB ACSM1-04AS-031A-4"
+notes = """
+Electrical parameters (R_s, L_d, L_q, psi_f) are at the rated operating point
+from the constant-parameter (unsaturated) model. The dissertation also develops
+a nonlinear saturation model (Eq. 2.10) but does not publish its coefficients
+for this motor. Geometry, materials, winding, and inertia are not published —
+this is a catalog ABB motor used as an experimental test bench.
+Eligible for: rated_torque (electrical params only).
+Not eligible for: analytical, FEM (no geometry), drive_sim (no J).
+"""

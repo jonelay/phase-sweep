@@ -1,0 +1,28 @@
+{
+    "motor_name": "Belkhadir 22p/24s ER-PMSM",
+    "test_type": "torque_test",
+    "conditions": {
+        "speed_rpm": 600,
+        "temperature_C": 22.0,
+        "load_torque_Nm": 24.0,
+        "date": "2023-01-01",
+        "instrument": "published"
+    },
+    "quantities": {
+        "tau_rated": 24.0
+    },
+    "waveforms": {},
+    "uncertainty": {},
+    "source_file": "DOI 10.1109/IECON51785.2023.10312419 Table I",
+    "source": "published",
+    "tolerances": {
+        "tau_rated": 15.0
+    },
+    "bound_compare": {
+        "tau_rated": {
+            "computed_key": "tau_mtpa",
+            "relation": "gte",
+            "semantic_note": "Computed non-salient MTPA at I_rated >= published continuous rating. L_d/L_q not published; non-salient assumption valid for SPMSM."
+        }
+    }
+}

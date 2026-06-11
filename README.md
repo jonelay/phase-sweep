@@ -4,37 +4,28 @@ PMSM simulation for stator/rotor design exploration. Built on
 [motulator](https://github.com/Aalto-Electric-Drives/motulator) and
 [NGSolve](https://ngsolve.org/).
 
-![Motor cross-section — 12-slot stator with |B| field map](docs/images/cross_section.png)
+![CREATOR benchmark motor — 2D FEM magnetic field (nonlinear iron)](docs/images/fem_cross_section.png)
 
 ## What it does
 
 - **Drive simulation** — SPMSM and IPMSM comparison using motulator (current-vector control, mechanical load)
 - **2D FEM field solver** — NGSolve magnetostatic solver with smooth-bore and slotted stator geometries, linear or nonlinear iron (Picard iteration)
-- **Analytical validation** — Zhu & Howe (1993) closed-form air-gap field model for cross-checking FEM results
-- **Slotted stator analysis** — OCC boolean geometry for exact arc-bounded slots, armature reaction decomposition, slot-count sweeps
+- **Analytical validation** — Zhu & Howe (2002) closed-form air-gap field model for cross-checking FEM results
+- **Slotted stator analysis** — OCC boolean geometry for exact arc-bounded slots, armature reaction decomposition, smooth-vs-slotted comparison
 - **Parameter sweeps** — explore the flux-linkage (psi_f) vs saliency-ratio (L_q/L_d) design space with crash-safe JSONL result storage
+- **Sensitivity analysis** — perturbation sweeps over geometry and material parameters (OD, gap, L_stk, B_rem) with parallel execution
+- **Cross-validation CLI** — import measured data and compare against computed results across multiple motors
 - **GPU-accelerated harmonic decomposition** — CuPy FFT on CUDA (optional, falls back to NumPy)
-
-## Drive comparison
-
-The demo runs three PMSM designs under the same current-vector controller
-(540 V DC bus, 20 A limit, 50 Hz electrical speed reference) with a 3 Nm
-load step at t = 1.2 s:
-
-- **A: 4-pole SPMSM** — non-salient baseline (L_d = L_q = 4 mH)
-- **B: 4-pole IPMSM** — saliency adds reluctance torque (L_q/L_d = 1.5), producing higher peak torque but drawing more current during acceleration
-- **C: 8-pole SPMSM** — lower flux linkage (psi_f = 0.08 Wb) but higher torque-per-amp from doubled pole count, so less current under load at the cost of slower transient recovery
-
-![Drive comparison — speed, torque, and current for three PMSM designs](docs/images/demo_results.png)
 
 ## Verification and validation
 
 ### Solver verification (Zhu & Howe)
 
-The NGSolve FEM solver is verified against the Zhu & Howe (1993) closed-form
-air-gap field solution. The fundamental agrees within 0.2–0.3% across all
-configurations, confirming that the code solves the magnetostatic equations
-correctly.
+The NGSolve FEM solver is verified against the Zhu & Howe (2002) closed-form
+air-gap field solution. The fundamental agrees within 1% on the Zhu & Howe
+reference configurations and within 2% across the other tested inrunner and
+outrunner configurations (test-enforced bounds), confirming that the code
+solves the magnetostatic equations correctly.
 
 ### Model validation (CREATOR benchmark)
 
@@ -44,27 +35,20 @@ al., COMPEL 2025):
 
 | Test | Computed | Published | Error |
 |------|----------|-----------|-------|
-| Back-EMF (E_0) | 47.92 V | 47.37 V | 1.2% |
-| Rated torque | 0.102 Nm | 0.100 Nm | 1.9% |
-| Max torque (at MTPA) | 0.159 Nm | 0.150 Nm | 5.9% |
-| FEM fundamental (B_1) | 0.0200 T | 0.0200 T | 0.2% |
+| Back-EMF (E_0) | 47.91 V | 47.37 V | 1.1% |
+| Rated torque (MTPA at I_rated) | 0.107 Nm | 0.100 Nm | 6.8% |
+| Max torque (MTPA at I_max) | 0.157 Nm | 0.150 Nm | 4.7% |
 
-The model captures the fundamental accurately. Higher harmonics (5th: 1.7%
-computed vs 13.2% measured) are underpredicted due to the sinusoidal
-magnetization assumption — real ferrite magnets have near-rectangular
-magnetization profiles that produce trapezoidal back-EMF. This is a
-quantified model limitation, not a solver error.
+![CREATOR back-EMF — measured waveform vs analytical fundamental](docs/images/backemf_waveform.png)
 
-## Slot count sensitivity
+The analytical model captures the back-EMF fundamental to within 1.1%.
+The trapezoidal measured waveform reflects the near-rectangular ferrite
+magnets — consistent with the square-wave magnetization convention both
+solvers use; the analytical comparison is fundamental-only because the
+analytical waveform output does not yet include the higher spatial
+harmonics.
 
-A sweep over Q = {6, 9, 12, 18, 24, 36} for a 4-pole SPMSM shows the
-trade-off between winding complexity and field quality:
-
-```
-Q=6:  THD ~ 12%  (wide slots, high distortion)
-Q=12: THD ~  4%  (baseline)
-Q=36: THD ~  1%  (narrow slots, smoother field)
-```
+![Verification and validation summary](docs/images/multimotor_validation.png)
 
 ## Quick start
 
@@ -72,41 +56,69 @@ Q=36: THD ~  1%  (narrow slots, smoother field)
 git clone https://github.com/jonelay/phase-sweep.git
 cd phase-sweep
 python -m venv .venv
-.venv/bin/pip install -e .
+.venv/bin/pip install -e ".[test]"
 
 # Optional: GPU support (requires CUDA 12.x)
 .venv/bin/pip install -e ".[gpu]"
 
-# Run the demo (generates 8 plots)
-.venv/bin/python demo.py
-
 # Run tests
-.venv/bin/python -m pytest -v tests/
+.venv/bin/python -m pytest tests/
+
+# CLI entry points
+phasesweep-import --help
+phasesweep-crossval --output-dir output --plot
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv venv .venv --python 3.12
-uv pip install -e .
-.venv/bin/python demo.py
+uv pip install -e ".[test]"
+uv run pytest tests/
 ```
+
+Compute the air-gap field of a motor defined in TOML:
+
+```python
+from phasesweep import MODEL_REGISTRY, RunConfig, load_motor
+
+motor = load_motor("motors/creator_case_pmsm.toml")
+cfg = RunConfig(motor=motor, model="analytical", n_theta=720)
+metrics = MODEL_REGISTRY["analytical"].fn(cfg)
+print(metrics["backemf_fundamental"])  # V peak, at rated speed
+```
+
+The TOML format (sections, fields, units, defaults) is documented in
+[docs/motor-toml.md](docs/motor-toml.md).
 
 ## Project structure
 
 ```
 phasesweep/
-├── configs.py        # Motor configurations (MotorConfig TypedDict) and constants
-├── sim.py            # Drive simulation, FEM orchestration, sweeps
-├── plots.py          # All plotting functions
-├── fem_field.py      # NGSolve 2D FEM solver + CuPy harmonic decomposition
-├── sweep_types.py    # MotorSweepConfig (frozen, MD5 config_id), SweepResult
-├── result_store.py   # JSONL append-only store with JSON index, crash-safe resume
+├── motor.py          # Motor frozen dataclass (composes Geometry + electrical/winding/material)
+├── geometry.py       # Geometry dataclass, inrunner/outrunner factories, OCC mesh builder
+├── configs.py        # TOML loader (load_motor, load_motors)
+├── registry.py       # MODEL_REGISTRY: model metadata, solver dispatch
+├── solver_params.py  # Validated solver param types (AnalyticalParams, FemParams, DriveSimParams)
+├── defaults.py       # Default parameter values (loaded from defaults.toml)
+├── fem_field.py      # NGSolve 2D FEM solver + harmonic decomposition
+├── sim.py            # Drive simulation (motulator), sweep orchestration
+├── rated_torque.py   # Rated/stall torque models, MTPA curves (Morimoto quadratic)
+├── crossval.py       # Cross-validation framework (delta, bound, curve, key_mapping)
+├── cli_crossval.py   # CLI: compare computed vs measured across motors
+├── cli_import.py     # CLI: import measured data into the result store
+├── measured.py       # MeasuredResult schema, import helpers
+├── perturbation.py   # Perturbation sweep definitions and parameter deltas
+├── parallel.py       # Parallel job execution with progress tracking
+├── sweep_types.py    # RunConfig, RunResult frozen dataclasses
+├── result_store.py   # JSONL append-only store with crash-safe index
+├── geo_sweep.py      # Geometry sweep grid generation
+├── plots.py          # Plotting functions (geometry-aware, output_dir parameter)
 ├── sim_runner.py     # Subprocess runner for motulator (60s timeout)
 └── fem_runner.py     # Subprocess runner for NGSolve (300s timeout)
-demo.py               # Entry point — runs comparisons, sweeps, and FEM analysis
-tests/                # pytest integration tests (98 tests)
-data/                 # CREATOR reference data (CC BY-NC-ND 4.0)
+scripts/              # Validation report, sensitivity analysis
+tests/                # pytest (617 tests)
+data/                 # Reference data (CREATOR, Belkhadir, Awan, Deylami) + own lab measurements
 motors/               # Motor parameter files (TOML)
 ```
 
@@ -131,6 +143,10 @@ for full attribution and citation info.
 
 Code is licensed under the [LGPL-2.1](LICENSE).
 
-Reference data in `data/` is licensed under
+Files in `data/creator_case_pmsm/` derived from the CREATOR dataset are
+licensed under
 [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/) —
-see the data directory README for details.
+see [`data/creator_case_pmsm/README.md`](data/creator_case_pmsm/README.md).
+Other data files contain parameter values transcribed from the cited
+publications, or our own lab measurements, and are covered by the MIT
+license.

@@ -7,7 +7,22 @@ topic. Where a result is already implemented, the relevant function is noted.
 
 ## Air-Gap Field Analysis
 
-### Zhu & Howe (1993) — **implemented** (`zhu_howe_Br`)
+### Zhu, Howe & Chan (2002) — **primary reference** (`zhu_howe_Br`)
+**Zhu, Z. Q., Howe, D., & Chan, C. C. (2002).** "Improved Analytical Model
+for Predicting the Magnetic Field Distribution in Brushless Permanent-Magnet
+Machines." *IEEE Trans. Magn.*, 38(1), pp. 229–238.
+Audited markdown: `docs/refs/zhu_howe_chan_2002_improved_model.md`
+
+Builds on the 1993 four-part series (same first two authors) with improved
+treatment of both internal (inrunner) and external (outrunner) rotor
+topologies. Our `zhu_howe_Br()` implements the 2002 model: open-circuit,
+PM-only field with sinusoidal radial magnetization and infinite iron
+permeability at boundary surfaces. Solves the 2×2 interface-matching system
+numerically. FEM agrees within 1% on fundamental amplitude for the Zhu & Howe
+reference configurations and within 2% for the other tested configurations
+(test-enforced bounds).
+
+### Zhu & Howe (1993) — foundational series
 Four-part series, all in *IEEE Transactions on Magnetics*, 29(1), Jan. 1993.
 All paywalled on IEEE Xplore; no free PDFs found.
 
@@ -18,14 +33,11 @@ All paywalled on IEEE Xplore; no free PDFs found.
 - **Part III — Effect of Stator Slotting**
   https://doi.org/10.1109/20.195559 — pp. 143–151
 
-**What we implement:** the Part I geometry (open-circuit, PM-only field) with
-sinusoidal radial magnetization and infinite iron permeability at both bore
-surfaces. `zhu_howe_Br()` solves the 2×2 interface-matching system numerically.
-FEM matches within 0.18–0.28% on fundamental amplitude (validated against
-Zhu & Howe analytical solution for smooth-bore geometry).
-
-Part III (slotting) is the natural next analytical reference for cogging
-validation once §1.1 is implemented.
+Part III (slotting) is the primary reference for the Carter factor
+correction. Eqs 15–17 define k_c using the
+effective airgap g' = g + h_m/μ_r and the modified stator radius R_se.
+Also the natural reference for validating cogging torque if it is
+implemented (currently unimplemented).
 
 ---
 
@@ -60,9 +72,9 @@ https://doi.org/10.1109/TIA.2002.802989
 Paywalled on IEEE Xplore; no free PDF found.
 
 General reference for cogging torque reduction (slot/pole combination, magnet
-shaping, skew). Cited in the spec as a starting point for IPM barrier geometry
-(§1.4), though this paper focuses on SPM cogging rather than IPM saliency —
-a more targeted IPM barrier reference should be substituted when implementing §1.4.
+shaping, skew). Cited as a starting point for IPM barrier geometry, though
+this paper focuses on SPM cogging rather than IPM saliency — a more targeted
+IPM barrier reference should be substituted when implementing that feature.
 
 ---
 
@@ -74,7 +86,7 @@ ferromagnetic materials." *IEEE Transactions on Magnetics*, 24(1), 621–630.
 https://doi.org/10.1109/20.43994
 
 Theoretical basis for the two-term (hysteresis + eddy) modified Steinmetz
-equation used in spec §3.1:
+equation:
 
 ```
 P = k_h · f · B^α + k_e · f² · B²   [W/kg]
@@ -96,7 +108,7 @@ Product data sheet, 2020. Available from Cleveland-Cliffs (formerly AK Steel).
 PDF: https://e-magnetica.pl/database-em/01_Soft/Electrical_steels/AKSteel_2020/NO-DI-MAX-M-15_M-19_M-22_M-27_M-36_M-43_M-47_2020.pdf
 
 Tabulated B-H data for silicon steel at 60 Hz, 0–2.2 T range. Used for
-the polynomial ν(B²) fit in spec §1.2. Approximately 20 measurement points
+the polynomial ν(B²) fit in nonlinear FEM (Spec 07 §3). Approximately 20 measurement points
 available in the public datasheet. Multi-grade PDF — M-19 section starts
 alongside M-15, M-22, M-27, M-36, M-43, M-47.
 
@@ -104,7 +116,7 @@ alongside M-15, M-22, M-27, M-36, M-43, M-47.
 
 ## Permanent Magnets
 
-### NdFeB demagnetization (spec §3.2)
+### NdFeB demagnetization
 **Arnold Magnetic Technologies.** "Neodymium Iron Boron — N42." Grade datasheet.
 PDF: https://www.arnoldmagnetics.com/wp-content/uploads/2017/11/N42-151021.pdf
 Full Neo catalog: https://www.arnoldmagnetics.com/wp-content/uploads/2019/06/Arnold-Neo-Catalog.pdf
@@ -133,7 +145,7 @@ where iron permeability depends on flux density. At each iteration:
 1. Solve linear system with current ν(B) distribution
 2. Compute |B| per element from the solution
 3. Update ν from B-H curve lookup (iron elements only)
-4. Under-relax: ν_new = α·ν_BH + (1−α)·ν_old, with α = 0.3
+4. Under-relax: ν_new = α·ν_BH + (1−α)·ν_old, with α = 0.2 (defaults.toml)
 
 Convergence criterion: max relative change in ν over iron elements < 1%.
 Typically converges in 5–10 iterations for moderate saturation.
@@ -144,7 +156,7 @@ Engineers.* 3rd ed. Cambridge University Press. Chapter 7 (nonlinear problems).
 
 The B-H curve used is a generic soft magnetic steel composite (not
 grade-specific). See `_BH_B` / `_BH_H` in `fem_field.py`. For grade-specific
-data, see the M19 datasheet entry below.
+data, see the M19 datasheet entry above (Iron Loss section).
 
 ### NGSolve documentation
 **Schöberl, J. (2014–present).** NGSolve finite element library.
@@ -165,7 +177,9 @@ https://doi.org/10.1109/TMAG.1984.1063232
 Paywalled on IEEE Xplore; no free PDF confirmed.
 
 Canonical reference for Maxwell stress tensor torque computation in FEM via
-contour integral on a circular air-gap path — exactly the method in spec §1.1:
+contour integral on a circular air-gap path. Not implemented in phasesweep —
+torque comes from the MTPA circuit model (rated_torque.py), not from FEM
+field integration. Kept as the reference for a future FEM torque path:
 ```
 τ = (L_stk · R_AG² / μ₀) · ∫₀²π B_r(θ) · B_θ(θ) dθ
 ```
@@ -177,15 +191,74 @@ ISBN 978-0-19-964584-7.
 
 ---
 
+## Torque and MTPA
+
+### Awan (2018) — optimal torque control of saturated synchronous motors
+**Awan, H. A. A., Song, Z., Saarakkala, S. E., & Hinkkanen, M. (2018).**
+"Optimal torque control of saturated synchronous motors: Plug-and-play method."
+*IEEE Transactions on Industry Applications*, 54(6), 6110–6120.
+https://doi.org/10.1109/TIA.2018.2862410
+Free PDF: Semantic Scholar (open access).
+
+Torque equation (eq. 2.14, peak-valued space vectors):
+```
+T = (3p/2) · (ψ_d · i_q − ψ_q · i_d)
+```
+With linear magnetics (eq. 2.7–2.8: ψ = L·i + ψ_f):
+```
+T = (3p/2) · [ψ_f · i_q + (L_d − L_q) · i_d · i_q]
+```
+This is the form implemented in motulator (`1.5 * n_p * Im(i_s * conj(psi_s))`).
+MTPA computation for saturated machines via look-up tables (§5.1–5.3).
+For unsaturated (constant L_d, L_q), MTPA reduces to a closed-form quadratic
+(classical result from Morimoto 1994).
+
+**What we use:** torque equation for rated torque and stall torque models;
+MTPA current angle for salient machines. Same equation and conventions as
+motulator.
+
+**Motor data (Table 6.2):** 2.2-kW 6-pole IPM (ABB M2BJ 100L 6 B3) used as
+rated torque validation case: n_p=3, L_d=36 mH, L_q=51 mH, ψ_f=0.545 Wb,
+R_s=3.6 Ω, I_rated=4.3 A_rms (6.08 A peak), rated torque 14 Nm at 1500 rpm.
+TOML: `data/awan_ipm/awan_2p2kw_ipm.toml`. Tests: `tests/test_rated_torque.py`.
+
+### Morimoto et al. (1994) — MTPA for IPM drives
+**Morimoto, S., Sanada, M., & Takeda, Y. (1994).** "Wide-speed operation of
+interior permanent magnet synchronous motors with high-performance current
+regulator." *IEEE Transactions on Industry Applications*, 30(4), 920–926.
+https://doi.org/10.1109/28.297908
+Paywalled on IEEE Xplore; no free PDF found.
+
+Foundational reference for MTPA current angle optimization in IPM drives.
+The unsaturated MTPA condition (dT/dγ = 0 at constant |I_s|) yields a
+quadratic in sin(γ):
+```
+2·(L_q − L_d)·I_s·sin²(γ) + ψ_f·sin(γ) − (L_q − L_d)·I_s = 0
+```
+with solution:
+```
+sin(γ) = [−ψ_f + √(ψ_f² + 8·(L_q − L_d)²·I_s²)] / [4·(L_q − L_d)·I_s]
+i_d = −I_s·sin(γ),  i_q = I_s·cos(γ)
+```
+For SPM (L_d = L_q): γ = 0, i_d = 0, i_q = I_s. Cited by Awan (2018) §5.1.2.
+
+**What we use:** closed-form MTPA for rated torque and stall torque of
+salient machines with constant (unsaturated) inductances. Known limitation: at high stall currents,
+saturation reduces L_d/L_q and ψ_f — linear model overpredicts torque.
+
+---
+
 ## Drive Simulation
 
 ### motulator
 **Hinkkanen, M., et al.** motulator: Motor Drive Simulator. Version 0.7.3.
 https://github.com/Aalto-Electric-Drives/motulator (MIT License)
 
-Used for time-domain drive simulation. Key classes:
-- `SynchronousMachinePars`, `SaturatedSynchronousMachinePars`
-- `MachineCharacteristics`, `ControlLoci`, `MagneticModel`
+Used for time-domain drive simulation. Classes used (`sim.py`):
+- Model: `SynchronousMachine`, `SynchronousMachinePars`, `Drive`,
+  `MechanicalSystem`, `VoltageSourceConverter`, `Simulation`, `Step`
+- Control: `CurrentVectorController(Cfg)`, `SpeedController`,
+  `VectorControlSystem`
 
 API signatures verified against v0.7.3 source.
 

@@ -1,0 +1,77 @@
+# FEMM LRK Motor Analysis — 14-pole/12-slot miniature outrunner
+# Tutorial motor from femm.info, fully dimensioned for FEM cross-validation
+# Source: D. Meeker, "LRK Motor Analysis Worksheet", femm.info, 2004
+# URL: https://www.femm.info/examples/lrk40/lrk-bldc.pdf
+
+[motor]
+name = "FEMM LRK 14p/12s Outrunner"
+type = "SPMSM"
+topology = "outrunner"
+
+[circuit]
+n_p = 7
+# R_s = 0.0493 Ω (worksheet calc, not measured)
+# L_phase = 45.87 μH (worksheet calc, not measured)
+# No measured L_d, L_q, J, psi_f — omit and let solver derive from B_rem
+I_rated_rms = 3.3           # A — estimated from worksheet design point (4 A_rms, 2-on drive)
+
+[winding]
+n_slots = 12
+N = 15                      # turns per coil (single tooth)
+k_w = 0.933                 # 12s/14p concentrated winding factor
+coils_series = 2            # 2 coils per phase in series (SPS: 6 of 12 teeth wound)
+
+[geometry]
+topology = "outrunner"
+# r_stator = 12.8 mm (published: "outer radius of the stator")
+# r_rotor = 14.14 mm (published: "inner radius of the rotor")
+# g_tot = r_rotor - r_stator = 1.34 mm (total gap including magnet)
+# t_m = 0.9 mm (magnet radial thickness)
+# mechanical air gap = g_tot - t_m = 0.44 mm
+# r_magnet = r_stator + 0.44 mm = 13.24 mm (magnet inner surface)
+# r_outer = 15.39 mm (FEMM model: rotor back-iron outer boundary)
+# r_inner = 6.5 mm (FEMM model: stator inner bore)
+r_outer = 0.01539
+r_rotor = 0.01414
+r_magnet = 0.01324
+r_stator = 0.01280
+r_inner = 0.0065
+n_slots = 12
+slot_depth = 0.00455        # m (4.55 mm) — FEMM model: r_stator − r_yoke_outer = 12.80 − 8.25
+slot_width_ratio = 0.4      # FEMM model: slot body ~12°/30° pitch; opening is narrower (7.6°)
+slot_opening_width = 0.0016 # m (w_slot, FEMM model) — Carter uses opening, not body width
+alpha_p = 0.788             # w_m / pole_pitch = 5.0 / 6.346 mm
+L_stk = 0.005              # m (5 mm, published)
+
+[materials]
+mu_r_fe = 4416               # M-19 Steel (from FEMM model lrk.fem)
+magnet_type = "NdFeB"
+# BHmax = 40 MGOe → Br = sqrt(4 * mu_0 * BHmax) = 1.265 T
+B_rem = 1.265               # T
+mu_r_pm = 1.05              # typical NdFeB (paper assumes ~1.0)
+
+[drive]
+U_DC = 12.0                 # V (worksheet: ~4 V at 5000 RPM; 12 V supports ~15K RPM)
+MAX_I_S = 5.66              # A (4 A_rms × √2)
+W_REF = 523.6               # rad/s (5000 RPM mechanical, worksheet design point)
+
+[validation]
+# Worksheet analytical predictions — NOT experimental measurements.
+# No prototype was built. These are 1-D magnetic circuit / lumped-parameter
+# calculations from the FEMM tutorial worksheet. Used only for model consistency
+# checks, not as ground-truth validation targets.
+Kp_Wb = 3.433e-3            # back-EMF constant per phase, trapezoidal plateau (worksheet)
+torque_Nm = 0.0275           # at 4 A peak, 2-phases-on drive (worksheet)
+power_W = 13.1               # mechanical output at 5000 RPM (worksheet)
+alpha_p = 0.788              # w_m / pole_pitch = 5.0 / 6.346 mm (published)
+
+[provenance]
+url = "https://www.femm.info/examples/lrk40/lrk-bldc.pdf"
+paper = "D. Meeker, LRK Motor Analysis Worksheet, 2004"
+institution = "femm.info"
+notes = """No experimental validation data. Analytical worksheet only.
+r_outer and r_inner from FEMM model (lrk.fem); worksheet gives only r_stator and r_rotor.
+slot_depth and slot_width_ratio from FEMM model node radii (r_yoke_outer=8.25mm).
+Actual slot is compound: narrow opening (d_slot=0.77mm, w_slot=1.6mm) then wider body;
+our model simplifies to a single rectangular sector.
+Wire: AWG 22 copper. Stator iron: M-19 Steel (mu_r=4416 in FEMM model)."""

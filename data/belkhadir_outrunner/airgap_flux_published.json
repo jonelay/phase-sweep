@@ -1,0 +1,40 @@
+{
+    "motor_name": "Belkhadir 22p/24s ER-PMSM",
+    "test_type": "airgap_flux_test",
+    "conditions": {
+        "speed_rpm": 0,
+        "temperature_C": 22.0,
+        "load_torque_Nm": 0.0,
+        "date": "2023-01-01",
+        "instrument": "published"
+    },
+    "quantities": {
+        "B_ag_peak": 0.776,
+        "backemf_peak": 67.5,
+        "flux_linkage_peak": 0.10
+    },
+    "waveforms": {},
+    "uncertainty": {},
+    "source_file": "DOI 10.1109/IECON51785.2023.10312419 Eq 2, Figs 8/10/14",
+    "notes": "flux_linkage_peak tolerance is wide (30%) by design: the Zhu & Howe fundamental model underestimates flux linkage for 22p/24s FSCW machines because this topology couples via sub-harmonics not captured by k_w × B_1. Expected field-predicted deviation ~24%.",
+    "source": "published",
+    "tolerances": {
+        "B_ag_peak": 20.0,
+        "backemf_peak": 8.0,
+        "flux_linkage_peak": 30.0
+    },
+    "curve_compare": {
+        "B_ag_peak": {
+            "curve_x": "theta_list",
+            "curve_y": "B_r_list",
+            "extract": "max",
+            "semantic_note": "Published 0.776 T is from Eq. 2: B_PM = B_r·h_m/(g + h_m/α_p), a simplified flat-top formula assuming infinite μ_r. FEM peak includes slot harmonics and will exceed this value."
+        }
+    },
+    "key_mapping": {
+        "backemf_peak": {
+            "computed_key": "backemf_fundamental",
+            "semantic_note": "Waveform peak ≈ fundamental for nearly-sinusoidal machine. Valid within stated tolerance."
+        }
+    }
+}

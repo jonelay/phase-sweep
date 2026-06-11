@@ -1,0 +1,15 @@
+# Solver and geometry defaults — single source of truth for tuning constants.
+#
+# These values are loaded once at import time by phasesweep.defaults.
+# Any module needing a default should import from there rather than
+# hard-coding a number.
+
+[picard]
+# Backtracking can pin relax at its floor (0.025) after a saturation
+# transient; deeply saturated motors then need ~75 iterations (S112).
+max_iterations = 200      # Picard fixed-point iterations (nonlinear FEM)
+tolerance      = 0.01     # convergence residual threshold
+relaxation     = 0.2      # under-relaxation factor (0 < relax <= 1)
+
+[slots]
+opening_fraction = 0.15   # stepped-slot opening depth as fraction of slot_depth

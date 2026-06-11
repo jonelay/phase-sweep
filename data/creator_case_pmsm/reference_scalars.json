@@ -97,7 +97,8 @@
     "density_kg_m3": 4950
   },
   "mtpa": {
-    "_source": "paper text",
+    "_source": "Dhakal et al. (2025) COMPEL 44(4), arXiv:2501.15921, Fig. 12 / §5.2 MTPA analysis",
+    "_convention": "angle measured from d-axis in electrical degrees; gamma = angle - 90 deg",
     "angles_deg_electrical": [100.0, 110.0],
     "currents_Arms": [0.15, 0.30]
   }

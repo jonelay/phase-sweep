@@ -6,6 +6,7 @@ __pycache__/
 
 # Generated output
 results/
+output/
 plots/
 *.png
 !docs/images/*.png
@@ -17,3 +18,10 @@ Thumbs.db
 .idea/
 *.swp
 *~
+
+# Reference materials / datasheets
+docs/refs/
+docs/datasheets/
+
+# Lab capture CSVs (large; back-EMF validation reads summary JSON instead)
+data/actuator_steel_rotor/captures/
