@@ -1,160 +1,128 @@
-"""Type-safe, validated configuration and result objects for motor parameter sweeps."""
+"""Type-safe, validated configuration and result objects for motor runs."""
 
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
-    from phasesweep.configs import FullMotorConfig
+    from phasesweep.motor import Motor as MotorDC
+    from phasesweep.sim import SimPlan
 
 Status = Literal["OK", "TIMEOUT", "ERROR"]
 
 
 @dataclass(frozen=True)
-class MotorSweepConfig:
-    """Immutable, validated motor sweep configuration.
+class RunConfig:
+    """Run configuration composing a Motor with solver/sim parameters.
 
-    Covers both motulator simulation and NGSolve FEM runs via a single type.
-    FEM-specific fields (n_slots, j_s, n_theta, maxh) are ignored by sim_runner;
-    sim-specific fields (load_torque, load_time, t_stop) are ignored by fem_runner.
+    model — registry key ("analytical", "fem", "drive_sim", ...);
+    maxh_fraction — max FEM mesh element size as fraction of r_outer;
+    n_theta — airgap angular samples per revolution;
+    nonlinear — enable B-H curve Picard iteration (FEM);
+    sim_plan — drive-sim timing/load plan (SimPlan);
+    j_s — armature slot current density amplitude (A/m², 0 = open circuit);
+    dataset_id — identity of an imported measured dataset (None for
+    computed models); distinguishes repeat captures of the same test.
     """
 
-    # Core motor params (both runners)
-    n_p: int
-    R_s: float
-    L_d: float
-    L_q: float
-    psi_f: float
-    J: float
+    motor: MotorDC
+    model: str
 
-    # Simulation params
-    load_torque: float = 3.0
-    load_time: float = 1.2
-    t_stop: float = 1.8
-
-    # FEM params
-    n_slots: int = 0
-    j_s: float = 0.0
+    maxh_fraction: float = 0.05
     n_theta: int = 360
-    maxh: float = 0.04
     nonlinear: bool = False
 
-    # Winding params (forwarded to solve_field_fem)
-    N: int = 50
-    k_w: float = 0.966
-    L_stk: float = 0.10
+    sim_plan: SimPlan | None = None
 
-    def __post_init__(self) -> None:
-        if not (1 <= self.n_p <= 20):
-            raise ValueError(f"n_p={self.n_p} outside range [1, 20]")
-        if not (1e-4 <= self.R_s <= 100.0):
-            raise ValueError(f"R_s={self.R_s} outside range [1e-4, 100]")
-        if not (1e-6 <= self.L_d <= 1.0):
-            raise ValueError(f"L_d={self.L_d} outside range [1e-6, 1.0]")
-        if not (1e-6 <= self.L_q <= 1.0):
-            raise ValueError(f"L_q={self.L_q} outside range [1e-6, 1.0]")
-        if not (1e-4 <= self.psi_f <= 10.0):
-            raise ValueError(f"psi_f={self.psi_f} outside range [1e-4, 10.0]")
-        if not (1e-6 <= self.J <= 100.0):
-            raise ValueError(f"J={self.J} outside range [1e-6, 100.0]")
-        if not (0 <= self.n_slots <= 200):
-            raise ValueError(f"n_slots={self.n_slots} outside range [0, 200]")
+    j_s: float = 0.0
 
-    def to_motor_config(self) -> FullMotorConfig:
-        """Convert to MotorConfig-compatible dict for build_sim()."""
-        return {
-            "n_p": self.n_p, "R_s": self.R_s, "L_d": self.L_d, "L_q": self.L_q,
-            "psi_f": self.psi_f, "J": self.J, "n_slots": self.n_slots, "j_s": self.j_s,
-            "N": self.N, "k_w": self.k_w, "L_stk": self.L_stk,
-        }
-
-    @property
-    def config_id(self) -> str:
-        """Deterministic hash for deduplication and resume."""
-        key = (
-            f"{self.n_p}_{self.R_s:.6f}_{self.L_d:.3e}_{self.L_q:.3e}_"
-            f"{self.psi_f:.6f}_{self.J:.6f}_"
-            f"{self.load_torque:.3f}_{self.load_time:.3f}_{self.t_stop:.3f}_"
-            f"{self.n_slots}_{self.j_s:.6f}_{self.n_theta}_{self.maxh:.4f}_"
-            f"{self.nonlinear}_{self.N}_{self.k_w:.4f}_{self.L_stk:.4f}"
-        )
-        return hashlib.md5(key.encode()).hexdigest()[:12]
+    dataset_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "n_p": self.n_p,
-            "R_s": self.R_s,
-            "L_d": self.L_d,
-            "L_q": self.L_q,
-            "psi_f": self.psi_f,
-            "J": self.J,
-            "load_torque": self.load_torque,
-            "load_time": self.load_time,
-            "t_stop": self.t_stop,
-            "n_slots": self.n_slots,
-            "j_s": self.j_s,
+        d: dict[str, Any] = {
+            "motor": self.motor.to_dict(),
+            "model": self.model,
+            "maxh_fraction": self.maxh_fraction,
             "n_theta": self.n_theta,
-            "maxh": self.maxh,
             "nonlinear": self.nonlinear,
-            "N": self.N,
-            "k_w": self.k_w,
-            "L_stk": self.L_stk,
-            "config_id": self.config_id,
+            "j_s": self.j_s,
         }
+        if self.sim_plan is not None:
+            d["sim_plan"] = self.sim_plan.to_dict()
+        if self.dataset_id is not None:
+            d["dataset_id"] = self.dataset_id
+        return d
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> MotorSweepConfig:
+    def from_dict(cls, d: dict[str, Any]) -> RunConfig:
+        from phasesweep.motor import Motor as MotorCls
+        from phasesweep.sim import SimPlan
+
+        motor = MotorCls.from_dict(d["motor"])
+        sim_plan = None
+        if "sim_plan" in d and d["sim_plan"] is not None:
+            sim_plan = SimPlan.from_dict(d["sim_plan"])
         return cls(
-            n_p=d["n_p"],
-            R_s=d["R_s"],
-            L_d=d["L_d"],
-            L_q=d["L_q"],
-            psi_f=d["psi_f"],
-            J=d["J"],
-            load_torque=d.get("load_torque", 3.0),
-            load_time=d.get("load_time", 1.2),
-            t_stop=d.get("t_stop", 1.8),
-            n_slots=d.get("n_slots", 0),
-            j_s=d.get("j_s", 0.0),
+            motor=motor,
+            model=d["model"],
+            maxh_fraction=d.get("maxh_fraction", 0.05),
             n_theta=d.get("n_theta", 360),
-            maxh=d.get("maxh", 0.04),
             nonlinear=d.get("nonlinear", False),
-            N=d.get("N", 50),
-            k_w=d.get("k_w", 0.966),
-            L_stk=d.get("L_stk", 0.10),
+            sim_plan=sim_plan,
+            j_s=d.get("j_s", 0.0),
+            dataset_id=d.get("dataset_id"),
         )
+
+
+Source = Literal["computed", "measured", "published"]
+
+# Legacy compat: old persisted JSONL may have "sim" instead of "drive_sim".
+_LEGACY_MODEL_MAP: dict[str, str] = {
+    "sim": "drive_sim",
+}
+
+
+def _resolve_model(d: dict[str, Any]) -> str:
+    """Resolve model key from v2.0 'model' or v1.0 'run_type' field."""
+    raw = d.get("model") or d.get("run_type")
+    if raw is None:
+        raise KeyError("missing 'model' (or legacy 'run_type')")
+    return _LEGACY_MODEL_MAP.get(raw, raw)
 
 
 @dataclass
-class SweepResult:
-    """Result from a single sweep configuration run.
+class RunResult:
+    """Result from a single run (FEM, sim, or analytical).
 
-    status:
-      OK      — completed successfully, metrics populated
-      TIMEOUT — process killed after timeout, metrics None
-      ERROR   — exception in subprocess, error_msg populated
-
-    metrics keys vary by run_type:
-      sim: t_settle, i_ss, speed_droop, tau_peak
-      fem: peak_Br, fundamental, thd_pct, sh_pct
+    metrics keys/units are model-specific (see MODEL_REGISTRY produces
+    and docs/glossary.md); elapsed_s — wall-clock solve time (s).
     """
 
-    config: MotorSweepConfig
-    run_type: Literal["sim", "fem"]
+    config: RunConfig
+    model: str
     status: Status
     metrics: dict[str, Any] | None
     elapsed_s: float
     error_msg: str | None = None
+    source: Source = "computed"
+    tolerances: dict[str, float] | None = None
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
-    schema_version: str = "v1.0"
+    schema_version: str = "v2.0"
+
+    @property
+    def motor_config_id(self) -> str:
+        return self.config.motor.config_id
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "config": self.config.to_dict(),
-            "run_type": self.run_type,
+            "model": self.model,
+            "source": self.source,
+            "motor_config_id": self.motor_config_id,
             "status": self.status,
             "metrics": self.metrics,
             "elapsed_s": self.elapsed_s,
@@ -162,16 +130,74 @@ class SweepResult:
             "timestamp": self.timestamp,
             "schema_version": self.schema_version,
         }
+        if self.tolerances:
+            d["tolerances"] = self.tolerances
+        return d
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> SweepResult:
+    def from_dict(cls, d: dict[str, Any]) -> RunResult:
         return cls(
-            config=MotorSweepConfig.from_dict(d["config"]),
-            run_type=d.get("run_type", "sim"),
+            config=RunConfig.from_dict(d["config"]),
+            model=_resolve_model(d),
             status=d["status"],
             metrics=d.get("metrics"),
             elapsed_s=d["elapsed_s"],
             error_msg=d.get("error_msg"),
+            source=d.get("source", "computed"),
+            tolerances=d.get("tolerances"),
             timestamp=d.get("timestamp", ""),
-            schema_version=d.get("schema_version", "v1.0"),
+            schema_version=d.get("schema_version", "v2.0"),
         )
+
+
+def compute_run_id(
+    rc: RunConfig, needs: frozenset[str] | None = None,
+) -> str:
+    """Model-aware run ID. Hashes motor.config_id + model + relevant solver params.
+
+    When needs is None, looks up hash_fields from MODEL_REGISTRY automatically.
+    Falls back to hashing all solver params for unknown models.
+    Includes the registry model-code version (when > 1) so results from a
+    superseded physics convention cannot serve from the store.
+    """
+    from phasesweep.registry import MODEL_REGISTRY
+    info = MODEL_REGISTRY.get(rc.model)
+    if needs is None and info is not None:
+        needs = info.hash_fields
+
+    parts = [rc.motor.config_id, rc.model]
+    if info is not None and info.version > 1:
+        parts.append(f"model_v={info.version}")
+    # Dataset identity is unconditional (not a solver param): repeat
+    # captures of the same motor/test must not collide to one run ID
+    if rc.dataset_id is not None:
+        parts.append(f"dataset={rc.dataset_id}")
+
+    drive = rc.motor.drive
+    solver_params: dict[str, str] = {
+        "maxh_fraction": f"{rc.maxh_fraction:.4f}",
+        "n_theta": str(rc.n_theta),
+        "nonlinear": str(rc.nonlinear),
+        "j_s": f"{rc.j_s:.6f}",
+        # Drive params live on the motor but are excluded from
+        # Motor.config_id (keeps archived motor_config_id groupings valid)
+        "U_DC": f"{drive.U_DC:.6g}",
+        "MAX_I_S": f"{drive.MAX_I_S:.6g}",
+        "W_REF": f"{drive.W_REF:.6g}",
+        "I_LIMIT": "none" if drive.I_LIMIT is None else f"{drive.I_LIMIT:.6g}",
+    }
+    if rc.sim_plan is not None:
+        # Hash the full plan — controller tuning and extraction windows
+        # change metrics, so they must change the run ID too
+        solver_params["sim_plan"] = json.dumps(
+            rc.sim_plan.to_dict(), sort_keys=True
+        )
+
+    if needs is not None:
+        solver_params = {k: v for k, v in solver_params.items() if k in needs}
+
+    for k in sorted(solver_params):
+        parts.append(f"{k}={solver_params[k]}")
+
+    key = "|".join(parts)
+    return hashlib.md5(key.encode()).hexdigest()[:12]

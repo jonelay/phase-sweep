@@ -1,381 +1,319 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from phasesweep.result_store import ResultStore, SlimResult
-    from phasesweep.sweep_types import MotorSweepConfig, SweepResult
+    from phasesweep.solver_params import DriveSimParams
 
 import numpy as np
-from numpy.typing import NDArray
-
-from motulator.drive.model import (
-    Drive, SynchronousMachine, MechanicalSystem,
-    VoltageSourceConverter, SynchronousMachinePars, Simulation)
 from motulator.drive.control.sm import (
-    CurrentVectorController, CurrentVectorControllerCfg,
-    VectorControlSystem, SpeedController)
+    CurrentVectorController,
+    CurrentVectorControllerCfg,
+    SpeedController,
+    VectorControlSystem,
+)
+from motulator.drive.model import (
+    Drive,
+    MechanicalSystem,
+    Simulation,
+    SynchronousMachine,
+    SynchronousMachinePars,
+    VoltageSourceConverter,
+)
 from motulator.drive.utils import Step
 
-from phasesweep.configs import (
-    CONFIGS, MotorConfig, U_DC, MAX_I_S, T_STOP, W_REF,
-    SWEEP_BASE, SWEEP_LOAD, LOAD_T, T_STOP_SWEEP,
-    PSI_F_VALS, RATIO_VALS,
-)
+
+def _clamp(val: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, val))
+
+
+@dataclass(frozen=True)
+class SimPlan:
+    """Self-contained execution plan for a drive simulation.
+
+    Carries load parameters AND metric extraction timing windows.
+    Built by plan_sim(); consumed by build_sim() and extract_metrics().
+    """
+
+    # Execution
+    load_torque: float      # Nm
+    load_time: float        # s — when load step is applied
+    t_stop: float           # s — simulation end
+    speed_step_time: float  # s — when speed ref steps from 0
+
+    # Metric extraction windows
+    settle_threshold: float            # fraction of w_ref (e.g. 0.05)
+    ss_window: float                   # s — averaging window before t_stop
+    droop_window: float                # s — post-load window for speed dip
+    accel_window: tuple[float, float]  # (start, end) for peak torque
+
+    # Controller tuning
+    alpha_s: float          # speed-controller bandwidth (rad/s)
+    alpha_c: float          # current-controller bandwidth (rad/s)
+    T_s: float              # control sampling period (s)
+
+    # Diagnostic
+    tau_m: float            # mechanical time constant (s)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "load_torque": self.load_torque,
+            "load_time": self.load_time,
+            "t_stop": self.t_stop,
+            "speed_step_time": self.speed_step_time,
+            "settle_threshold": self.settle_threshold,
+            "ss_window": self.ss_window,
+            "droop_window": self.droop_window,
+            "accel_window": list(self.accel_window),
+            "alpha_s": self.alpha_s,
+            "alpha_c": self.alpha_c,
+            "T_s": self.T_s,
+            "tau_m": self.tau_m,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> SimPlan:
+        aw = d["accel_window"]
+        return cls(
+            load_torque=d["load_torque"],
+            load_time=d["load_time"],
+            t_stop=d["t_stop"],
+            speed_step_time=d["speed_step_time"],
+            settle_threshold=d["settle_threshold"],
+            ss_window=d["ss_window"],
+            droop_window=d["droop_window"],
+            accel_window=(aw[0], aw[1]),
+            alpha_s=d.get("alpha_s", 2 * np.pi * 4),
+            alpha_c=d.get("alpha_c", 2 * np.pi * 200),
+            T_s=d.get("T_s", 125e-6),
+            tau_m=d["tau_m"],
+        )
+
+
+def _current_loop_timing(params: DriveSimParams) -> tuple[float, float, float]:
+    """Electrical time constant, controller sample time, and current-loop
+    bandwidth shared by the speed- and torque-mode planners.
+    """
+    tau_e = params.L_d / params.R_s if params.R_s > 0 else 1e-3
+    T_s = _clamp(tau_e / 5, 10e-6, 125e-6)
+    alpha_c = _clamp(0.2 / T_s, 2 * np.pi * 200, 2 * np.pi * 5000)
+    return tau_e, T_s, alpha_c
+
+
+def plan_sim(params: DriveSimParams, load_fraction: float = 0.5) -> SimPlan:
+    """Derive a SimPlan for speed-control mode from motor physics.
+
+    k_t approximation uses non-salient formula (1.5 * n_p * psi_f).
+    This is conservative for salient motors since reluctance torque
+    adds capability, making load_fraction more conservative.
+    """
+    k_t = 1.5 * params.n_p * params.psi_f
+    drive = params.drive
+    I_limit = drive.I_LIMIT if drive.I_LIMIT is not None else drive.MAX_I_S
+    tau_peak = k_t * I_limit
+
+    load_torque = load_fraction * tau_peak
+
+    tau_m = params.J * drive.W_REF / tau_peak
+    alpha_s = _clamp(3.0 / tau_m, 2 * np.pi * 2, 2 * np.pi * 50)
+
+    _tau_e, T_s, alpha_c = _current_loop_timing(params)
+
+    speed_step_time = _clamp(0.5 * tau_m, 0.01, 0.5)
+    settle_duration = _clamp(8 * tau_m, 0.1, 3.0)
+    load_time = speed_step_time + settle_duration
+    post_load = _clamp(8 * tau_m, 0.1, 3.0)
+    t_stop = load_time + post_load
+
+    ss_window = _clamp(2 * tau_m, 0.01, 0.5)
+    droop_window = _clamp(3 * tau_m, 0.02, 0.5)
+    accel_end = speed_step_time + _clamp(4 * tau_m, 0.05, 1.0)
+    accel_window = (speed_step_time, accel_end)
+
+    return SimPlan(
+        load_torque=load_torque,
+        load_time=load_time,
+        t_stop=t_stop,
+        speed_step_time=speed_step_time,
+        settle_threshold=0.05,
+        ss_window=ss_window,
+        droop_window=droop_window,
+        accel_window=accel_window,
+        alpha_s=alpha_s,
+        alpha_c=alpha_c,
+        T_s=T_s,
+        tau_m=tau_m,
+    )
+
+
+def plan_torque_sim(
+    params: DriveSimParams,
+    tau_ref: float,
+    *,
+    step_time: float = 0.05,
+    ss_window: float = 0.05,
+    load_torque: float | None = None,
+) -> SimPlan:
+    """Derive a SimPlan for torque-control mode.
+
+    Defaults `load_torque = tau_ref` so the mechanical system absorbs the
+    commanded torque and the rotor holds at w_M = 0 — back-EMF stays zero
+    and the steady-state currents match the analytical anchor
+    (|i_s| = tau_ref / (1.5 * n_p * psi_f)) without race against voltage
+    saturation. Pass `load_torque=0` for free acceleration, or any
+    explicit value for other load profiles.
+
+    SimPlan fields unused in torque mode (alpha_s, settle_threshold,
+    droop_window) are set to neutral defaults.
+    """
+    if tau_ref <= 0:
+        raise ValueError(f"tau_ref must be > 0, got {tau_ref}")
+
+    tau_e, T_s, alpha_c = _current_loop_timing(params)
+
+    settle = max(5 * tau_e, 5 / alpha_c)
+    t_stop = step_time + settle + ss_window
+
+    if load_torque is None:
+        load_torque = tau_ref
+
+    return SimPlan(
+        load_torque=load_torque,
+        load_time=step_time,
+        t_stop=t_stop,
+        speed_step_time=step_time,
+        settle_threshold=0.05,
+        ss_window=ss_window,
+        droop_window=0.0,
+        accel_window=(step_time, step_time + settle),
+        alpha_s=2 * np.pi * 4,
+        alpha_c=alpha_c,
+        T_s=T_s,
+        tau_m=0.0,
+    )
+
+
+def _fix_mtpv_nan(ref_gen: Any) -> None:
+    """Patch motulator's MTPV lookup for SPMSM with small parameters.
+
+    motulator 0.7.3 computes _psi_s_mtpv inside compute_flux_and_torque_refs.
+    When the MTPV locus returns NaN (common for SPMSM), downstream
+    compute_current_ref uses phase(NaN) and produces NaN current references.
+    Fix: after each call, replace NaN with j*psi_f (phase = pi/2, i.e. no
+    MTPV constraint — correct for non-salient machines).
+    """
+    _orig = ref_gen.compute_flux_and_torque_refs
+
+    def _safe(tau_M_ref: float, w_m: float, u_dc: float,
+              _rg: Any = ref_gen, _fn: Any = _orig) -> tuple[float, float]:
+        result = _fn(tau_M_ref, w_m, u_dc)
+        if np.isnan(_rg._psi_s_mtpv):
+            _rg._psi_s_mtpv = 1j * _rg.par.psi_f
+        return result
+
+    ref_gen.compute_flux_and_torque_refs = _safe
 
 
 def build_sim(
-    cfg_name: str,
-    cfg: MotorConfig,
-    load_torque: float = 3.0,
-    load_time: float = 1.2,
+    params: DriveSimParams,
+    plan: SimPlan | None = None,
+    *,
+    torque_ref: Step | None = None,
 ) -> Simulation:
+    """Build a motulator Simulation from validated DriveSimParams.
+
+    Default is speed-control mode (current behavior, unchanged). Pass
+    `torque_ref` to use torque-control mode: SpeedController is skipped
+    and the vector controller is driven directly by the torque step.
+    """
+    is_torque_mode = torque_ref is not None
+
+    lt = plan.load_torque if plan else 3.0
+    lt_time = plan.load_time if plan else 1.2
+    sst = plan.speed_step_time if plan else 0.2
+
     par = SynchronousMachinePars(
-        n_p=cfg["n_p"],
-        R_s=cfg["R_s"],
-        L_d=cfg["L_d"],
-        L_q=cfg["L_q"],
-        psi_f=cfg["psi_f"],
+        n_p=params.n_p,
+        R_s=params.R_s,
+        L_d=params.L_d,
+        L_q=params.L_q,
+        psi_f=params.psi_f,
     )
 
+    drive = params.drive
     machine = SynchronousMachine(par)
-    converter = VoltageSourceConverter(u_dc=U_DC)
-    mechanics = MechanicalSystem(J=cfg["J"])
+    converter = VoltageSourceConverter(u_dc=drive.U_DC)
+    mechanics = MechanicalSystem(J=params.J)
     mechanics.set_external_load_torque(
-        lambda t, tau=load_torque, t0=load_time: tau * (t > t0))
+        lambda t, tau=lt, t0=lt_time: tau * (t > t0))
     mdl = Drive(converter=converter, machine=machine, mechanics=mechanics)
 
-    cfg_ctrl = CurrentVectorControllerCfg(i_s_max=MAX_I_S, J=cfg["J"])
-    vector_ctrl = CurrentVectorController(par=par, cfg=cfg_ctrl, sensorless=False)
-    speed_ctrl = SpeedController(J=cfg["J"], alpha_s=2 * np.pi * 4)
-    ctrl_sys = VectorControlSystem(vector_ctrl=vector_ctrl, speed_ctrl=speed_ctrl)
+    _alpha_s = plan.alpha_s if plan else 2 * np.pi * 4
+    _alpha_c = plan.alpha_c if plan else 2 * np.pi * 200
+    _T_s = plan.T_s if plan else 125e-6
 
-    w_ref_mech = W_REF / cfg["n_p"]
-    ctrl_sys.set_speed_ref(Step(step_time=0.2, step_value=w_ref_mech, initial_value=0))
+    cfg_ctrl = CurrentVectorControllerCfg(
+        i_s_max=drive.MAX_I_S, J=params.J, alpha_c=_alpha_c)
+    vector_ctrl = CurrentVectorController(
+        par=par, cfg=cfg_ctrl, sensorless=False, T_s=_T_s)
+
+    if is_torque_mode:
+        ctrl_sys = VectorControlSystem(vector_ctrl=vector_ctrl, speed_ctrl=None)
+        ctrl_sys.set_torque_ref(torque_ref)
+    else:
+        speed_ctrl = SpeedController(J=params.J, alpha_s=_alpha_s)
+        ctrl_sys = VectorControlSystem(vector_ctrl=vector_ctrl, speed_ctrl=speed_ctrl)
+        ctrl_sys.set_speed_ref(
+            Step(step_time=sst, step_value=drive.W_REF, initial_value=0))
+
+    _fix_mtpv_nan(vector_ctrl.reference_gen)
 
     return Simulation(mdl=mdl, ctrl=ctrl_sys, show_progress=False)
 
 
-def run_all() -> dict[str, Any]:
-    results = {}
-    for name, cfg in CONFIGS.items():
-        print(f"Simulating {name}...")
-        sim = build_sim(name, cfg)
-        res = sim.simulate(t_stop=T_STOP)
-        results[name] = res
-        print(f"  done ({T_STOP:.2f}s simulated)")
-    return results
+def extract_metrics(
+    res: Any,
+    *,
+    plan: SimPlan | None = None,
+    w_ref: float,
+) -> dict[str, float]:
+    """Extract scalar performance metrics from a motulator simulation result."""
+    _t_stop = plan.t_stop if plan else 1.8
+    _load_time = plan.load_time if plan else 1.2
+    _sst = plan.speed_step_time if plan else 0.2
+    _settle_thr = plan.settle_threshold if plan else 0.05
+    _ss_window = plan.ss_window if plan else 0.2
+    _droop_window = plan.droop_window if plan else 0.3
+    _accel = plan.accel_window if plan else (0.2, 0.8)
 
-
-def extract_metrics(res: Any, n_p: int) -> dict[str, float]:
     t = res.mdl.t
-    w_m = res.mdl.mechanics.w_M
-    w_e = w_m * n_p
+    w_M = res.mdl.mechanics.w_M
     i_s = np.abs(res.mdl.machine.i_s_ab)
     tau_M = res.mdl.machine.tau_M
 
-    w_norm = w_e / W_REF
+    w_norm = w_M / w_ref
 
-    post_step = t >= 0.2
-    settled = post_step & (np.abs(w_norm - 1.0) < 0.05)
-    t_settle = t[settled][0] - 0.2 if settled.any() else np.nan
+    post_step = t >= _sst
+    settled = post_step & (np.abs(w_norm - 1.0) < _settle_thr)
+    t_settle = t[settled][0] - _sst if settled.any() else np.nan
 
-    ss_mask = t >= (T_STOP_SWEEP - 0.2)
-    i_ss = np.mean(i_s[ss_mask])
+    ss_mask = t >= (_t_stop - _ss_window)
+    i_ss = float(np.mean(i_s[ss_mask])) if ss_mask.any() else np.nan
 
-    pre_load = (t >= 1.0) & (t < LOAD_T)
-    post_load = (t >= LOAD_T) & (t < LOAD_T + 0.3)
-    w_pre = np.mean(w_e[pre_load])
-    w_dip = w_pre - np.min(w_e[post_load]) if post_load.any() else np.nan
-    speed_droop = w_dip / W_REF
+    pre_load = (t >= (_load_time - _ss_window)) & (t < _load_time)
+    post_load = (t >= _load_time) & (t < _load_time + _droop_window)
+    if pre_load.any() and post_load.any():
+        w_pre = np.mean(w_M[pre_load])
+        w_dip = w_pre - np.min(w_M[post_load])
+        speed_droop = w_dip / w_ref
+    else:
+        speed_droop = np.nan
 
-    accel = (t >= 0.2) & (t < 0.8)
+    accel = (t >= _accel[0]) & (t < _accel[1])
     tau_peak = np.max(tau_M[accel]) if accel.any() else np.nan
 
     return dict(t_settle=t_settle, i_ss=i_ss,
                 speed_droop=speed_droop, tau_peak=tau_peak)
 
 
-def _collect_results(
-    store: ResultStore,
-    in_memory: dict[str, SweepResult],
-    completed: set[str],
-) -> dict[str, SlimResult]:
-    from phasesweep.result_store import SlimResult
-    merged: dict[str, SlimResult] = {}
-    if completed:
-        merged.update(store.load_slim())
-    for cid, r in in_memory.items():
-        merged[cid] = SlimResult(
-            config_id=cid, status=r.status, metrics=r.metrics,
-        )
-    return merged
-
-
-def run_sweep(
-    output_dir: str = "results/psi_lq_sweep",
-    workers: int = 1,
-    timeout_s: int = 60,
-    resume: bool = True,
-) -> dict[str, NDArray[np.floating]]:
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-    from pathlib import Path
-
-    from phasesweep.result_store import ResultStore
-    from phasesweep.sim_runner import run_sim_safe
-    from phasesweep.sweep_types import MotorSweepConfig
-
-    n_psi = len(PSI_F_VALS)
-    n_ratio = len(RATIO_VALS)
-    _METRIC_KEYS = ("t_settle", "i_ss", "speed_droop", "tau_peak")
-
-    # Build full grid of configs with positional lookup
-    grid_configs: dict[str, tuple[int, int]] = {}  # config_id -> (i, j)
-    all_configs: list[MotorSweepConfig] = []
-    L_d = float(SWEEP_BASE["L_d"])
-    for i, psi_f in enumerate(PSI_F_VALS):
-        for j, ratio in enumerate(RATIO_VALS):
-            config = MotorSweepConfig(
-                n_p=int(SWEEP_BASE["n_p"]),
-                R_s=float(SWEEP_BASE["R_s"]),
-                L_d=L_d,
-                L_q=float(L_d * ratio),
-                psi_f=float(psi_f),
-                J=float(SWEEP_BASE["J"]),
-                load_torque=SWEEP_LOAD,
-                load_time=LOAD_T,
-                t_stop=T_STOP_SWEEP,
-            )
-            grid_configs[config.config_id] = (i, j)
-            all_configs.append(config)
-
-    store = ResultStore(Path(output_dir))
-    completed = store.get_known_ids() if resume else set()
-    to_run = [config for config in all_configs if config.config_id not in completed]
-
-    total = len(all_configs)
-    skipped = total - len(to_run)
-    if skipped:
-        print(f"  Resuming: {skipped}/{total} already complete")
-
-    done = skipped
-    in_memory: dict[str, SweepResult] = {}
-
-    def _save_and_report(result: SweepResult) -> None:
-        nonlocal done
-        store.save(result)
-        in_memory[result.config.config_id] = result
-        done += 1
-        config = result.config
-        print(f"  [{done}/{total}] psi_f={config.psi_f:.3f} "
-              f"Lq/Ld={config.L_q/config.L_d:.2f} → {result.status}")
-
-    if workers <= 1:
-        for config in to_run:
-            _save_and_report(run_sim_safe(config, timeout_s))
-    else:
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(run_sim_safe, config, timeout_s): config for config in to_run}
-            for future in as_completed(futures):
-                _save_and_report(future.result())
-
-    # Reconstruct grid from in-memory + disk results
-    grid: dict[str, NDArray[np.floating]] = {
-        k: np.full((n_psi, n_ratio), np.nan) for k in _METRIC_KEYS
-    }
-    for cid, slim in _collect_results(store, in_memory, completed).items():
-        if cid not in grid_configs or slim.status != "OK" or not slim.metrics:
-            continue
-        i, j = grid_configs[cid]
-        for k in _METRIC_KEYS:
-            if k in slim.metrics:
-                grid[k][i, j] = slim.metrics[k]
-
-    return grid
-
-
-def _build_fem_config(
-    cfg: MotorConfig, n_slots: int = 0, j_s: float = 0.0, nonlinear: bool = False,
-) -> MotorSweepConfig:
-    from phasesweep.sweep_types import MotorSweepConfig
-    return MotorSweepConfig(
-        n_p=int(cfg["n_p"]),
-        R_s=float(cfg["R_s"]),
-        L_d=float(cfg["L_d"]),
-        L_q=float(cfg["L_q"]),
-        psi_f=float(cfg["psi_f"]),
-        J=float(cfg["J"]),
-        n_slots=int(n_slots),
-        j_s=float(j_s),
-        nonlinear=nonlinear,
-        N=int(cfg.get("N", 50)),
-        k_w=float(cfg.get("k_w", 0.966)),
-        L_stk=float(cfg.get("L_stk", 0.10)),
-    )
-
-
-def _run_fem_batch(
-    configs_and_names: list[tuple[str, MotorSweepConfig]],
-    output_dir: str,
-    resume: bool,
-    timeout_s: int,
-    label: str,
-) -> tuple[dict[str, tuple[NDArray[np.floating], NDArray[np.floating]]], dict[str, NDArray[np.floating]]]:
-    from pathlib import Path
-    from phasesweep.fem_field import batch_harmonics
-    from phasesweep.fem_runner import run_fem_safe
-    from phasesweep.result_store import ResultStore
-
-    id_to_name: dict[str, str] = {config.config_id: name for name, config in configs_and_names}
-
-    store = ResultStore(Path(output_dir))
-    completed = store.get_known_ids() if resume else set()
-    to_run = [(name, config) for name, config in configs_and_names
-              if config.config_id not in completed]
-
-    total = len(configs_and_names)
-    skipped = total - len(to_run)
-    if skipped:
-        print(f"  Resuming: {skipped}/{total} already complete")
-
-    done = skipped
-    in_memory: dict[str, SweepResult] = {}
-    for name, config in to_run:
-        print(f"  {label} {name}...")
-        result = run_fem_safe(config, timeout_s)
-        store.save(result)
-        in_memory[result.config.config_id] = result
-        done += 1
-        print(f"  [{done}/{total}] {name} → {result.status}"
-              f" ({result.elapsed_s:.1f}s)")
-
-    fem_results: dict[str, tuple[NDArray[np.floating], NDArray[np.floating]]] = {}
-    for cid, slim in _collect_results(store, in_memory, completed).items():
-        if cid not in id_to_name or slim.status != "OK" or not slim.metrics:
-            continue
-        name = id_to_name[cid]
-        theta = np.array(slim.metrics["theta_list"])
-        B_r = np.array(slim.metrics["B_r_list"])
-        fem_results[name] = (theta, B_r)
-
-    harmonics = batch_harmonics({name: B for name, (_, B) in fem_results.items()})
-    return fem_results, harmonics
-
-
-def run_field_fem(
-    output_dir: str = "results/fem_field",
-    resume: bool = True,
-    timeout_s: int = 300,
-    nonlinear: bool = False,
-) -> tuple[dict[str, tuple[NDArray[np.floating], NDArray[np.floating]]], dict[str, NDArray[np.floating]]]:
-    configs = [
-        (name, _build_fem_config(cfg, nonlinear=nonlinear))
-        for name, cfg in CONFIGS.items()
-    ]
-    return _run_fem_batch(configs, output_dir, resume, timeout_s, "FEM")
-
-
-def run_field_fem_slotted(
-    output_dir: str = "results/fem_field_slotted",
-    resume: bool = True,
-    timeout_s: int = 300,
-    nonlinear: bool = False,
-) -> tuple[dict[str, tuple[NDArray[np.floating], NDArray[np.floating]]], dict[str, NDArray[np.floating]]]:
-    configs = [
-        (name, _build_fem_config(cfg, n_slots=cfg["n_slots"], j_s=cfg["j_s"],
-                                  nonlinear=nonlinear))
-        for name, cfg in CONFIGS.items()
-    ]
-    return _run_fem_batch(configs, output_dir, resume, timeout_s, "Slotted FEM")
-
-
-def run_armature_decomposition(
-    cfg_name: str = "A: 4-pole SPMSM",
-    nonlinear: bool = False,
-) -> tuple[NDArray[np.floating], dict[str, NDArray[np.floating]], dict[str, NDArray[np.floating]], str, int, int]:
-    from phasesweep.fem_field import solve_field_fem, batch_harmonics
-    cfg = CONFIGS[cfg_name]
-    n_p, psi_f = cfg["n_p"], cfg["psi_f"]
-    L_d, L_q = cfg["L_d"], cfg["L_q"]
-    Q, j_s = cfg["n_slots"], cfg["j_s"]
-
-    print("  PM only (j_s=0) ...")
-    theta, B_pm = solve_field_fem(n_p=n_p, psi_f=psi_f, L_d=L_d, L_q=L_q,
-                                   n_slots=Q, j_s=0.0, nonlinear=nonlinear)
-    print("  Winding only (psi_f~0) ...")
-    _, B_arm = solve_field_fem(n_p=n_p, psi_f=1e-4, L_d=L_d, L_q=L_q,
-                                n_slots=Q, j_s=j_s, nonlinear=nonlinear)
-    print("  Combined ...")
-    _, B_comb = solve_field_fem(n_p=n_p, psi_f=psi_f, L_d=L_d, L_q=L_q,
-                                 n_slots=Q, j_s=j_s, nonlinear=nonlinear)
-
-    components = {"PM only": B_pm, "Winding only": B_arm, "Combined": B_comb}
-    harmonics = batch_harmonics(components)
-    return theta, components, harmonics, cfg_name, Q, n_p
-
-
-def run_slot_sweep(
-    slot_counts: tuple[int, ...] = (6, 9, 12, 18, 24, 36),
-    cfg_name: str = "A: 4-pole SPMSM",
-    output_dir: str = "results/slot_sweep",
-    workers: int = 1,
-    resume: bool = True,
-    timeout_s: int = 300,
-    nonlinear: bool = False,
-) -> tuple[dict[int, NDArray[np.floating]], int, str]:
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-    from pathlib import Path
-    from phasesweep.fem_field import harmonics_1sided
-    from phasesweep.fem_runner import run_fem_safe
-    from phasesweep.result_store import ResultStore
-
-    cfg = CONFIGS[cfg_name]
-
-    all_configs: list[tuple[int, MotorSweepConfig]] = []
-    slot_map: dict[str, int] = {}
-    for Q in slot_counts:
-        sweep_config = _build_fem_config(cfg, n_slots=Q, j_s=cfg["j_s"], nonlinear=nonlinear)
-        slot_map[sweep_config.config_id] = Q
-        all_configs.append((Q, sweep_config))
-
-    store = ResultStore(Path(output_dir))
-    completed = store.get_known_ids() if resume else set()
-    to_run = [(Q, config) for Q, config in all_configs if config.config_id not in completed]
-
-    total = len(all_configs)
-    skipped = total - len(to_run)
-    if skipped:
-        print(f"  Resuming: {skipped}/{total} already complete")
-
-    done = skipped
-    in_memory: dict[str, SweepResult] = {}
-
-    def _save_and_report(result: SweepResult) -> None:
-        nonlocal done
-        store.save(result)
-        in_memory[result.config.config_id] = result
-        done += 1
-        Q = slot_map[result.config.config_id]
-        print(f"  [{done}/{total}] Q={Q} → {result.status}"
-              f" ({result.elapsed_s:.1f}s)")
-
-    if workers <= 1:
-        for Q, config in to_run:
-            print(f"  Slot sweep Q={Q} ...")
-            _save_and_report(run_fem_safe(config, timeout_s))
-    else:
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(run_fem_safe, config, timeout_s): config
-                       for _, config in to_run}
-            for future in as_completed(futures):
-                _save_and_report(future.result())
-
-    results: dict[int, NDArray[np.floating]] = {}
-    for cid, slim in _collect_results(store, in_memory, completed).items():
-        if cid not in slot_map or slim.status != "OK" or not slim.metrics:
-            continue
-        Q = slot_map[cid]
-        B_r = np.array(slim.metrics["B_r_list"])
-        results[Q] = harmonics_1sided(B_r)
-
-    return results, cfg["n_p"], cfg_name

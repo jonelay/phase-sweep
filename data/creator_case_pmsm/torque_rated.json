@@ -1,0 +1,28 @@
+{
+    "motor_name": "CREATOR Case PMSM",
+    "test_type": "torque_test",
+    "conditions": {
+        "speed_rpm": 2000,
+        "temperature_C": 22.0,
+        "load_torque_Nm": 0.1,
+        "date": "2025-01-01",
+        "instrument": "published"
+    },
+    "quantities": {
+        "tau_rated": 0.10
+    },
+    "waveforms": {},
+    "uncertainty": {},
+    "source_file": "arXiv:2501.15921 Table 6",
+    "source": "published",
+    "tolerances": {
+        "tau_rated": 15.0
+    },
+    "bound_compare": {
+        "tau_rated": {
+            "computed_key": "tau_mtpa",
+            "relation": "gte",
+            "semantic_note": "Computed MTPA at I_rated >= published continuous rating"
+        }
+    }
+}

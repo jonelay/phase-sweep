@@ -6,143 +6,165 @@ Tests focus on three failure modes:
 3. Timeout — subprocess isolation prevents infinite hangs
 """
 
+import dataclasses
 import json
 
 import pytest
 
-from phasesweep.sweep_types import MotorSweepConfig, SweepResult
+from phasesweep.sweep_types import RunConfig, RunResult, compute_run_id
+from tests.conftest import make_motor
+
+
+def _make_rc(model="fem", **kw):
+    return RunConfig(motor=make_motor(), model=model, **kw)
 
 
 # ---------------------------------------------------------------------------
-# MotorSweepConfig
+# RunConfig
 # ---------------------------------------------------------------------------
 
-class TestMotorSweepConfig:
+class TestRunConfig:
 
-    def test_rejects_n_p_below_minimum(self):
-        with pytest.raises(ValueError, match="n_p="):
-            MotorSweepConfig(n_p=0, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-
-    def test_rejects_n_p_above_maximum(self):
-        with pytest.raises(ValueError, match="n_p="):
-            MotorSweepConfig(n_p=21, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-
-    def test_rejects_psi_f_too_small(self):
-        with pytest.raises(ValueError, match="psi_f="):
-            MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=1e-5, J=0.002)
-
-    def test_rejects_L_d_too_large(self):
-        with pytest.raises(ValueError, match="L_d="):
-            MotorSweepConfig(n_p=2, R_s=0.2, L_d=2.0, L_q=4e-3, psi_f=0.1, J=0.002)
-
-    def test_rejects_n_slots_negative(self):
-        with pytest.raises(ValueError, match="n_slots="):
-            MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002,
-                             n_slots=-1)
-
-    def test_valid_config_at_boundaries(self):
-        MotorSweepConfig(n_p=1, R_s=1e-4, L_d=1e-6, L_q=1e-6, psi_f=1e-4, J=1e-6)
-        MotorSweepConfig(n_p=20, R_s=100.0, L_d=1.0, L_q=1.0, psi_f=10.0, J=100.0)
-
-    def test_config_id_deterministic(self):
-        c1 = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-        c2 = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-        assert c1.config_id == c2.config_id
-
-    def test_config_id_unique_for_different_params(self):
-        c1 = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-        c2 = MotorSweepConfig(n_p=4, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-        assert c1.config_id != c2.config_id
-
-    def test_config_id_differs_by_psi_f(self):
-        c1 = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-        c2 = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.2, J=0.002)
-        assert c1.config_id != c2.config_id
-
-    def test_config_id_differs_by_n_slots(self):
-        c1 = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002,
-                              n_slots=0)
-        c2 = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002,
-                              n_slots=12)
-        assert c1.config_id != c2.config_id
+    def test_construction(self):
+        rc = _make_rc()
+        assert rc.model == "fem"
+        assert rc.maxh_fraction == 0.05
 
     def test_to_dict_roundtrip(self):
-        c1 = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=6e-3, psi_f=0.1, J=0.002,
-                              n_slots=12, j_s=0.1)
-        c2 = MotorSweepConfig.from_dict(c1.to_dict())
-        assert c1 == c2
+        rc1 = _make_rc()
+        rc2 = RunConfig.from_dict(rc1.to_dict())
+        assert rc2.model == rc1.model
+        assert rc2.motor.config_id == rc1.motor.config_id
+        assert rc2.maxh_fraction == rc1.maxh_fraction
 
-    def test_from_dict_backward_compat_defaults(self):
-        """Old dicts without new fields should use sensible defaults."""
-        d = {"n_p": 2, "R_s": 0.2, "L_d": 4e-3, "L_q": 4e-3,
-             "psi_f": 0.1, "J": 0.002, "config_id": "ignored"}
-        cfg = MotorSweepConfig.from_dict(d)
-        assert cfg.n_slots == 0
-        assert cfg.j_s == 0.0
-        assert cfg.load_torque == 3.0
+    def test_json_roundtrip(self):
+        """RunConfig survives JSON serialization (subprocess transport)."""
+        rc1 = _make_rc()
+        d = rc1.to_dict()
+        d_json = json.loads(json.dumps(d))
+        rc2 = RunConfig.from_dict(d_json)
+        assert rc2.motor.config_id == rc1.motor.config_id
 
-    def test_config_id_is_12_chars(self):
-        cfg = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-        assert len(cfg.config_id) == 12
+    def test_sim_plan_roundtrip(self):
+        from phasesweep.sim import plan_sim
+        from phasesweep.solver_params import prepare_drive_sim
+        plan = plan_sim(prepare_drive_sim(make_motor()))
+        rc1 = RunConfig(motor=make_motor(), model="drive_sim", sim_plan=plan)
+        d = json.loads(json.dumps(rc1.to_dict()))
+        rc2 = RunConfig.from_dict(d)
+        assert rc2.sim_plan is not None
+        assert rc2.sim_plan.load_torque == rc1.sim_plan.load_torque
+        assert rc2.sim_plan.t_stop == rc1.sim_plan.t_stop
+        assert rc2.sim_plan.accel_window == rc1.sim_plan.accel_window
+        assert rc2.sim_plan.alpha_s == rc1.sim_plan.alpha_s
+        assert rc2.sim_plan.alpha_c == rc1.sim_plan.alpha_c
+        assert rc2.sim_plan.T_s == rc1.sim_plan.T_s
+
+    def test_sim_plan_none_by_default(self):
+        rc = _make_rc()
+        assert rc.sim_plan is None
+        d = rc.to_dict()
+        assert "sim_plan" not in d
 
 
 # ---------------------------------------------------------------------------
-# SweepResult
+# RunResult
 # ---------------------------------------------------------------------------
 
-class TestSweepResult:
+class TestRunResult:
 
-    def _make_cfg(self):
-        return MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-
-    def test_ok_result(self):
-        r = SweepResult(
-            config=self._make_cfg(), run_type="sim", status="OK",
-            metrics={"t_settle": 0.3, "i_ss": 5.1},
-            elapsed_s=1.5,
-        )
-        assert r.status == "OK"
-        assert r.metrics is not None
-        assert r.error_msg is None
-
-    def test_timeout_result(self):
-        r = SweepResult(
-            config=self._make_cfg(), run_type="sim", status="TIMEOUT",
-            metrics=None, elapsed_s=60.0,
-            error_msg="Exceeded 60s timeout",
-        )
-        assert r.status == "TIMEOUT"
-        assert r.error_msg is not None
+    def test_construction(self):
+        rc = _make_rc()
+        rr = RunResult(config=rc, model="fem", status="OK",
+                       metrics={"peak_Br": 0.12}, elapsed_s=5.0)
+        assert rr.status == "OK"
+        assert rr.schema_version == "v2.0"
 
     def test_to_dict_roundtrip(self):
-        cfg = self._make_cfg()
-        r1 = SweepResult(
-            config=cfg, run_type="fem", status="OK",
-            metrics={"peak_Br": 0.12, "thd_pct": 8.5},
-            elapsed_s=45.2,
-        )
-        r2 = SweepResult.from_dict(r1.to_dict())
-        assert r1.status == r2.status
-        assert r1.run_type == r2.run_type
-        assert r1.config.config_id == r2.config.config_id
-        assert r1.metrics == r2.metrics
+        rc = _make_rc()
+        rr1 = RunResult(config=rc, model="fem", status="OK",
+                        metrics={"peak_Br": 0.12}, elapsed_s=5.0)
+        rr2 = RunResult.from_dict(rr1.to_dict())
+        assert rr2.status == rr1.status
+        assert rr2.model == rr1.model
+        assert rr2.metrics == rr1.metrics
 
-    def test_schema_version_present(self):
-        r = SweepResult(
-            config=self._make_cfg(), run_type="sim", status="OK",
-            metrics={}, elapsed_s=1.0,
-        )
-        assert r.schema_version == "v1.0"
-        assert r.to_dict()["schema_version"] == "v1.0"
-
-    def test_backward_compat_missing_run_type(self):
-        d = {
-            "config": {"n_p": 2, "R_s": 0.2, "L_d": 4e-3, "L_q": 4e-3,
-                       "psi_f": 0.1, "J": 0.002, "config_id": "abc"},
-            "status": "OK", "metrics": {}, "elapsed_s": 1.0,
+    def test_legacy_run_type_mapped_to_model(self):
+        rc = _make_rc()
+        d = rc.to_dict()
+        raw = {
+            "config": d, "run_type": "sim", "status": "OK",
+            "metrics": {"t_settle": 0.3}, "elapsed_s": 1.0,
         }
-        r = SweepResult.from_dict(d)
-        assert r.run_type == "sim"
+        rr = RunResult.from_dict(raw)
+        assert rr.model == "drive_sim"
+
+    def test_legacy_run_type_fem_unchanged(self):
+        rc = _make_rc()
+        d = rc.to_dict()
+        raw = {
+            "config": d, "run_type": "fem", "status": "OK",
+            "metrics": {"peak_Br": 0.1}, "elapsed_s": 2.0,
+        }
+        rr = RunResult.from_dict(raw)
+        assert rr.model == "fem"
+
+    def test_missing_model_and_run_type_raises(self):
+        rc = _make_rc()
+        d = rc.to_dict()
+        raw = {
+            "config": d, "status": "OK",
+            "metrics": {}, "elapsed_s": 1.0,
+        }
+        with pytest.raises(KeyError):
+            RunResult.from_dict(raw)
+
+
+# ---------------------------------------------------------------------------
+# compute_run_id
+# ---------------------------------------------------------------------------
+
+class TestComputeRunId:
+
+    def test_determinism(self):
+        rc1 = _make_rc()
+        rc2 = _make_rc()
+        assert compute_run_id(rc1) == compute_run_id(rc2)
+
+    def test_different_models(self):
+        rc1 = _make_rc(model="fem_linear")
+        rc2 = _make_rc(model="analytical")
+        assert compute_run_id(rc1) != compute_run_id(rc2)
+
+    def test_run_id_is_12_chars(self):
+        rc = _make_rc()
+        assert len(compute_run_id(rc)) == 12
+
+    def test_model_aware_filtering(self):
+        """FEM model ignores sim_plan fields in hash."""
+        from phasesweep.sim import SimPlan
+        plan1 = SimPlan(
+            load_torque=3.0, load_time=0.5, t_stop=1.0, speed_step_time=0.05,
+            settle_threshold=0.05, ss_window=0.1, droop_window=0.1,
+            accel_window=(0.05, 0.3), alpha_s=25.0, alpha_c=1257.0,
+            T_s=125e-6, tau_m=0.1,
+        )
+        plan2 = dataclasses.replace(plan1, load_torque=6.0)
+        rc1 = _make_rc(sim_plan=plan1)
+        rc2 = _make_rc(sim_plan=plan2)
+        assert compute_run_id(rc1) == compute_run_id(rc2)
+
+    def test_model_aware_auto_lookup_differs_by_model(self):
+        """Different models with same motor produce different run IDs."""
+        rc_fem = _make_rc(model="fem")
+        rc_sim = _make_rc(model="drive_sim")
+        assert compute_run_id(rc_fem) != compute_run_id(rc_sim)
+
+    def test_unknown_model_hashes_all_params(self):
+        """Unknown models hash all solver params (no registry entry)."""
+        rc1 = _make_rc(model="unknown_model", j_s=0.0)
+        rc2 = _make_rc(model="unknown_model", j_s=1.0)
+        assert compute_run_id(rc1) != compute_run_id(rc2)
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +174,10 @@ class TestSweepResult:
 class TestResultStore:
 
     def _make_result(self, n_p=2):
-        cfg = MotorSweepConfig(n_p=n_p, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-        return SweepResult(config=cfg, run_type="sim", status="OK",
-                           metrics={"t_settle": 0.3}, elapsed_s=1.0)
+        motor = make_motor(n_p=n_p)
+        rc = RunConfig(motor=motor, model="drive_sim")
+        return RunResult(config=rc, model="drive_sim", status="OK",
+                         metrics={"t_settle": 0.3}, elapsed_s=1.0)
 
     def test_save_creates_jsonl(self, tmp_path):
         from phasesweep.result_store import ResultStore
@@ -182,16 +205,17 @@ class TestResultStore:
         store = ResultStore(tmp_path)
         r = self._make_result()
         store.save(r)
-        assert r.config.config_id in store.get_known_ids()
+        cid = compute_run_id(r.config)
+        assert cid in store.get_known_ids()
 
     def test_timeout_tracked_in_index(self, tmp_path):
         from phasesweep.result_store import ResultStore
         store = ResultStore(tmp_path)
-        cfg = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-        r = SweepResult(config=cfg, run_type="sim", status="TIMEOUT",
-                        metrics=None, elapsed_s=60.0, error_msg="timeout")
+        rc = RunConfig(motor=make_motor(), model="drive_sim")
+        r = RunResult(config=rc, model="drive_sim", status="TIMEOUT",
+                      metrics=None, elapsed_s=60.0, error_msg="timeout")
         store.save(r)
-        assert cfg.config_id in store.get_known_ids()
+        assert compute_run_id(rc) in store.get_known_ids()
 
     def test_empty_store(self, tmp_path):
         from phasesweep.result_store import ResultStore
@@ -204,7 +228,7 @@ class TestResultStore:
         store = ResultStore(tmp_path)
         r = self._make_result()
         store.save(r)
-        cid = r.config.config_id
+        cid = compute_run_id(r.config)
         assert cid in store.get_known_ids()
         store.mark_pending({cid})
         assert cid not in store.get_known_ids()
@@ -213,32 +237,31 @@ class TestResultStore:
         from phasesweep.result_store import ResultStore
         store = ResultStore(tmp_path)
         store.save(self._make_result(n_p=2))
-        cfg = MotorSweepConfig(n_p=4, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-        store.save(SweepResult(config=cfg, run_type="sim", status="TIMEOUT",
-                               metrics=None, elapsed_s=60.0, error_msg="t"))
+        rc = RunConfig(motor=make_motor(n_p=4), model="drive_sim")
+        store.save(RunResult(config=rc, model="drive_sim", status="TIMEOUT",
+                             metrics=None, elapsed_s=60.0, error_msg="t"))
         stats = store.get_stats()
         assert stats["total"] == 2
         assert stats["ok"] == 1
         assert stats["timeout"] == 1
 
-    def test_load_results_returns_sweep_results(self, tmp_path):
+    def test_load_results_returns_run_results(self, tmp_path):
         from phasesweep.result_store import ResultStore
         store = ResultStore(tmp_path)
         store.save(self._make_result())
         results = store.load_results()
         assert len(results) == 1
-        assert isinstance(results[0], SweepResult)
+        assert isinstance(results[0], RunResult)
 
     def test_malformed_line_skipped(self, tmp_path):
         from phasesweep.result_store import ResultStore
         store = ResultStore(tmp_path)
         store.save(self._make_result())
-        # Inject a bad line
         with open(store.results_file, "a") as f:
             f.write("NOT_JSON\n")
         store.save(self._make_result(n_p=4))
         results = store.load_all()
-        assert len(results) == 2  # bad line skipped
+        assert len(results) == 2
 
     def test_load_slim_returns_slim_results(self, tmp_path):
         from phasesweep.result_store import ResultStore, SlimResult
@@ -246,35 +269,87 @@ class TestResultStore:
         r = self._make_result()
         store.save(r)
         slim = store.load_slim()
-        assert r.config.config_id in slim
-        s = slim[r.config.config_id]
+        cid = compute_run_id(r.config)
+        assert cid in slim
+        s = slim[cid]
         assert isinstance(s, SlimResult)
         assert s.status == "OK"
         assert s.metrics == {"t_settle": 0.3}
+        assert s.motor_config_id == r.config.motor.config_id
+        assert s.model == "drive_sim"
+        assert s.source == "computed"
 
-    def test_load_slim_deduplicates_after_rerun(self, tmp_path):
+    def test_result_carries_motor_config_id(self, tmp_path):
         from phasesweep.result_store import ResultStore
         store = ResultStore(tmp_path)
-        cfg = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-        r1 = SweepResult(config=cfg, run_type="sim", status="ERROR",
-                         metrics=None, elapsed_s=1.0, error_msg="fail")
-        store.save(r1)
-        r2 = SweepResult(config=cfg, run_type="sim", status="OK",
-                         metrics={"t_settle": 0.5}, elapsed_s=2.0)
+        r = self._make_result()
+        store.save(r)
+        raw = store.load_all()
+        assert raw[0]["motor_config_id"] == r.config.motor.config_id
+        assert raw[0]["source"] == "computed"
+
+    def test_load_slim_legacy_run_type(self, tmp_path):
+        """load_slim maps legacy run_type to model."""
+        from phasesweep.result_store import ResultStore
+        store = ResultStore(tmp_path)
+        r = self._make_result()
+        store.save(r)
+        raw = store.results_file.read_text().strip()
+        d = json.loads(raw)
+        d.pop("model")
+        d["run_type"] = "sim"
+        store.results_file.write_text(json.dumps(d) + "\n")
+        slim = store.load_slim()
+        assert len(slim) == 1
+        s = list(slim.values())[0]
+        assert s.model == "drive_sim"
+
+    def test_load_slim_filter_by_model(self, tmp_path):
+        from phasesweep.result_store import ResultStore
+        store = ResultStore(tmp_path)
+        store.save(self._make_result(n_p=2))
+        motor4 = make_motor(n_p=4)
+        rc4 = RunConfig(motor=motor4, model="fem")
+        store.save(RunResult(config=rc4, model="fem", status="OK",
+                             metrics={"peak_Br": 0.1}, elapsed_s=2.0))
+        assert len(store.load_slim()) == 2
+        assert len(store.load_slim(model="drive_sim")) == 1
+        assert len(store.load_slim(model="fem")) == 1
+        assert len(store.load_slim(model="analytical")) == 0
+
+    def test_load_slim_filter_by_motor_config_id(self, tmp_path):
+        from phasesweep.result_store import ResultStore
+        store = ResultStore(tmp_path)
+        r2 = self._make_result(n_p=2)
+        r4 = self._make_result(n_p=4)
         store.save(r2)
-        slim = store.load_slim()
-        assert slim[cfg.config_id].status == "OK"
-        assert slim[cfg.config_id].metrics == {"t_settle": 0.5}
+        store.save(r4)
+        mcid = r2.config.motor.config_id
+        slim = store.load_slim(motor_config_id=mcid)
+        assert len(slim) == 1
+        assert list(slim.values())[0].motor_config_id == mcid
 
-    def test_load_slim_skips_malformed(self, tmp_path):
+    def test_load_results_filter_by_model(self, tmp_path):
         from phasesweep.result_store import ResultStore
         store = ResultStore(tmp_path)
-        store.save(self._make_result())
-        with open(store.results_file, "a") as f:
-            f.write("NOT_JSON\n")
-        store.save(self._make_result(n_p=4))
-        slim = store.load_slim()
-        assert len(slim) == 2
+        store.save(self._make_result(n_p=2))
+        motor4 = make_motor(n_p=4)
+        rc4 = RunConfig(motor=motor4, model="fem")
+        store.save(RunResult(config=rc4, model="fem", status="OK",
+                             metrics={"peak_Br": 0.1}, elapsed_s=2.0))
+        assert len(store.load_results(model="drive_sim")) == 1
+        assert len(store.load_results(model="fem")) == 1
+
+    def test_mark_pending_atomic_write(self, tmp_path):
+        """mark_pending uses atomic tempfile+os.replace, not bare write_text."""
+        from phasesweep.result_store import ResultStore
+        store = ResultStore(tmp_path)
+        r = self._make_result()
+        store.save(r)
+        cid = compute_run_id(r.config)
+        store.mark_pending({cid})
+        index = json.loads(store.index_file.read_text())
+        assert cid not in index
 
     def test_corrupt_index_recovers_on_save(self, tmp_path):
         from phasesweep.result_store import ResultStore
@@ -294,35 +369,49 @@ class TestSimRunner:
 
     @pytest.mark.timeout(30)
     def test_returns_status_not_hang(self):
-        """With a very short timeout, runner must return, never hang."""
+        from phasesweep.sim import plan_sim
         from phasesweep.sim_runner import run_sim_safe
-        cfg = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002,
-                               t_stop=0.1)
-        result = run_sim_safe(cfg, timeout_s=2)
+        from phasesweep.solver_params import prepare_drive_sim
+        motor = make_motor()
+        plan = plan_sim(prepare_drive_sim(motor))
+        short_plan = dataclasses.replace(plan, t_stop=0.1)
+        rc = RunConfig(motor=motor, model="drive_sim", sim_plan=short_plan)
+        result = run_sim_safe(rc, timeout_s=2)
         assert result.status in ("OK", "TIMEOUT", "ERROR")
 
     @pytest.mark.timeout(60)
     def test_successful_run_returns_metrics(self):
-        """Short simulation should complete and return metric keys."""
+        from phasesweep.sim import plan_sim
         from phasesweep.sim_runner import run_sim_safe
-        cfg = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002,
-                               t_stop=0.5)
-        result = run_sim_safe(cfg, timeout_s=30)
+        from phasesweep.solver_params import prepare_drive_sim
+        motor = make_motor()
+        plan = plan_sim(prepare_drive_sim(motor))
+        rc = RunConfig(motor=motor, model="drive_sim", sim_plan=plan)
+        result = run_sim_safe(rc, timeout_s=30)
         assert result.status == "OK", f"Expected OK, got {result.status}: {result.error_msg}"
         assert result.metrics is not None
         assert "t_settle" in result.metrics
 
     @pytest.mark.timeout(30)
-    def test_error_captured_not_raised(self):
-        """Errors in subprocess must return ERROR status, not propagate."""
+    def test_missing_sim_plan_raises(self):
         from phasesweep.sim_runner import run_sim_safe
-        # t_stop=0 should cause simulation error
-        cfg = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002,
-                               t_stop=0.0)
-        result = run_sim_safe(cfg, timeout_s=15)
-        assert result.status in ("OK", "ERROR")
-        if result.status == "ERROR":
-            assert result.error_msg is not None
+        rc = _make_rc(model="drive_sim")
+        result = run_sim_safe(rc, timeout_s=15)
+        assert result.status == "ERROR"
+        assert result.error_msg is not None
+
+    @pytest.mark.timeout(60)
+    def test_sim_plan_through_runner(self):
+        from phasesweep.sim import plan_sim
+        from phasesweep.sim_runner import run_sim_safe
+        from phasesweep.solver_params import prepare_drive_sim
+        motor = make_motor()
+        plan = plan_sim(prepare_drive_sim(motor))
+        rc = RunConfig(motor=motor, model="drive_sim", sim_plan=plan)
+        result = run_sim_safe(rc, timeout_s=30)
+        assert result.status == "OK", f"Expected OK, got {result.status}: {result.error_msg}"
+        assert result.metrics is not None
+        assert "t_settle" in result.metrics
 
 
 # ---------------------------------------------------------------------------
@@ -333,73 +422,36 @@ class TestFemRunner:
 
     @pytest.mark.timeout(60)
     def test_returns_status_not_hang(self):
-        """FEM runner must return a status, never hang."""
         from phasesweep.fem_runner import run_fem_safe
-        cfg = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002,
-                               n_theta=60, maxh=0.08)
-        result = run_fem_safe(cfg, timeout_s=30)
+        rc = _make_rc(model="fem", n_theta=60, maxh_fraction=0.08)
+        result = run_fem_safe(rc, timeout_s=30)
         assert result.status in ("OK", "TIMEOUT", "ERROR")
-        assert result.run_type == "fem"
+        assert result.model == "fem"
 
     @pytest.mark.timeout(60)
     def test_ok_result_has_fem_metrics(self):
-        """Successful FEM run should return peak_Br, fundamental, thd_pct."""
         from phasesweep.fem_runner import run_fem_safe
-        cfg = MotorSweepConfig(n_p=2, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002,
-                               n_theta=60, maxh=0.08)
-        result = run_fem_safe(cfg, timeout_s=30)
+        rc = _make_rc(model="fem", n_theta=60, maxh_fraction=0.08)
+        result = run_fem_safe(rc, timeout_s=30)
         assert result.status == "OK", f"Expected OK, got {result.status}: {result.error_msg}"
         assert result.metrics is not None
         assert "peak_Br" in result.metrics
         assert "thd_pct" in result.metrics
         assert result.metrics["peak_Br"] > 0
 
+    @pytest.mark.timeout(120)
+    def test_alpha_p_reduces_fem_fundamental(self):
+        from phasesweep.fem_runner import _run_fem_impl
+        m_full = make_motor(B_rem=1.2, psi_f=None, alpha_p=1.0)
+        m_part = make_motor(B_rem=1.2, psi_f=None, alpha_p=0.75)
+        rc_full = RunConfig(motor=m_full, model="fem", n_theta=60, maxh_fraction=0.08)
+        rc_part = RunConfig(motor=m_part, model="fem", n_theta=60, maxh_fraction=0.08)
+        B1_full = _run_fem_impl(rc_full)["fundamental"]
+        B1_part = _run_fem_impl(rc_part)["fundamental"]
+        assert B1_part < B1_full
+        # Square-wave source (S110): the FEM arc fundamental scales exactly
+        # as the analytical pole-arc factor sin(π·α_p/2)
+        from math import pi, sin
+        assert B1_part / B1_full == pytest.approx(sin(pi * 0.75 / 2), rel=0.005)
 
-# ---------------------------------------------------------------------------
-# _collect_results
-# ---------------------------------------------------------------------------
 
-class TestCollectResults:
-
-    def _make_cfg(self, n_p=2):
-        return MotorSweepConfig(n_p=n_p, R_s=0.2, L_d=4e-3, L_q=4e-3, psi_f=0.1, J=0.002)
-
-    def _make_result(self, n_p=2, status="OK", metrics=None):
-        cfg = self._make_cfg(n_p)
-        if metrics is None and status == "OK":
-            metrics = {"t_settle": 0.3}
-        return SweepResult(
-            config=cfg, run_type="sim", status=status,
-            metrics=metrics, elapsed_s=1.0,
-            error_msg=None if status == "OK" else "fail",
-        )
-
-    def test_collect_results_memory_only(self, tmp_path):
-        from phasesweep.result_store import ResultStore
-        from phasesweep.sim import _collect_results
-        store = ResultStore(tmp_path)
-        r = self._make_result()
-        in_memory = {r.config.config_id: r}
-        merged = _collect_results(store, in_memory, completed=set())
-        assert len(merged) == 1
-        slim = merged[r.config.config_id]
-        assert slim.status == "OK"
-        assert slim.metrics == {"t_settle": 0.3}
-
-    def test_collect_results_resume_merges_and_overrides(self, tmp_path):
-        from phasesweep.result_store import ResultStore
-        from phasesweep.sim import _collect_results
-        store = ResultStore(tmp_path)
-        r_a_disk = self._make_result(n_p=2, status="ERROR", metrics=None)
-        r_b_disk = self._make_result(n_p=4, status="OK", metrics={"t_settle": 0.5})
-        store.save(r_a_disk)
-        store.save(r_b_disk)
-        a_id = r_a_disk.config.config_id
-        b_id = r_b_disk.config.config_id
-        r_a_mem = self._make_result(n_p=2, status="OK", metrics={"t_settle": 0.4})
-        in_memory = {a_id: r_a_mem}
-        merged = _collect_results(store, in_memory, completed={a_id, b_id})
-        assert len(merged) == 2
-        assert merged[a_id].status == "OK"
-        assert merged[a_id].metrics == {"t_settle": 0.4}
-        assert merged[b_id].status == "OK"

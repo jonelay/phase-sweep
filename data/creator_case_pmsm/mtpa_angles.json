@@ -1,0 +1,37 @@
+{
+    "motor_name": "CREATOR Case PMSM",
+    "test_type": "torque_test",
+    "conditions": {
+        "speed_rpm": 0,
+        "temperature_C": 22.0,
+        "load_torque_Nm": 0.0,
+        "date": "2025-01-01",
+        "instrument": "published"
+    },
+    "quantities": {
+        "gamma_opt_at_0p15": 10.0,
+        "gamma_opt_at_0p30": 20.0
+    },
+    "waveforms": {},
+    "uncertainty": {},
+    "source_file": "arXiv:2501.15921 §5.2, Fig 12",
+    "source": "published",
+    "tolerances": {
+        "gamma_opt_at_0p15": 25.0,
+        "gamma_opt_at_0p30": 15.0
+    },
+    "curve_compare": {
+        "gamma_opt_at_0p15": {
+            "curve_x": "I_curve",
+            "curve_y": "gamma_curve_deg",
+            "at_x": 0.212,
+            "extract": "interp"
+        },
+        "gamma_opt_at_0p30": {
+            "curve_x": "I_curve",
+            "curve_y": "gamma_curve_deg",
+            "at_x": 0.424,
+            "extract": "interp"
+        }
+    }
+}

@@ -13,11 +13,13 @@ L_d = 0.2055         # H
 L_q = 0.3320         # H
 psi_f = 0.1144       # Wb
 J = 0.00011348       # kg m^2
+I_rated_rms = 0.21   # A (continuous thermal, same as [rated].I_rms_A)
 
 [winding]
 n_slots = 6
-N = 328              # turns per slot
+N = 328              # turns per coil
 k_w = 0.866          # concentrated single-layer winding factor
+coils_series = 2     # 6 slots / 3 phases = 2 coils per phase, no parallel branches
 layers = 1
 
 [geometry]
@@ -29,7 +31,10 @@ L_stk = 0.0301       # m (stack length)
 magnet_width = 0.0176       # m (circumferential)
 magnet_thickness = 0.00435  # m (radial)
 magnet_span_deg = 45.0
+r_inner = 0.008           # m (shaft diameter 16 mm / 2, Table 12)
+alpha_p = 0.5         # magnet_span_deg=45° / pole_pitch=90°
 slot_height = 0.0196  # m
+slot_width_ratio = 0.61  # slot_width / slot_pitch at mid-slot radius
 slot_width = 0.0216   # m
 slot_opening_width = 0.00323  # m
 slot_opening_height = 0.00098 # m
@@ -38,6 +43,7 @@ tooth_height = 0.020  # m
 
 [materials]
 steel_grade = "M250-35A"
+mu_r_fe = 5000              # M250-35A at operating B (peak μ_r ≈ 11572 from m250_35a_bh_50hz.csv)
 magnet_type = "sintered_ferrite"
 B_rem = 0.415         # T (from dataset Ferrite_BH.csv, H=0 intercept)
 mu_r_pm = 1.1         # from dataset Ferrite_properties.csv

@@ -1,0 +1,28 @@
+{
+    "motor_name": "Awan 2.2-kW IPM",
+    "test_type": "torque_test",
+    "conditions": {
+        "speed_rpm": 1000,
+        "temperature_C": 22.0,
+        "load_torque_Nm": 14.0,
+        "date": "2019-01-01",
+        "instrument": "published"
+    },
+    "quantities": {
+        "tau_rated": 14.0
+    },
+    "waveforms": {},
+    "uncertainty": {},
+    "source_file": "Awan (2019) Table 6.2, Aalto University",
+    "source": "published",
+    "tolerances": {
+        "tau_rated": 20.0
+    },
+    "bound_compare": {
+        "tau_rated": {
+            "computed_key": "tau_mtpa",
+            "relation": "gte",
+            "semantic_note": "Computed MTPA at I_rated >= published continuous rating"
+        }
+    }
+}

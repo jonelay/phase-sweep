@@ -1,0 +1,76 @@
+# Belkhadir 22p/24s External Rotor PMSM — IECON 2023
+# 1.5 kW, 22-pole, 24-slot, FSCW, NdFeB N38SH
+# Source: Belkhadir et al., IECON 2023, DOI 10.1109/IECON51785.2023.10312419
+
+[motor]
+name = "Belkhadir 22p/24s ER-PMSM"
+type = "SPMSM"
+topology = "outrunner"
+
+[circuit]
+n_p = 11
+# R_s, L_d, L_q, J not provided in paper — omitted (None)
+psi_f = 0.0977          # Wb — estimated from back-EMF: E_peak/(2*pi*f) = 67.5/691.15
+I_rated_rms = 11.0      # A
+
+[winding]
+n_slots = 24
+N = 22                 # turns per coil (N_T in paper)
+k_w = 0.949            # estimated for 22p/24s double-layer FSCW
+coils_series = 8       # 24 slots / 3 phases = 8 coils per phase, no parallel branches
+layers = 2
+
+[geometry]
+topology = "outrunner"
+# Direct radii (computed from Table I of Belkhadir et al., IECON 2023,
+# DOI 10.1109/IECON51785.2023.10312419)
+# r_stator = R_sext = 88.635 mm (stator outer, faces air gap)
+# r_magnet = R_sext + g = 90.0 mm (magnet inner surface)
+# r_rotor = r_magnet + h_PM = 93.0 mm (magnet outer / yoke inner)
+# r_outer = r_rotor + h_cr = 100.0 mm (yoke outer)
+# r_inner = R_sint = 56.0 mm (stator bore)
+r_outer = 0.100
+r_rotor = 0.093
+r_magnet = 0.090
+r_stator = 0.088635
+r_inner = 0.056
+n_slots = 24
+slot_depth = 0.020      # m — estimated from Fig 6a visual inspection (~80% of analytical bound 25.6 mm)
+slot_width_ratio = 0.36 # estimated from Fig 6a visual inspection (~80% of initial 0.45; more iron than winding)
+slot_opening_ratio = 0.165 # estimated from Fig 6a; stepped tooth profile similar to actuator (narrow opening)
+alpha_p = 0.855         # magnet-arc to pole-pitch ratio (Table I: 85.5%)
+L_stk = 0.035          # m (35 mm)
+
+[materials]
+steel_grade = "M530-50A"
+mu_r_fe = 4000               # M530-50A at operating B
+magnet_type = "NdFeB_N38SH"
+B_rem = 1.26            # T
+mu_r_pm = 1.05          # typical NdFeB
+
+[drive]
+U_DC = 200.0            # V (estimated, not critical for flux validation)
+MAX_I_S = 15.56         # A (11 A_rms * sqrt(2))
+W_REF = 62.832          # rad/s (600 rpm mechanical)
+
+[rated]
+speed_rpm = 600
+torque_Nm = 24
+frequency_Hz = 110
+power_kW = 1.5
+
+[validation]
+# Targets from paper figures (healthy motor, 600 rpm)
+B_PM_analytical = 0.776         # T — eq (2): B_r·h_m/(g + h_m/α_p)
+backemf_peak_V = 67.5           # V — Fig 14 (midpoint of 65–70 V range)
+flux_linkage_peak_Wb = 0.10     # Wb — Fig 10
+magnet_flux_Wb = 0.1021         # Wb — Table I (φ_PM)
+magnet_arc_deg = 14.0           # deg (θ_PM)
+alpha_p = 0.855                 # magnet-arc to pole-pitch ratio
+
+[provenance]
+doi = "10.1109/IECON51785.2023.10312419"
+hal = "hal-04296882"
+paper = "Belkhadir et al., IECON 2023"
+institution = "Univ. Artois (LSEE) / Univ. Cadi Ayyad (LSEEET)"
+notes = "R_s, L_d, L_q, J not provided; geometry fully specified; back-EMF experimentally validated"

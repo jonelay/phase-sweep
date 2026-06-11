@@ -1,0 +1,30 @@
+{
+    "motor_name": "Deylami 8p/12s Cooling Fan",
+    "test_type": "airgap_flux_test",
+    "conditions": {
+        "speed_rpm": 0,
+        "temperature_C": 25.0,
+        "load_torque_Nm": 0.0,
+        "date": "2024-01-01",
+        "instrument": "published",
+        "notes": "ANSYS Maxwell 2D FEM, simplified slot geometry"
+    },
+    "quantities": {
+        "B_ag_peak": 0.49
+    },
+    "waveforms": {},
+    "uncertainty": {},
+    "source_file": "DOI 10.36227/techrxiv.171439839.97768997/v1, Fig. 6",
+    "source": "published (ANSYS FEM)",
+    "tolerances": {
+        "B_ag_peak": 25.0
+    },
+    "curve_compare": {
+        "B_ag_peak": {
+            "curve_x": "theta_list",
+            "curve_y": "B_r_list",
+            "extract": "max",
+            "semantic_note": "Published 0.49 T is from ANSYS Maxwell 2D FEM with simplified slot geometry. Our NGSolve FEM uses different mesh and slot model, so 25% tolerance is appropriate."
+        }
+    }
+}

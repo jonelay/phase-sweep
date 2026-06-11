@@ -1,0 +1,82 @@
+# Deylami Outer-Rotor BLDC — 450 W automotive radiator cooling fan
+# 8-pole, 12-slot, concentrated winding, ferrite magnets
+# Source: Deylami et al., TechRxiv preprint, 2024
+# DOI: 10.36227/techrxiv.171439839.97768997/v1
+
+[motor]
+name = "Deylami 8p/12s Cooling Fan"
+type = "SPMSM"
+topology = "outrunner"
+
+[circuit]
+n_p = 4
+# R_s, L_d, L_q, J not published — omitted
+# Delta connection, 2 parallel branches
+I_rated_rms = 14.7          # A — estimated from wire sizing (J=6 A/mm², 1.25 mm wire, 2 branches)
+
+[winding]
+n_slots = 12
+N = 17                      # turns per coil (Table III)
+k_w = 0.866                 # concentrated winding, q=0.5 (Table II)
+coils_series = 2            # 4 coils/phase, 2 parallel branches → 2 in series per branch
+
+[geometry]
+topology = "outrunner"
+# Published dimensions (Tables II & III):
+#   Outer diameter = 100 mm → r_outer = 50 mm
+#   Rotor yoke width = 3.8 mm → r_rotor = 50 - 3.8 = 46.2 mm
+#   Magnet thickness = 6 mm → r_magnet = 46.2 - 6.0 = 40.2 mm
+#   Air gap = 1 mm → r_stator = 40.2 - 1.0 = 39.2 mm
+#   Slot length = 17 mm, stator yoke = 3.8 mm → r_inner = 39.2 - 17 - 3.8 = 18.4 mm
+r_outer = 0.050
+r_rotor = 0.0462
+r_magnet = 0.0402
+r_stator = 0.0392
+r_inner = 0.0184
+n_slots = 12
+slot_depth = 0.017           # m (17 mm, Table III)
+slot_width_ratio = 0.67      # estimated from Fig 5a/6; tooth body ~6.75 mm / pitch 20.5 mm
+slot_opening_ratio = 0.18   # estimated from Fig 5a/6; tooth shoe ~16.9 mm, opening ~3.6 mm
+alpha_p = 0.95               # magnet covering factor (Table II, Gm)
+L_stk = 0.030               # m (30 mm, Table III)
+
+[materials]
+steel_grade = "M700-50A"
+mu_r_fe = 3000               # M700-50A at operating B; rotor yoke ST37 ~1000 (conservative)
+rotor_yoke_material = "ST37"  # solid steel (not laminated)
+magnet_type = "ferrite_Y35"
+B_rem = 0.41                 # T (Table II)
+mu_r_pm = 1.1                # typical hard ferrite
+
+[drive]
+U_DC = 13.5                  # V (Table I)
+MAX_I_S = 27.2               # A — estimated (I_dc=33.33 A, delta, √2 peak)
+W_REF = 314.16               # rad/s (3000 RPM full-load, Table I)
+
+[rated]
+speed_rpm = 3000
+speed_no_load_rpm = 4200
+torque_Nm = 1.2
+power_W = 450                # input power
+temperature_C = 110
+
+[validation]
+# Reference values from ANSYS Maxwell 2D FEM — NOT experimental measurements.
+# Prototype was manufactured and functional/wind-tunnel tested but air-gap
+# flux measurements were not published. FEM-to-FEM comparisons only.
+B_ag_avg_T = 0.31            # average air-gap flux density (ANSYS Maxwell 2D FEM)
+B_ag_peak_T = 0.49           # peak air-gap flux density (ANSYS Maxwell 2D FEM, Fig. 6)
+B_ag_radial_pp_T = 0.9       # peak-to-peak radial component (ANSYS Maxwell 2D FEM)
+B_teeth_max_noload_T = 1.5   # max flux density in teeth, no-load (ANSYS FEM)
+B_teeth_max_fullload_T = 1.7 # max flux density in teeth, full-load (ANSYS FEM)
+alpha_p = 0.95               # magnet covering factor (Table II, published)
+
+[provenance]
+doi = "10.36227/techrxiv.171439839.97768997/v1"
+paper = "Deylami et al., TechRxiv preprint, 2024"
+title = "Design and Manufacturing of an Outer-Rotor BLDC Motor with Integrated Sensorless Drive for Automotive Cooling Fan Applications"
+institution = "Shahrood University of Technology"
+notes = """Prototype manufactured and tested (functional + wind-tunnel tests).
+FEM validated with ANSYS Maxwell 2D.
+R_s, L_d, L_q not published. Delta connection with 2 parallel branches.
+Rotor yoke is solid ST37 steel (not laminated)."""
