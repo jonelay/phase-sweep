@@ -1,0 +1,24 @@
+{
+  "motor_name": "Tecnotion QTR-A-105-25-N torque motor",
+  "test_type": "backemf_capture",
+  "conditions": {
+    "speed_rpm": 3625,
+    "temperature_C": 25.0,
+    "load_torque_Nm": 0.0,
+    "date": "2021",
+    "instrument": "manufacturer specsheet (back-EMF constant Ke)",
+    "notes": "Open-circuit back-EMF fundamental at the 325 V corner speed 3625 rpm, expressed from the specsheet back-EMF constant Ke = 51 V line-line peak per 1000 rpm (printed in both conventions; 51/sqrt(2) = 36 V ph-ph rms): E_ph_pk = (Ke/sqrt(3)) * n/1000."
+  },
+  "quantities": {
+    "backemf_fundamental": 106.74
+  },
+  "waveforms": {},
+  "uncertainty": {},
+  "tolerances": {
+    "backemf_fundamental": 10.0
+  },
+  "source_file": "Tecnotion Torque QTR 105 series specsheet Ver. 2.0 (2021), column QTR-A-105-25 winding N",
+  "source": "published",
+  "derived_params": ["psi_f"],
+  "provenance_note": "Unit conversion of the specsheet constant, NOT an independent measurement: the motor TOML psi_f = 0.028118 Wb is DERIVED from this same Ke (psi_f = [Ke/(1000*2*pi/60)]/(sqrt(3)*n_p)), so backemf_fundamental here equals psi_f*n_p*omega by construction. derived_params arms the calibration circularity guard (REQ-0819): fitting psi_f (or interderivable B_rem) against this dataset is an echo, not a calibration, and is refused. Tolerance 10% per sheet remark 'All specifications +-10%'."
+}

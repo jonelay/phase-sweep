@@ -38,7 +38,7 @@ def _result(model="analytical", source="computed", metrics=None, **kw):
 class TestCompareResults:
 
     def test_shared_quantities(self):
-        a = _result(model="analytical", metrics={"fundamental": 0.5, "thd_pct": 3.0})
+        a = _result(model="analytical", metrics={"fundamental": 0.5, "thd_pct": 0.0})
         b = _result(model="fem", metrics={"fundamental": 0.51, "peak_Br": 0.8})
         rows = compare_results(a, b)
         assert len(rows) == 1
@@ -62,6 +62,31 @@ class TestCompareResults:
         b = _result(model="fem", metrics={"fundamental": 1.05})
         rows = compare_results(a, b)
         assert rows[0].rel_pct == pytest.approx(5.0)
+        assert rows[0].passed is False
+
+    def test_r_s_scaled_to_measurement_temperature(self):
+        # 0.5 Ω copper at 20 °C reads 0.6179 Ω at 80 °C. Without scaling
+        # the 20 °C reference, temperature alone eats the 15% tolerance.
+        from phasesweep.thermal_duty import COPPER_TEMP_COEFF
+        r_s_hot = 0.5 * (1 + COPPER_TEMP_COEFF * (80.0 - 20.0))
+        measured = _result(
+            model="resistance_test", source="measured",
+            metrics={"R_s": r_s_hot, "_conditions": {"temperature_C": 80.0}},
+        )
+        reference = _result(metrics={"R_s": 0.5})
+        rows = compare_results(measured, reference)
+        assert rows[0].quantity == "R_s"
+        assert rows[0].rel_pct == pytest.approx(0.0, abs=1e-9)
+        assert rows[0].passed is True
+
+    def test_r_s_unscaled_without_conditions(self):
+        measured = _result(
+            model="resistance_test", source="measured",
+            metrics={"R_s": 0.6},
+        )
+        reference = _result(metrics={"R_s": 0.5})
+        rows = compare_results(measured, reference)
+        assert rows[0].rel_pct == pytest.approx(0.1 / 0.6 * 100)
         assert rows[0].passed is False
 
     def test_model_to_measured_wider_tolerance(self):
@@ -109,6 +134,81 @@ class TestCompareResults:
 
 
 # ---------------------------------------------------------------------------
+# Shape scalars vs fundamental-only models
+# ---------------------------------------------------------------------------
+
+class TestShapeScalarSkip:
+    """Shape scalars (thd_pct, peak_Br, ...) against a fundamental-only
+    model must surface as skipped rows, not guaranteed-FAIL deltas.
+
+    No registry model sets fundamental_only any more (the analytical
+    odd-harmonic series landed), so the machinery is exercised through a
+    monkeypatched fundamental-only variant; the live-registry test at the
+    bottom pins that analytical THD now compares for real."""
+
+    @pytest.fixture
+    def fundamental_only_analytical(self, monkeypatch):
+        import dataclasses
+
+        from phasesweep.registry import MODEL_REGISTRY
+        info = MODEL_REGISTRY["analytical"]
+        monkeypatch.setitem(MODEL_REGISTRY, "analytical",
+                            dataclasses.replace(info, fundamental_only=True))
+
+    def test_thd_skipped_against_fundamental_only_model(
+            self, fundamental_only_analytical):
+        a = _result(model="analytical", metrics={"fundamental": 0.5, "thd_pct": 0.0})
+        b = _result(model="fem", metrics={"fundamental": 0.502, "thd_pct": 4.2})
+        rows = compare_results(a, b)
+        thd = next(r for r in rows if r.quantity == "thd_pct")
+        assert thd.comparison_type == "skipped"
+        assert thd.passed is True
+        fund = next(r for r in rows if r.quantity == "fundamental")
+        assert fund.comparison_type == "delta"
+
+    def test_thd_skipped_vs_measured(self, fundamental_only_analytical):
+        a = _result(model="analytical", metrics={"fundamental": 1.0, "thd_pct": 0.0})
+        m = _result(model="backemf_capture", source="measured",
+                    metrics={"fundamental": 1.01, "thd_pct": 8.0})
+        rows = compare_results(a, m)
+        thd = next(r for r in rows if r.quantity == "thd_pct")
+        assert thd.comparison_type == "skipped"
+
+    def test_thd_still_compared_between_waveform_models(self):
+        b = _result(model="fem", metrics={"thd_pct": 4.0})
+        m = _result(model="backemf_capture", source="measured",
+                    metrics={"thd_pct": 4.5})
+        rows = compare_results(b, m)
+        assert rows[0].comparison_type == "delta"
+        assert rows[0].passed is True
+
+    def test_thd_skip_restores_models_agree(self, fundamental_only_analytical):
+        # The guaranteed-FAIL thd row used to flip models_agree and yield
+        # spurious "models disagree" even with B₁ in perfect agreement.
+        a = _result(model="analytical", metrics={"fundamental": 1.0, "thd_pct": 0.0})
+        b = _result(model="fem", metrics={"fundamental": 1.005, "thd_pct": 5.0})
+        assert diagnose([a, b]) == "models agree"
+
+    def test_skipped_row_in_summary_and_diagnosis(
+            self, fundamental_only_analytical):
+        a = _result(model="analytical", metrics={"fundamental": 1.0, "thd_pct": 0.0})
+        b = _result(model="fem", metrics={"fundamental": 1.005, "thd_pct": 5.0})
+        summary = diagnose_detailed([a, b])
+        assert len(summary.skipped_rows) == 1
+        assert summary.all_pass
+        assert "skipped" in format_diagnosis(summary)
+
+    def test_analytical_thd_compares_for_real_since_odd_harmonics(self):
+        # Live registry: the odd-harmonic series gives analytical a real
+        # waveform, so THD rows are genuine delta comparisons now.
+        a = _result(model="analytical", metrics={"thd_pct": 30.0})
+        b = _result(model="fem", metrics={"thd_pct": 28.0})
+        rows = compare_results(a, b)
+        thd = next(r for r in rows if r.quantity == "thd_pct")
+        assert thd.comparison_type == "delta"
+
+
+# ---------------------------------------------------------------------------
 # compare_all
 # ---------------------------------------------------------------------------
 
@@ -132,6 +232,11 @@ class TestDiagnose:
 
     def test_insufficient_data(self):
         assert diagnose([_result()]) == "insufficient data for diagnosis"
+
+    def test_measured_only_is_insufficient(self):
+        m = _result(model="backemf_capture", source="measured",
+                    metrics={"fundamental": 0.5})
+        assert diagnose([m]) == "insufficient data for diagnosis"
 
     def test_models_agree_no_measured(self):
         a = _result(model="analytical", metrics={"fundamental": 1.0})
@@ -323,7 +428,16 @@ class TestCurveCompare:
         assert curve_rows[0].val_b == pytest.approx(10.5)
         assert curve_rows[0].passed is True
 
-    def test_curve_extract_max(self):
+    @pytest.mark.parametrize("model,n_curve,n_skipped", [
+        ("fem", 1, 0),
+        ("analytical", 1, 0),  # real waveform since analytical v4
+        ("unregistered-model", 1, 0),
+    ])
+    def test_curve_extract_max(self, model, n_curve, n_skipped):
+        """Waveform models get a real extract=max comparison. (The
+        fundamental-only skip path this used to pin against analytical is
+        covered by TestShapeScalarSkip's monkeypatched variant — since
+        analytical v4 every registry waveform model has a true peak.)"""
         measured = _result(
             model="airgap_flux_test", source="published",
             metrics={
@@ -333,6 +447,39 @@ class TestCurveCompare:
                 }},
             },
             tolerances={"B_ag_peak": 5.0},
+        )
+        computed = _result(
+            model=model,
+            metrics={
+                "theta_list": [0, 1, 2, 3],
+                "B_r_list": [0.5, 0.82, 0.7, 0.3],
+            },
+        )
+        rows = compare_results(measured, computed)
+        curve_rows = [r for r in rows if r.comparison_type == "curve"]
+        skipped = [r for r in rows if r.comparison_type == "skipped"]
+        assert len(curve_rows) == n_curve
+        assert len(skipped) == n_skipped
+        if curve_rows:
+            assert curve_rows[0].val_b == pytest.approx(0.82)
+            assert curve_rows[0].passed is True
+        if skipped:
+            assert skipped[0].passed is True
+            summary = diagnose_detailed([measured, computed])
+            assert len(summary.skipped_rows) == 1
+            assert "skipped" in format_diagnosis(summary)
+
+    def test_extract_interp_allowed_for_fundamental_only_model(self):
+        measured = _result(
+            model="airgap_flux_test", source="published",
+            metrics={
+                "B_at_1": 0.8,
+                "_curve_compare": {"B_at_1": {
+                    "curve_x": "theta_list", "curve_y": "B_r_list",
+                    "at_x": 1.0, "extract": "interp",
+                }},
+            },
+            tolerances={"B_at_1": 5.0},
         )
         computed = _result(
             model="analytical",
@@ -345,7 +492,6 @@ class TestCurveCompare:
         curve_rows = [r for r in rows if r.comparison_type == "curve"]
         assert len(curve_rows) == 1
         assert curve_rows[0].val_b == pytest.approx(0.82)
-        assert curve_rows[0].passed is True
 
     def test_curve_extrapolated_flag(self):
         measured = _result(
@@ -512,3 +658,84 @@ class TestUnderscorePrefixFilter:
         quantities = {r.quantity for r in rows}
         assert "_metadata" not in quantities
         assert "fundamental" in quantities
+
+
+# ---------------------------------------------------------------------------
+# Convention-mismatch detector (R1)
+# ---------------------------------------------------------------------------
+
+class TestConventionHint:
+    def test_hint_flags_sqrt2(self):
+        from phasesweep.crossval import _convention_hint
+        assert "√2" in (_convention_hint(0.1, 0.1 * 2 ** 0.5) or "")
+        # symmetric in argument order
+        assert "√2" in (_convention_hint(0.1 * 2 ** 0.5, 0.1) or "")
+
+    def test_hint_flags_sqrt3(self):
+        from phasesweep.crossval import _convention_hint
+        assert "√3" in (_convention_hint(10.0, 10.0 * 3 ** 0.5) or "")
+
+    def test_hint_none_for_unrelated_ratio(self):
+        from phasesweep.crossval import _convention_hint
+        assert _convention_hint(1.0, 1.25) is None
+        assert _convention_hint(0.0, 1.0) is None
+
+    def test_failed_scalar_gets_convention_note(self):
+        # measured k_T is √2 above computed (peak-vs-RMS slip) → fails the 10%
+        # measured tolerance and is annotated rather than read as a physics error.
+        comp = _result(model="rated_torque", metrics={"k_T": 0.10})
+        meas = _result(model="rated_torque", source="measured",
+                       metrics={"k_T": 0.10 * 2 ** 0.5})
+        rows = compare_results(comp, meas)
+        row = next(r for r in rows if r.quantity == "k_T")
+        assert not row.passed
+        assert "convention mismatch" in row.note and "√2" in row.note
+
+    def test_passing_scalar_has_no_note(self):
+        comp = _result(model="rated_torque", metrics={"k_T": 0.10})
+        meas = _result(model="rated_torque", source="measured",
+                       metrics={"k_T": 0.101})
+        rows = compare_results(comp, meas)
+        row = next(r for r in rows if r.quantity == "k_T")
+        assert row.passed and row.note == ""
+
+
+class TestToleranceSelection:
+    """_pick_tolerance tiers + _scalar_quantities filtering (the
+    default-tolerance warning and bool exclusion were untested)."""
+
+    def test_unknown_quantity_warns_and_uses_default(self):
+        from phasesweep.crossval import _pick_tolerance
+        with pytest.warns(UserWarning, match="No explicit tolerance"):
+            tol = _pick_tolerance("no_such_quantity", "computed", "measured")
+        assert tol == DEFAULT_TOLERANCE_PCT
+
+    def test_known_quantity_does_not_warn(self):
+        import warnings
+
+        from phasesweep.crossval import (
+            TOLERANCES_MODEL_TO_MODEL,
+            _pick_tolerance,
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            tol = _pick_tolerance("fundamental", "computed", "computed")
+        assert tol == TOLERANCES_MODEL_TO_MODEL["fundamental"]
+
+    def test_dataset_tolerance_beats_default_without_warning(self):
+        import warnings
+
+        from phasesweep.crossval import _pick_tolerance
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            tol = _pick_tolerance("no_such_quantity", "computed", "measured",
+                                  tol_a={"no_such_quantity": 3.5})
+        assert tol == 3.5
+
+    def test_scalar_quantities_excludes_bools_and_meta(self):
+        from phasesweep.crossval import _scalar_quantities
+        out = _scalar_quantities(
+            {"a": 1.0, "flag": True, "_meta": 2.0, "n": 3})
+        assert out == {"a": 1.0, "n": 3}
+        assert _scalar_quantities(None) == {}

@@ -1,0 +1,96 @@
+# Kollmorgen Goldline B-104-B IPM — 1.5 HP brushless servomotor
+# 4-pole interior PM (buried-magnet) synchronous servo, rotor saliency Lq>Ld
+# Sources (two, cross-fingerprinted):
+#   ELECTRICAL MODEL — Univ. of Akron M.S. thesis, OhioLINK ETD
+#     accession akron1375726072, Section 4.1 + Table 4-1 (measured params of
+#     "a 1.5 HP Kollmorgen Goldline Servomotor").
+#   NAMEPLATE + THERMAL — Kollmorgen GOLDLINE Brushless Motor Series datasheet,
+#     "PERFORMANCE DATA" table, column B-104-B (Artisan Technology Group reprint)
+#     https://www.artisantg.com/info/Kollmorgen_GoldLineMotorSeries_Datasheet.pdf
+#
+# Model identity (B-104-B) is established by FINGERPRINTING the thesis's measured
+# parameters against the datasheet columns — the thesis prints no model number.
+# Every independent parameter matches the B-104-B column to within rounding:
+# power 1.5 HP, 4-pole, R 1.375 ohm L-N (= 2.72/2 L-L), I_c 4.2 A rms,
+# Kt 0.37-0.39 N.m/A. The 230 V B-series is the IPM (buried-magnet) line.
+
+[motor]
+name = "Kollmorgen Goldline B-104-B IPM"
+type = "IPM"
+
+[circuit]
+n_p = 2                # 4-pole (thesis Table 4-1: "Number of pole pairs P 2")
+R_s = 1.375            # Ohm, per-phase / line-to-neutral, at 25 C
+                       # (thesis: "DC Resistance (Line to Neutral) 1.375 Ohm";
+                       #  datasheet Rm = 2.72 Ohm line-to-line = 2x1.36, wye)
+L_d = 0.00455          # H (thesis Table 4-1: Ld 4.55 mH, line-to-neutral)
+L_q = 0.009375         # H (thesis Table 4-1: Lq 9.375 mH); saliency Lq/Ld = 2.06
+psi_f = 0.0928         # Wb, peak per-phase flux-linkage amplitude
+                       # (thesis: flux linkage 0.0928 V/(rad/s)). Implies a
+                       # MAGNET-ONLY Kt = 1.5*2*0.0928*sqrt(2) = 0.394 N.m/A_rms,
+                       # slightly ABOVE the catalog TOTAL Kt = Tc/Ic = 0.374
+                       # (which already includes reluctance). For a salient motor
+                       # total >= magnet at MTPA, so the cold thesis psi_f mildly
+                       # over-states torque (saturation/derating) — same direction
+                       # as the MTPA-vs-nameplate optimism. See notes.
+I_rated_rms = 4.2      # A rms continuous (S1), wye line current
+                       # (datasheet "Ic = 4.20 A rms" continuous-duty zone;
+                       #  thesis's "max line current 4.2 A" IS this S1 value,
+                       #  NOT a peak — datasheet peak Ip = 12.6 A rms)
+
+[drive]
+U_DC = 353.6           # V, sqrt(2)*250 V rms L-L (datasheet VMax) — nominal bus
+MAX_I_S = 17.82        # A, sqrt(2)*12.6 A_rms peak current (datasheet Ip)
+W_REF = 785.40         # rad/s, 2*pi*7500/60 (rated/max speed)
+
+[rated]
+speed_rpm = 7500       # datasheet N Rated = N Max
+torque_Nm = 1.57       # datasheet Tc @ 40 C (conservative S1 rating;
+                       # 1.67 N.m @ 25 C also listed)
+power_kW = 1.1         # 1.5 HP (datasheet)
+voltage_V = 250        # VMax rms L-L (230 VAC class)
+
+[provenance]
+source = "Akron thesis akron1375726072 (electrical) + Kollmorgen Goldline datasheet (nameplate)"
+url = "https://www.artisantg.com/info/Kollmorgen_GoldLineMotorSeries_Datasheet.pdf"
+motor_model = "Kollmorgen Goldline B-104-B (interior/buried-magnet PM servo)"
+duty = "S1 continuous — datasheet partitions Continuous vs Intermittent duty zones; Tc/Ic are continuous-zone, rated on a 203x305x6.4 mm aluminum heatsink"
+r_th_K_per_W = 1.07    # datasheet thermal resistance at stall (winding-to-ambient w/ specified heatsink)
+Km_Nm_per_sqrtW = 0.196 # datasheet motor constant @ 25 C
+Tc_25C_Nm = 1.67       # datasheet continuous stall torque @ 25 C ambient (Tc @ 40 C = 1.57, [rated])
+insulation_class = "H" # datasheet feature list (180 C insulation system)
+thermostat_open_C = 170.0 # datasheet: built-in thermostat "opens at 170 C +/-5, closes at 132 C +/-5"
+notes = """
+First non-6-pole anchor (4-pole) and the most salient (Lq/Ld = 2.06) — stresses
+the MTPA/nameplate systematic-optimism band hardest. Electrical model is the
+thesis's MEASURED values; nameplate (Tc, Ic, speed) is the manufacturer
+datasheet for the fingerprint-matched B-104-B column. Conventions resolved:
+R_s per-phase (L-N), psi_f peak amplitude, I_rated rms continuous (distinct from
+12.6 A rms peak). MTPA/nameplate = 0.916 with the thesis psi_f (lands in the
+Awan/BLQ 0.92 band). The measured magnet-only Kt (0.394) slightly exceeds the
+catalog total Kt (0.374) — itself a symptom of the cold psi_f over-stating
+torque, reinforcing the optimism finding. (Do NOT "reconcile" psi_f to the
+catalog Kt via the magnet-torque formula — that double-counts reluctance and
+spuriously inflates the ratio to 0.97.)
+AIR-COOLED r_th VALIDATION: the full datasheet states Class H insulation
+and a 170 C thermostat but no explicit rating winding temperature. It DOES rate
+Tc at TWO ambients (1.67 N.m @ 25 C, 1.57 N.m @ 40 C) with one Ic; Kt = 0.37
+printed = 1.57/4.20, so Ic pairs with the 40 C rating. Two independent
+estimates of the implied rating winding temperature agree: 154.1 C from the
+torque ratio alone (R_s and r_th cancel) vs ~161 C from Ic + r_th + R_s(T)
+(absolute watts) — both sensibly below the 170 C thermostat and 180 C Class H
+limit, and the r_th relation predicts the 25 C rating from the 40 C rating
+within 0.4% (cold R_s misses by +2.7%). See the Kollmorgen block in
+tests/test_thermal_duty.py. The [thermal] section is deliberately NOT set:
+that would flip thermal_duty to the R_th budget path and break comparability
+with the Awan/BLQ rated_current anchors; tests construct the thermal variant
+explicitly. Eligible for: rated_torque, thermal_duty (rated_current path),
+torque_speed (feasibility only).
+ENVELOPE CHECK: the rated point (7500 rpm, 1.57 N.m at Ic) is
+voltage-feasible in the torque_speed model — MTPA at Ic holds to N Max with
+the voltage corner 24% above (base speed at Ic = 9270 rpm) and the no-load
+voltage limit 40% above (10500 rpm). The sheet's N Rated = N Max = 7500 is
+therefore a mechanical/rating ceiling, NOT a voltage corner: no ETEL-style
+nm agreement anchor exists in this catalog, one-sided claims only
+(TestKollmorgenEnvelope in tests/test_torque_speed.py).
+"""

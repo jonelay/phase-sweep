@@ -1,0 +1,96 @@
+# Kollmorgen AKM44H — brushless servo motor (surface PM, 10-pole)
+# First multi-voltage torque-speed envelope anchor (REQ-0814): the catalog
+# publishes the SAME winding's rated point (Trtd, Nrtd) at four DC bus
+# voltages — 160/320/560/640 Vdc — all below the 6000 rpm mechanical cap,
+# so the rated-speed progression is voltage-set by construction (a
+# mechanical or inverter-frequency ceiling could not scale with Vbus).
+# Source (single manufacturer catalog, AKM4x performance pages 36-37 +
+# system tables pp. 16-17):
+#   Kollmorgen, "AKM Servomotor Selection Guide with AKD Servo Drive
+#   Systems", column AKM44 / winding H.
+#   https://www.kollmorgen.com/sites/default/files/AKM-KM-SG_000077_RevE_EN.pdf
+#   (kollmorgen.com blocks non-browser fetches; content verified against the
+#   distributor-hosted verbatim copy at electromate.com)
+#
+# Catalog conventions (footnotes, verbatim): all data referenced to
+# sinusoidal commutation (note 2); ratings at winding dT = 100 C over 40 C
+# ambient (note 1); Ke, Rm, L measured at 25 C (note 6); Rm and L are
+# explicitly "(line-line)" -> per-phase (wye) = value / 2. Tolerances +-10%
+# on Kt, Ke, Rm. NOTE the hot/cold split: Kt carries note 1 (hot), Ke
+# carries note 6 (cold, 25 C).
+#
+# psi_f is DERIVED from Ke (magnet-only, EMF route — same pattern as the
+# ETEL Ku derivation): Ke = 68.0 V/krpm line-line rms (convention pinned by
+# the successor AKM2G catalog printing the identical parameter as
+# "Vrms/krpm" next to "Resistance (line-line)", and by the Kt cross-check
+# below; phase or peak conventions miss Kt by 45-85%).
+#   psi_f = sqrt(2)/sqrt(3) * [68.0 / (1000*2*pi/60)] / n_p
+#         = sqrt(2) * 0.649352 / (sqrt(3) * 5) = 0.106038 Wb
+# Two datasheet cross-checks:
+#   Km: Kt / sqrt(1.5 * Rm_ll) = 1.06 / sqrt(1.5 * 2.23) = 0.5796 Nm/sqrtW
+#       vs datasheet Km 0.580 (+0.07% — pins Kt and Rm as a consistent pair)
+#   Kt: model k_T = 1.5 * n_p * psi_f * sqrt(2) = 1.125 Nm/Arms vs datasheet
+#       Kt 1.06 (-5.7% — NOT scatter: Kt is rated hot (note 1) while Ke is
+#       25 C (note 6); the gap matches reversible NdFeB remanence loss at
+#       a ~50-60 K magnet rise. Corner currents derived from Trtd use the
+#       hot Kt because Trtd is a hot rating.)
+
+[motor]
+name = "Kollmorgen AKM44H servo motor"
+type = "surface-magnet PMSM (brushless servo)"
+
+[circuit]
+n_p = 5                # 10 poles (datasheet "Pole Pairs 5")
+R_s = 1.115            # Ohm per-phase at 25 C (datasheet Rm 2.23 line-line)
+L_d = 0.00455          # H per-phase (datasheet L 9.1 mH line-line); SPM
+L_q = 0.00455          # = L_d (surface magnets, single catalog L)
+psi_f = 0.106038       # Wb, peak per-phase — derived from Ke (see header)
+I_rated_rms = 5.6      # A rms continuous stall Ics (dT = 100 C, note 1)
+
+[drive]
+U_DC = 640.0           # V (catalog "Max Rated DC Bus Voltage" for winding H)
+MAX_I_S = 31.678       # A peak = sqrt(2) * 22.4 A_rms (datasheet Ip)
+W_REF = 575.959        # rad/s = 2*pi*5500/60 (rated speed at 640 Vdc)
+
+[rated]
+torque_Nm = 5.89       # datasheet Tcs continuous stall torque (dT = 100 C)
+speed_rpm = 5500       # datasheet Nrtd at the 640 Vdc bus (see provenance)
+
+[provenance]
+source = "Kollmorgen AKM Servomotor Selection Guide (AKM-KM-SG_000077_RevE), AKM4x performance data pp. 36-37, winding AKM44H"
+url = "https://www.kollmorgen.com/sites/default/files/AKM-KM-SG_000077_RevE_EN.pdf"
+motor_model = "Kollmorgen AKM44H (frame AKM4, winding H, resolver feedback)"
+duty = "S1 continuous at Tcs/Ics, winding dT = 100 C at 40 C ambient, 10in x 10in x 1/4in aluminum plate heat sink"
+# Multi-voltage rated points (REQ-0814 anchor class; the key evidence):
+#   Vbus [Vdc] | Trtd [Nm] | Nrtd [rpm] | Prtd [kW]
+#        160   |   5.44    |    1000    |   0.57
+#        320   |   4.66    |    2500    |   1.22
+#        560   |   3.48    |    4500    |   1.64
+#        640   |   2.93    |    5500    |   1.69
+# Max mechanical speed 6000 rpm (note 5: "May be limited at some values of
+# Vbus") — every Nrtd above is below it. Rated current at Nrtd is NOT
+# printed; tests derive it as Trtd / Kt with the hot Kt = 1.06 Nm/Arms.
+peak_torque_Nm = 20.2            # datasheet Tp
+thermal_resistance_C_per_W = 0.65  # datasheet Rthw-a (winding to ambient, plate-mounted) — provenance only, see notes
+thermal_time_constant_min = 24.0   # datasheet TCT
+notes = """
+First envelope anchor with corner speeds published at MULTIPLE bus
+voltages for one winding (160/320/560/640 Vdc): the Nrtd progression
+1000/2500/4500/5500 rpm scales with Vbus and stays below the 6000 rpm
+mechanical cap, so these are voltage-set rated points by construction —
+the generalization evidence the ETEL-only nm class lacked.
+Kollmorgen rates Nrtd with a large, voltage-dependent drive/system margin
+under the model's U_max = U_DC/sqrt(3) convention (utilization rises with
+bus voltage); claims are therefore one-sided feasibility plus pinned
+margins per corner, NOT ETEL-style tight agreement — see
+tests/test_torque_speed.py TestAkm44hEnvelope for the pinned ratios.
+[thermal] is deliberately UNSET: Rthw-a/TCT are recorded above as
+provenance so the motor stays on the rated_current budget path
+(comparability rule; same treatment as kollmorgen_b104b).
+Deliberately NOT in _NAMEPLATE_ANCHORS: Ics is a stall rating with no
+published R at the rating temperature on the same page (the 0.92 band
+motors publish full nameplates); revisit only with the full AKM datasheet.
+Eligible for: rated_torque, stall_torque (bound), torque_speed
+(multi-voltage rated points, one-sided + pinned), thermal_duty
+(rated_current path).
+"""

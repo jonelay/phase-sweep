@@ -6,14 +6,18 @@ importing real test data alongside computed results.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast, get_args
 
 from phasesweep.motor import Motor
 from phasesweep.result_store import ResultStore
-from phasesweep.sweep_types import RunConfig, RunResult
+from phasesweep.sweep_types import RunConfig, RunResult, Source
+
+# Measured data files carry real-world data; "computed" is excluded.
+_VALID_SOURCES = tuple(s for s in get_args(Source) if s != "computed")
 
 
 @dataclass(frozen=True)
@@ -106,6 +110,10 @@ class MeasuredResult:
     curve_compare: dict[str, CurveRef] = field(default_factory=dict)
     bound_compare: dict[str, BoundRef] = field(default_factory=dict)
     key_mapping: dict[str, KeyMapping] = field(default_factory=dict)
+    # Motor params whose TOML values were derived from THIS dataset
+    # (e.g. psi_f from a datasheet Ke). The calibration circularity guard
+    # refuses to fit these params against this dataset.
+    derived_params: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -126,6 +134,8 @@ class MeasuredResult:
             d["bound_compare"] = {k: v.to_dict() for k, v in self.bound_compare.items()}
         if self.key_mapping:
             d["key_mapping"] = {k: v.to_dict() for k, v in self.key_mapping.items()}
+        if self.derived_params:
+            d["derived_params"] = list(self.derived_params)
         return d
 
     @classmethod
@@ -143,6 +153,7 @@ class MeasuredResult:
             curve_compare={k: CurveRef.from_dict(v) for k, v in d.get("curve_compare", {}).items()},
             bound_compare={k: BoundRef.from_dict(v) for k, v in d.get("bound_compare", {}).items()},
             key_mapping={k: KeyMapping.from_dict(v) for k, v in d.get("key_mapping", {}).items()},
+            derived_params=tuple(d.get("derived_params", ())),
         )
 
 
@@ -151,6 +162,12 @@ def validate_measured(data: MeasuredResult) -> None:
 
     if not data.motor_name:
         raise ValueError("motor_name must be non-empty")
+
+    if data.source not in _VALID_SOURCES:
+        raise ValueError(
+            f"source must be one of {_VALID_SOURCES}, got {data.source!r} "
+            f"— descriptive detail belongs in conditions.notes or source_file"
+        )
 
     info = MODEL_REGISTRY.get(data.test_type)
     if info is None or info.source != "measured":
@@ -172,16 +189,20 @@ def validate_measured(data: MeasuredResult) -> None:
             f"for {data.test_type}"
         )
 
+    motor_fields = {f.name for f in dataclasses.fields(Motor)}
+    unknown = set(data.derived_params) - motor_fields
+    if unknown:
+        raise ValueError(
+            f"derived_params {sorted(unknown)} are not Motor fields"
+        )
 
-def import_measured(
-    path: Path, motor: Motor, output_dir: Path,
+
+def measured_run_result(
+    data: MeasuredResult, motor: Motor, dataset_id: str,
 ) -> RunResult:
-    raw = json.loads(path.read_text())
-    data = MeasuredResult.from_dict(raw)
-    validate_measured(data)
-
+    """Build a RunResult from validated measured data (no store side effects)."""
     config = RunConfig(
-        motor=motor, model=data.test_type, dataset_id=path.stem,
+        motor=motor, model=data.test_type, dataset_id=dataset_id,
     )
     metrics: dict[str, Any] = dict(data.quantities)
     metrics["_conditions"] = data.conditions.to_dict()
@@ -195,16 +216,27 @@ def import_measured(
         metrics["_bound_compare"] = {k: v.to_dict() for k, v in data.bound_compare.items()}
     if data.key_mapping:
         metrics["_key_mapping"] = {k: v.to_dict() for k, v in data.key_mapping.items()}
+    if data.derived_params:
+        metrics["_derived_params"] = list(data.derived_params)
 
-    result = RunResult(
+    return RunResult(
         config=config,
         model=data.test_type,
         status="OK",
         metrics=metrics,
         elapsed_s=0.0,
-        source=data.source,
+        source=cast(Source, data.source),
         tolerances=data.tolerances or None,
     )
+
+
+def import_measured(
+    path: Path, motor: Motor, output_dir: Path,
+) -> RunResult:
+    raw = json.loads(path.read_text())
+    data = MeasuredResult.from_dict(raw)
+    validate_measured(data)
+    result = measured_run_result(data, motor, path.stem)
 
     store = ResultStore(output_dir)
     store.save(result)

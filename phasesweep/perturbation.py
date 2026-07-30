@@ -3,17 +3,26 @@
 from __future__ import annotations
 
 import dataclasses as dc
-from typing import Literal
+from typing import Any, Literal
 
 from phasesweep.geometry import inrunner, outrunner
 from phasesweep.motor import Motor
 
-PerturbParam = Literal["OD", "gap", "L_stk", "B_rem", "k_w"]
+PerturbParam = Literal[
+    "OD", "gap", "L_stk", "B_rem", "k_w", "psi_f", "R_s", "L_d", "L_q",
+    "B_core",
+]
+
+# Circuit- and iron-tier scalars: perturbed by direct scaling, no geometry
+# needed. B_core is a lumped effective flux density, not a field the
+# geometry produces, so nothing downstream is invalidated by scaling it.
+_SCALAR_PARAMS: frozenset[str] = frozenset(
+    {"psi_f", "R_s", "L_d", "L_q", "B_core"})
 
 
-def scale_inductances(motor: Motor, factor: float) -> dict[str, float]:
+def scale_inductances(motor: Motor, factor: float) -> dict[str, Any]:
     """Scale L_d, L_q by factor. Returns kwargs for dc.replace()."""
-    kw: dict[str, float] = {}
+    kw: dict[str, Any] = {}
     if motor.L_d is not None:
         kw["L_d"] = motor.L_d * factor
     if motor.L_q is not None:
@@ -22,6 +31,18 @@ def scale_inductances(motor: Motor, factor: float) -> dict[str, float]:
 
 
 def perturb_motor(motor: Motor, param: PerturbParam, delta: float) -> Motor | None:
+    if param in _SCALAR_PARAMS:
+        val = getattr(motor, param)
+        if val is None:
+            return None
+        new_val = val * (1.0 + delta)
+        if new_val <= 0:
+            return None
+        return dc.replace(motor, **{param: new_val},
+                          name=f"{motor.name} [{param} {delta:+.1%}]")
+
+    if motor.geometry is None:
+        return None
     geo = motor.geometry
     topo = geo.topology
 
@@ -46,8 +67,10 @@ def perturb_motor(motor: Motor, param: PerturbParam, delta: float) -> Motor | No
                 r_inner=geo.r_inner,
                 n_slots=geo.n_slots, slot_depth=geo.slot_depth,
                 slot_width_ratio=geo.slot_width_ratio,
-                # opening scales with bore: ratio stays constant under
-                # frame-size scaling (whole lamination scales)
+                # opening tracks the bore circumference (slot pitch grows
+                # with r). Radial build is NOT scaled: slot_depth and the
+                # [r_stator, r_outer] annulus are preserved by the shift —
+                # a diameter change, not a uniform lamination scale.
                 slot_opening_width=geo.slot_opening_width * (r_stator_new / geo.r_stator),
             )
         except ValueError:
@@ -81,23 +104,33 @@ def perturb_motor(motor: Motor, param: PerturbParam, delta: float) -> Motor | No
         else:
             gap = geo.r_magnet - geo.r_stator
             new_gap = gap * (1.0 + delta)
-            new_r_magnet = geo.r_stator + new_gap
-            if new_r_magnet >= geo.r_rotor:
+            # Move the stator surface, not the magnet face: the magnet ring
+            # [r_magnet, r_rotor] is a fixed component (mirrors the inrunner
+            # branch, which moves the bore).
+            new_r_stator = geo.r_magnet - new_gap
+            if new_r_stator <= geo.r_inner:
                 return None
             try:
                 new_geo = outrunner(
                     r_outer=geo.r_outer, r_rotor=geo.r_rotor,
-                    r_magnet=new_r_magnet, r_stator=geo.r_stator,
+                    r_magnet=geo.r_magnet, r_stator=new_r_stator,
                     r_inner=geo.r_inner,
                     n_slots=geo.n_slots, slot_depth=geo.slot_depth,
                     slot_width_ratio=geo.slot_width_ratio,
-                    slot_opening_width=geo.slot_opening_width,
+                    slot_opening_width=geo.slot_opening_width * (new_r_stator / geo.r_stator),
                 )
             except ValueError:
                 return None
-        # L scales ~1/gap (magnetizing component dominates; leakage not decomposed)
+        # Magnetizing L scales ~1/g_eff with g_eff = g + l_m/mu_r_pm — the
+        # magnet recoil path dominates for surface PM, so a pure-1/g scaling
+        # overstates the sensitivity by ~g_eff/g. Leakage (k_w-independent,
+        # often dominant for FSCW) is still not decomposed, so even this
+        # overstates; same limitation class as the k_w branch below.
+        l_m = abs(geo.r_magnet - geo.r_rotor)
+        g_eff = gap + l_m / motor.mu_r_pm
+        L_factor = g_eff / (new_gap + l_m / motor.mu_r_pm)
         return dc.replace(motor, geometry=new_geo, psi_f=None,
-                          **scale_inductances(motor, 1.0 / (1.0 + delta)),
+                          **scale_inductances(motor, L_factor),
                           name=f"{motor.name} [gap {delta:+.1%}]")
 
     elif param == "L_stk":
@@ -107,7 +140,7 @@ def perturb_motor(motor: Motor, param: PerturbParam, delta: float) -> Motor | No
         if new_L <= 0:
             return None
         # R_s scales with slot length (first-order; end-turn fraction ignored)
-        r_s_kw: dict[str, float] = {}
+        r_s_kw: dict[str, Any] = {}
         if motor.R_s is not None:
             r_s_kw["R_s"] = motor.R_s * (1.0 + delta)
         return dc.replace(motor, L_stk=new_L, psi_f=None,

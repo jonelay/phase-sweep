@@ -8,13 +8,16 @@ taking priority.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import warnings
+from dataclasses import dataclass, field, replace
+from math import pi
 from typing import Any, Literal
 
 import numpy as np
 
 from phasesweep.measured import BoundRef, CurveRef, KeyMapping
 from phasesweep.sweep_types import RunResult
+from phasesweep.thermal_duty import COPPER_TEMP_COEFF
 
 # ---------------------------------------------------------------------------
 # Tolerance tables
@@ -52,6 +55,15 @@ TOLERANCES_MODEL_TO_PUBLISHED: dict[str, float] = {
 
 DEFAULT_TOLERANCE_PCT = 10.0
 
+# Waveform-shape scalars have no meaningful value on a fundamental-only
+# model (its THD is identically 0 by construction), so a direct delta row
+# would be a guaranteed ~100% FAIL that says nothing about physics — and
+# would flip diagnose() to "models disagree". No current registry model is
+# fundamental-only (analytical v4 emits the full odd-harmonic series); the
+# skip machinery stays for future fundamental-only entries.
+SHAPE_SCALARS: frozenset[str] = frozenset(
+    {"thd_pct", "sh_pct", "sh_upper_pct", "peak_Br"})
+
 
 # ---------------------------------------------------------------------------
 # Comparison result
@@ -68,8 +80,9 @@ class ComparisonRow:
     rel_pct: float
     tol_pct: float
     passed: bool
-    comparison_type: Literal["delta", "bound", "curve"] = "delta"
+    comparison_type: Literal["delta", "bound", "curve", "skipped"] = "delta"
     extrapolated: bool = False
+    note: str = ""
 
 
 def _pick_tolerance(
@@ -99,6 +112,12 @@ def _pick_tolerance(
         table = TOLERANCES_MODEL_TO_PUBLISHED
     else:
         table = TOLERANCES_MODEL_TO_MEASURED
+    if quantity not in table:
+        warnings.warn(
+            f"No explicit tolerance for {quantity!r} — using default "
+            f"{DEFAULT_TOLERANCE_PCT}%",
+            stacklevel=2,
+        )
     return table.get(quantity, DEFAULT_TOLERANCE_PCT)
 
 
@@ -107,7 +126,84 @@ def _scalar_quantities(metrics: dict[str, Any] | None) -> dict[str, float]:
     if not metrics:
         return {}
     return {k: v for k, v in metrics.items()
-            if isinstance(v, (int, float)) and not k.startswith("_")}
+            if isinstance(v, (int, float)) and not isinstance(v, bool)
+            and not k.startswith("_")}
+
+
+def _r_s_common_temp(
+    a: RunResult, va: float, b: RunResult, vb: float,
+) -> tuple[float, float]:
+    """Bring a 20 °C reference R_s to the measured side's temperature.
+
+    Copper resistance moves ~0.4%/K, so a warm-measured winding can eat
+    the entire R_s tolerance from temperature alone. When exactly one
+    side carries measurement conditions, the other side is a 20 °C
+    reference and is scaled to the measurement temperature.
+    """
+    ta = _get_metadata(a.metrics, "_conditions").get("temperature_C")
+    tb = _get_metadata(b.metrics, "_conditions").get("temperature_C")
+    if ta is None and tb is not None:
+        va *= 1 + COPPER_TEMP_COEFF * (tb - 20.0)
+    elif tb is None and ta is not None:
+        vb *= 1 + COPPER_TEMP_COEFF * (ta - 20.0)
+    return va, vb
+
+
+def _rel_pct(a: float, b: float) -> tuple[float, float]:
+    """Return (delta, rel_pct) where delta = b - a."""
+    delta = b - a
+    ref = abs(a) if abs(a) > 1e-12 else abs(b)
+    return delta, abs(delta) / ref * 100.0 if ref > 1e-12 else 0.0
+
+
+# ---------------------------------------------------------------------------
+# Convention-mismatch detector (R1) — crossval compares by key name and does
+# not enforce that both sides share a peak/RMS/phase/line convention. A failed
+# scalar comparison whose value ratio sits on a known unit factor is far more
+# likely a convention slip than a physics error; flag it so it isn't misread.
+# ---------------------------------------------------------------------------
+
+_CONVENTION_FACTORS: tuple[tuple[float, str], ...] = (
+    (2 ** 0.5, "√2 — peak vs RMS?"),
+    (3 ** 0.5, "√3 — phase vs line-to-line?"),
+    (6 ** 0.5, "√6 — peak-phase vs RMS line-to-line?"),
+    (pi / 2, "π/2 — amplitude vs rectified-mean?"),
+)
+
+
+def _convention_hint(val_a: float, val_b: float, rel_tol: float = 0.04) -> str | None:
+    """Return a label when |val_b/val_a| sits within rel_tol of a known factor.
+
+    Heuristic backstop for every equality-style scalar comparison (direct,
+    curve, and key_mapping) — none of crossval's paths enforce a shared
+    convention, and key_mapping's semantic_note is unchecked free text. Catches
+    the peak/RMS (√2), phase/line-to-line (√3), and combined (√6) mismatches
+    that otherwise read as genuine physics disagreements. Inequality bounds are
+    exempt (no ratio semantics) and skipped by _annotate_convention.
+    """
+    if val_a == 0.0 or val_b == 0.0:
+        return None
+    ratio = abs(val_b) / abs(val_a)
+    if ratio < 1.0:
+        ratio = 1.0 / ratio
+    for factor, label in _CONVENTION_FACTORS:
+        if abs(ratio - factor) / factor <= rel_tol:
+            return label
+    return None
+
+
+def _annotate_convention(row: ComparisonRow) -> ComparisonRow:
+    """Tag a failed scalar comparison whose ratio matches a convention factor.
+
+    Leaves `passed` untouched — the tolerance verdict stays honest — and only
+    adds a note, so a √2/√3 slip is flagged rather than silently downgraded.
+    """
+    if row.passed or row.comparison_type in ("bound", "skipped"):
+        return row
+    hint = _convention_hint(row.val_a, row.val_b)
+    if hint is None:
+        return row
+    return replace(row, note=f"possible convention mismatch: {hint}")
 
 
 # ---------------------------------------------------------------------------
@@ -120,11 +216,17 @@ def _get_metadata(metrics: dict[str, Any] | None, key: str) -> dict[str, Any]:
     return metrics.get(key, {})
 
 
+def _fundamental_only(model: str) -> bool:
+    from phasesweep.registry import MODEL_REGISTRY
+    info = MODEL_REGISTRY.get(model)
+    return bool(info and info.fundamental_only)
+
+
 def _resolve_bound_compare(
     measured: RunResult, computed: RunResult,
 ) -> list[ComparisonRow]:
     meta = _get_metadata(measured.metrics, "_bound_compare")
-    if not meta or not computed.metrics:
+    if not meta or not measured.metrics or not computed.metrics:
         return []
     rows: list[ComparisonRow] = []
     for meas_key, ref_dict in meta.items():
@@ -166,15 +268,35 @@ def _resolve_curve_compare(
     tolerances: dict[str, float] | None = None,
 ) -> list[ComparisonRow]:
     meta = _get_metadata(measured.metrics, "_curve_compare")
-    if not meta or not computed.metrics:
+    if not meta or not measured.metrics or not computed.metrics:
         return []
     rows: list[ComparisonRow] = []
+    fundamental_only = _fundamental_only(computed.model)
     for meas_key, ref_dict in meta.items():
         ref = CurveRef.from_dict(ref_dict)
         meas_val = measured.metrics.get(meas_key)
+        if meas_val is None:
+            continue
+        # A fundamental-only waveform has no meaningful shape extremum:
+        # its max IS the fundamental, incommensurate with a published peak.
+        # Surfaced as a "skipped" row so the comparison doesn't vanish.
+        if ref.extract in ("max", "min") and fundamental_only:
+            rows.append(ComparisonRow(
+                quantity=meas_key,
+                model_a=measured.model,
+                val_a=meas_val,
+                model_b=computed.model,
+                val_b=float("nan"),
+                delta=float("nan"),
+                rel_pct=0.0,
+                tol_pct=0.0,
+                passed=True,
+                comparison_type="skipped",
+            ))
+            continue
         curve_x = computed.metrics.get(ref.curve_x)
         curve_y = computed.metrics.get(ref.curve_y)
-        if meas_val is None or curve_x is None or curve_y is None:
+        if curve_x is None or curve_y is None:
             continue
         x_arr = np.asarray(curve_x, dtype=float)
         y_arr = np.asarray(curve_y, dtype=float)
@@ -190,9 +312,7 @@ def _resolve_curve_compare(
             comp_val = float(y_arr.min())
         else:  # rms
             comp_val = float(np.sqrt(np.mean(y_arr**2)))
-        delta = comp_val - meas_val
-        ref_val = abs(meas_val) if abs(meas_val) > 1e-12 else abs(comp_val)
-        rel_pct = abs(delta) / ref_val * 100 if ref_val > 1e-12 else 0.0
+        delta, rel_pct = _rel_pct(meas_val, comp_val)
         tol = _pick_tolerance(meas_key, measured.source, computed.source, tolerances,
                               tol_a=measured.tolerances, tol_b=computed.tolerances)
         rows.append(ComparisonRow(
@@ -216,7 +336,7 @@ def _resolve_key_mapping(
     tolerances: dict[str, float] | None = None,
 ) -> list[ComparisonRow]:
     meta = _get_metadata(measured.metrics, "_key_mapping")
-    if not meta or not computed.metrics:
+    if not meta or not measured.metrics or not computed.metrics:
         return []
     rows: list[ComparisonRow] = []
     for meas_key, ref_dict in meta.items():
@@ -225,11 +345,11 @@ def _resolve_key_mapping(
         comp_val = computed.metrics.get(ref.computed_key)
         if meas_val is None or comp_val is None:
             continue
-        if not isinstance(meas_val, (int, float)) or not isinstance(comp_val, (int, float)):
+        if not isinstance(meas_val, (int, float)) or isinstance(meas_val, bool):
             continue
-        delta = comp_val - meas_val
-        ref_val = abs(meas_val) if abs(meas_val) > 1e-12 else abs(comp_val)
-        rel_pct = abs(delta) / ref_val * 100 if ref_val > 1e-12 else 0.0
+        if not isinstance(comp_val, (int, float)) or isinstance(comp_val, bool):
+            continue
+        delta, rel_pct = _rel_pct(meas_val, comp_val)
         tol = _pick_tolerance(meas_key, measured.source, computed.source, tolerances,
                               tol_a=measured.tolerances, tol_b=computed.tolerances)
         rows.append(ComparisonRow(
@@ -255,6 +375,7 @@ class DiagnosisSummary:
     delta_rows: list[ComparisonRow]
     bound_rows: list[ComparisonRow]
     curve_rows: list[ComparisonRow]
+    skipped_rows: list[ComparisonRow] = field(default_factory=list)
 
     @property
     def delta_pass(self) -> bool:
@@ -295,18 +416,16 @@ def compare_results(
         if not measured.metrics:
             continue
         # Precedence: bound > curve > key_mapping > direct
-        for row in _resolve_bound_compare(measured, computed):
-            if row.quantity not in handled:
-                rows.append(row)
-                handled.add(row.quantity)
-        for row in _resolve_curve_compare(measured, computed, tolerances):
-            if row.quantity not in handled:
-                rows.append(row)
-                handled.add(row.quantity)
-        for row in _resolve_key_mapping(measured, computed, tolerances):
-            if row.quantity not in handled:
-                rows.append(row)
-                handled.add(row.quantity)
+        resolvers = [
+            _resolve_bound_compare(measured, computed),
+            _resolve_curve_compare(measured, computed, tolerances),
+            _resolve_key_mapping(measured, computed, tolerances),
+        ]
+        for resolved in resolvers:
+            for row in resolved:
+                if row.quantity not in handled:
+                    rows.append(row)
+                    handled.add(row.quantity)
 
     # Direct delta comparison on remaining shared scalar keys
     scalars_a = _scalar_quantities(a.metrics)
@@ -315,9 +434,27 @@ def compare_results(
 
     for q in shared:
         va, vb = scalars_a[q], scalars_b[q]
-        delta = vb - va
-        ref = abs(va) if abs(va) > 1e-12 else abs(vb)
-        rel_pct = abs(delta) / ref * 100.0 if ref > 1e-12 else 0.0
+        if q in SHAPE_SCALARS and (
+            _fundamental_only(a.model) or _fundamental_only(b.model)
+        ):
+            # Surfaced as "skipped" so the comparison doesn't vanish
+            # (precedent: _resolve_curve_compare max/min extracts).
+            rows.append(ComparisonRow(
+                quantity=q,
+                model_a=a.model,
+                val_a=va,
+                model_b=b.model,
+                val_b=vb,
+                delta=vb - va,
+                rel_pct=0.0,
+                tol_pct=0.0,
+                passed=True,
+                comparison_type="skipped",
+            ))
+            continue
+        if q == "R_s":
+            va, vb = _r_s_common_temp(a, va, b, vb)
+        delta, rel_pct = _rel_pct(va, vb)
         tol = _pick_tolerance(q, a.source, b.source, tolerances,
                               tol_a=a.tolerances, tol_b=b.tolerances)
         rows.append(ComparisonRow(
@@ -331,7 +468,7 @@ def compare_results(
             tol_pct=tol,
             passed=rel_pct <= tol,
         ))
-    return rows
+    return [_annotate_convention(r) for r in rows]
 
 
 def compare_all(
@@ -356,17 +493,11 @@ def diagnose(
     computed = [r for r in results if r.source == "computed"]
     measured = [r for r in results if r.source in ("measured", "published")]
 
-    if len(computed) < 2 and not measured:
-        return "insufficient data for diagnosis"
-
     models_agree = True
     if len(computed) >= 2:
         rows = compare_all(computed, tolerances)
         if rows and not all(r.passed for r in rows):
             models_agree = False
-
-    if not measured:
-        return "models agree" if models_agree else "models disagree (no measured data)"
 
     model_vs_meas: dict[str, bool] = {}
     for c in computed:
@@ -376,8 +507,14 @@ def diagnose(
         if rows:
             model_vs_meas[c.model] = all(r.passed for r in rows)
 
-    any_match = any(model_vs_meas.values()) if model_vs_meas else False
-    all_match = all(model_vs_meas.values()) if model_vs_meas else False
+    # No usable computed-vs-measured comparison: diagnose computed-only.
+    if not model_vs_meas:
+        if len(computed) < 2:
+            return "insufficient data for diagnosis"
+        return "models agree" if models_agree else "models disagree (no measured data)"
+
+    any_match = any(model_vs_meas.values())
+    all_match = all(model_vs_meas.values())
 
     if models_agree and all_match:
         return "validated"
@@ -401,12 +538,17 @@ def diagnose_detailed(
         delta_rows=[r for r in all_rows if r.comparison_type == "delta"],
         bound_rows=[r for r in all_rows if r.comparison_type == "bound"],
         curve_rows=[r for r in all_rows if r.comparison_type == "curve"],
+        skipped_rows=[r for r in all_rows if r.comparison_type == "skipped"],
     )
 
 
 def format_diagnosis(summary: DiagnosisSummary) -> str:
+    skip_note = (
+        f" [{len(summary.skipped_rows)} skipped: no commensurate comparand]"
+        if summary.skipped_rows else ""
+    )
     if summary.total == 0:
-        return "no comparable quantities"
+        return "no comparable quantities" + skip_note
     parts = []
     if summary.delta_rows:
         parts.append(f"{len(summary.delta_rows)} delta")
@@ -436,6 +578,10 @@ def format_diagnosis(summary: DiagnosisSummary) -> str:
         qualifier = "bounds satisfied, " if summary.bound_rows else ""
         msg = f"partial — {qualifier}{' + '.join(parts_fail)} comparisons fail"
 
+    msg += skip_note
+    hints = sorted({r.note for r in (summary.delta_rows + summary.curve_rows) if r.note})
+    if hints:
+        msg += " [" + "; ".join(hints) + "]"
     if any(r.extrapolated for r in summary.curve_rows):
         msg += " [WARNING: extrapolated curve comparison]"
     return msg
@@ -455,10 +601,16 @@ def format_table(rows: list[ComparisonRow]) -> str:
         "-" * 105,
     ]
     for r in rows:
-        tag = "PASS" if r.passed else "FAIL"
-        lines.append(
+        if r.comparison_type == "skipped":
+            tag = "SKIP"
+        else:
+            tag = "PASS" if r.passed else "FAIL"
+        line = (
             f"{r.quantity:<25} {r.model_a:<16} {r.val_a:>12.4g} "
             f"{r.model_b:<16} {r.val_b:>12.4g} {r.rel_pct:>7.1f}% "
             f"{r.tol_pct:>5.0f}% {tag:>4}"
         )
+        if r.note:
+            line += f"  ⚠ {r.note}"
+        lines.append(line)
     return "\n".join(lines)

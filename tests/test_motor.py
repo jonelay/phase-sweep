@@ -82,9 +82,12 @@ class TestMotorConfigId:
 
 class TestDriveParams:
 
-    def test_defaults(self):
+    def test_defaults_are_none(self):
         d = DriveParams()
-        assert d.U_DC == 540.0
+        assert d.U_DC is None
+        assert d.MAX_I_S is None
+        assert d.W_REF is None
+        assert d.I_LIMIT is None
 
     def test_negative_U_DC_raises(self):
         with pytest.raises(ValueError, match="U_DC"):
@@ -130,3 +133,87 @@ class TestSerialization:
         assert m2.drive.U_DC == 300.0
         assert m2.drive.MAX_I_S == 10.0
         assert m2.drive.W_REF == 200.0
+
+
+class TestGeometryOptional:
+    """Datasheet/circuit-only motors carry no geometry."""
+
+    def test_no_geometry_construction(self):
+        m = Motor(name="ipm", geometry=None, n_p=2, R_s=0.5, psi_f=0.1)
+        assert m.geometry is None
+
+    def test_no_geometry_config_id_stable(self):
+        m = Motor(name="ipm", geometry=None, n_p=2, R_s=0.5, psi_f=0.1)
+        # Pinned: the None-geometry sentinel must not silently drift
+        assert m.config_id == Motor(
+            name="other", geometry=None, n_p=2, R_s=0.5, psi_f=0.1,
+        ).config_id
+
+    def test_no_geometry_roundtrip(self):
+        m = Motor(name="ipm", geometry=None, n_p=2, R_s=0.5,
+                  L_d=5e-3, L_q=1.05e-2, psi_f=0.1, I_rated=10.0)
+        m2 = Motor.from_dict(m.to_dict())
+        assert m2.geometry is None
+        assert m2.config_id == m.config_id
+
+    def test_geometry_present_config_id_unchanged(self):
+        # Adding the geometry-optional + thermal fields must NOT perturb the
+        # hash of an existing geometry-bearing motor (no run-ID regression).
+        geo = default_inrunner()
+        m = Motor(name="m", geometry=geo, n_p=2, R_s=0.2, psi_f=0.1)
+        parts = [geo.config_id, "2", "R_s=0.2", "psi_f=0.1",
+                 "alpha_p=1.0", "mu_r_fe=1000.0", "mu_r_pm=1.05"]
+        import hashlib
+        expected = hashlib.md5("|".join(parts).encode()).hexdigest()[:12]
+        assert m.config_id == expected
+
+    def test_field_factory_rejects_no_geometry(self):
+        from phasesweep.solver_params import prepare_analytical, prepare_fem
+        m = Motor(name="ipm", geometry=None, n_p=2, B_rem=1.0)
+        with pytest.raises(ValueError, match="geometry"):
+            prepare_analytical(m)
+        with pytest.raises(ValueError, match="geometry"):
+            prepare_fem(m)
+
+
+class TestThermalFields:
+    """Optional thermal context fields."""
+
+    def test_thermal_fields_optional(self):
+        m = Motor(name="m", geometry=default_inrunner(), n_p=2)
+        assert m.winding_temp_limit is None
+        assert m.r_th is None
+        assert m.insulation_class is None
+
+    def test_thermal_fields_roundtrip(self):
+        m = Motor(name="m", geometry=None, n_p=2, R_s=0.5, psi_f=0.1,
+                  winding_temp_limit=155.0, ambient_temp=40.0, r_th=0.5,
+                  insulation_class="F")
+        m2 = Motor.from_dict(m.to_dict())
+        assert m2.winding_temp_limit == 155.0
+        assert m2.ambient_temp == 40.0
+        assert m2.r_th == 0.5
+        assert m2.insulation_class == "F"
+        assert m2.config_id == m.config_id
+
+    def test_thermal_fields_hashed(self):
+        base = Motor(name="m", geometry=None, n_p=2, R_s=0.5, psi_f=0.1)
+        hot = Motor(name="m", geometry=None, n_p=2, R_s=0.5, psi_f=0.1,
+                    winding_temp_limit=180.0, ambient_temp=40.0, r_th=0.5)
+        assert base.config_id != hot.config_id
+
+    def test_insulation_class_not_hashed(self):
+        a = Motor(name="m", geometry=None, n_p=2, R_s=0.5, psi_f=0.1,
+                  insulation_class="F")
+        b = Motor(name="m", geometry=None, n_p=2, R_s=0.5, psi_f=0.1,
+                  insulation_class="H")
+        assert a.config_id == b.config_id
+
+    def test_bad_r_th(self):
+        with pytest.raises(ValueError, match="r_th"):
+            Motor(name="m", geometry=None, n_p=2, r_th=0.0)
+
+    def test_temp_limit_below_ambient(self):
+        with pytest.raises(ValueError, match="winding_temp_limit"):
+            Motor(name="m", geometry=None, n_p=2,
+                  winding_temp_limit=40.0, ambient_temp=50.0)

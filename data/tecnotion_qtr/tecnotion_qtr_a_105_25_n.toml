@@ -1,0 +1,98 @@
+# Tecnotion QTR-A-105-25, winding N — frameless direct-drive torque motor
+# (surface PM, 20-pole). Third multi-voltage torque-speed envelope anchor
+# (REQ-0814), and the only LOADED two-voltage corner in the registry: the
+# spec sheet tabulates "Maximum speed @ 48 Volt @ Tc" = 240 rpm and
+# "Maximum speed @ max. voltage @ Tc" = 3625 rpm (max voltage 230 Vac rms
+# = 325 Vdc) for the same winding — the corner of the CONTINUOUS-torque
+# envelope at two buses (ETEL's nb analog, at two voltages). The series
+# mechanical cap is separate and far above (footnote 3: 16,500 rpm).
+# Source (single manufacturer spec sheet):
+#   Tecnotion, "Torque QTR 105 series" specsheet Ver. 2.0 (c) 2021,
+#   column QTR-A-105-25 / winding N. All specifications +-10%.
+#   https://www.tecnotion.com/wp-content/uploads/2022/09/QTR105_Specsheet_EN_2.0.pdf
+#
+# Sheet conventions (verbatim remarks column): R is "coils @ 25 C ex.
+# cable" PER PHASE (no line-line trap; cable resistance excluded); L is
+# per phase, valid "I < 0.6 Ip"; Tc/Ic/Pc are "coils @ 100 C"; Tp/Ip are
+# "magnet @ 25 C"; Ke is printed in BOTH conventions (ph-ph peak 51,
+# ph-ph rms 36 V/krpm; 51/sqrt(2) = 36.06 — consistent).
+#
+# psi_f is DERIVED from the peak line-line Ke (magnet-only, EMF route):
+#   psi_f = [51 / (1000*2*pi/60)] / (sqrt(3) * n_p)
+#         = 0.487014 / (sqrt(3) * 10) = 0.028118 Wb
+# Datasheet cross-checks (three independent closures):
+#   Kt: model k_T = 1.5*n_p*psi_f*sqrt(2) = 0.5964 Nm/Arms vs printed
+#       0.60 (-0.6%)
+#   tau_e: L/R = 4.05/1.93 = 2.098 ms vs printed 2.1 ms (+0.1%)
+#   Km: Kt^2/(3*R_ph) = 0.0622 (Nm)^2/W vs printed 0.061 (+2%)
+#   Pc: 3 * R(100 C) * Ic^2 = 3 * 1.93*1.295 * 5.3^2 = 210.6 W vs printed
+#       Pc 214 W (+1.6% with HOT R; cold R misses by -24%) — this pins the
+#       rating rows as hot-R quantities, so the corner reconstruction in
+#       the tests uses R(100 C) = R25*(1 + 0.00393*75). Tecnotion's own
+#       technical note ("back-EMF explained") states max speed is set by
+#       bus voltage vs back-EMF.
+#
+# Saturation flag: the L validity spec is I < 0.6*Ip = 4.56 A, but
+# Ic = 5.3 A = 0.70*Ip — the continuous corner sits slightly beyond the
+# quoted small-signal inductance range (documented; the corner at 325 V
+# is reactance-dominated so this matters there most).
+
+[motor]
+name = "Tecnotion QTR-A-105-25-N torque motor"
+type = "surface-magnet PMSM (frameless direct-drive torque motor)"
+
+[circuit]
+n_p = 10               # 20 poles (datasheet "Poles: 20")
+R_s = 1.93             # Ohm per-phase at 25 C, excluding cable (datasheet R)
+L_d = 0.00405          # H per-phase (datasheet L, valid I < 0.6 Ip); SPM
+L_q = 0.00405          # = L_d (surface magnets, single catalog L)
+psi_f = 0.028118       # Wb, peak per-phase — derived from Ke (see header)
+I_rated_rms = 5.3      # A rms max continuous current Ic (coils @ 100 C)
+
+[drive]
+U_DC = 325.0           # V (datasheet "Motortype max. voltage ph-ph 230 Vac rms (325 Vdc)")
+MAX_I_S = 10.748       # A peak = sqrt(2) * 7.6 A_rms (datasheet Ip, magnet @ 25 C)
+W_REF = 379.609        # rad/s = 2*pi*3625/60 (max speed @ max voltage @ Tc)
+
+[rated]
+torque_Nm = 3.2        # datasheet Tc continuous torque (coils @ 100 C)
+speed_rpm = 3625       # datasheet max speed @ max voltage @ Tc
+
+[provenance]
+source = "Tecnotion Torque QTR 105 series specsheet Ver. 2.0, column QTR-A-105-25 winding N"
+url = "https://www.tecnotion.com/wp-content/uploads/2022/09/QTR105_Specsheet_EN_2.0.pdf"
+motor_model = "Tecnotion QTR-A-105-25-N (frameless torque motor kit)"
+duty = "S1 continuous at Tc/Ic with coils at 100 C, mounting surface 20 C (sheet note 1); Pc = 214 W continuous power loss"
+# Two-voltage loaded corners (REQ-0814 anchor class; the key evidence):
+#   V [Vdc] | max speed @ Tc [rpm]
+#     48    |        240
+#    325    |       3625
+# Series mechanical cap 16,500 rpm (footnote 3) — both corners far below.
+peak_torque_Nm = 3.9              # datasheet Tp (magnet @ 25 C)
+ultimate_torque_Nm = 6.1          # datasheet Tu @ 20 C/s (magnet @ 25 C)
+P_c_dissipation_W = 214.0         # datasheet Pc, coils @ 100 C
+thermal_resistance_C_per_W = 0.35  # datasheet Rth coils to mounting surface — provenance only, see notes
+thermal_time_constant_s = 16.0     # datasheet tau_th
+notes = """
+Third multi-voltage envelope anchor (after kollmorgen_akm44h and
+abb_bsm50n233) and the only one whose two published corners carry LOAD
+(continuous torque Tc) — the direct two-voltage analog of ETEL's nb.
+With the hot-R reconstruction the model corner sits a consistent
++9.0/+11.0% above the published speeds at 48/325 V (pinned) — the
+tightest non-ETEL margins in the registry; with cold R the 48 V corner
+is off by +52% (IR-dominated), which is why the Pc closure above
+matters. The no-load limit at 48 V (941 rpm) is far below the 325 V
+corner (3625 rpm): the two published speeds cannot share a mechanical
+or frequency ceiling. The N/Y/Z winding triplet of this frame shares
+magnetics and scales Ke 51/28/16 — an available winding-scaling
+cross-check, deliberately not anchored (one winding suffices; the
+triplet adds catalog rows, not independent physics).
+[thermal] is deliberately UNSET: Rth here is coils-to-MOUNTING-SURFACE
+for a frameless kit (the budget path would need the housing's thermal
+reality); recorded above as provenance only (comparability rule).
+Deliberately NOT in _NAMEPLATE_ANCHORS: Tc/Ic is a rating at unspecified
+speed for a frameless kit, not a nameplate at a rated point.
+Eligible for: rated_torque, stall_torque (bound), torque_speed
+(two-voltage loaded corners, one-sided + pinned), thermal_duty
+(rated_current path).
+"""

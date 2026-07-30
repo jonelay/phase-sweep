@@ -19,9 +19,9 @@ from phasesweep.sweep_types import RunConfig, RunResult
 _DEFAULT_TIMEOUT = 60
 
 
-def _run_sim_impl(config: RunConfig) -> dict[str, float]:
+def _run_sim_impl(config: RunConfig) -> dict[str, Any]:
     """Run motulator simulation from RunConfig. Executes inside subprocess."""
-    from phasesweep.sim import build_sim, extract_metrics
+    from phasesweep.sim import build_sim, extract_metrics, extract_waveforms
     from phasesweep.solver_params import prepare_drive_sim
 
     params = prepare_drive_sim(config.motor)
@@ -30,7 +30,10 @@ def _run_sim_impl(config: RunConfig) -> dict[str, float]:
         raise ValueError("RunConfig.sim_plan is required for drive_sim")
     sim = build_sim(params, plan)
     res = sim.simulate(t_stop=plan.t_stop)
-    return extract_metrics(res, plan=plan, w_ref=params.drive.W_REF)
+    assert params.drive.W_REF is not None
+    metrics: dict[str, Any] = extract_metrics(res, plan=plan, w_ref=params.drive.W_REF)
+    metrics.update(extract_waveforms(res))
+    return metrics
 
 
 def run_sim_safe(config: RunConfig, timeout_s: int = _DEFAULT_TIMEOUT) -> RunResult:

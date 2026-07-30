@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
-    from phasesweep.motor import Motor as MotorDC
+    from phasesweep.motor import Motor
     from phasesweep.sim import SimPlan
 
 Status = Literal["OK", "TIMEOUT", "ERROR"]
@@ -25,11 +25,16 @@ class RunConfig:
     nonlinear — enable B-H curve Picard iteration (FEM);
     sim_plan — drive-sim timing/load plan (SimPlan);
     j_s — armature slot current density amplitude (A/m², 0 = open circuit);
+    i_fault — peak phase current (A) the demag_screen model screens at;
+    required by that model (no drive-limit fallback — the screen current
+    is a deliberate choice: drive limit, short-circuit peak, ...);
+    duty_profile — thermal-duty torque-time segments ((torque_Nm,
+    duration_s), ...) for the thermal_duty model;
     dataset_id — identity of an imported measured dataset (None for
     computed models); distinguishes repeat captures of the same test.
     """
 
-    motor: MotorDC
+    motor: Motor
     model: str
 
     maxh_fraction: float = 0.05
@@ -39,6 +44,10 @@ class RunConfig:
     sim_plan: SimPlan | None = None
 
     j_s: float = 0.0
+
+    i_fault: float | None = None
+
+    duty_profile: tuple[tuple[float, float], ...] | None = None
 
     dataset_id: str | None = None
 
@@ -51,8 +60,12 @@ class RunConfig:
             "nonlinear": self.nonlinear,
             "j_s": self.j_s,
         }
+        if self.i_fault is not None:
+            d["i_fault"] = self.i_fault
         if self.sim_plan is not None:
             d["sim_plan"] = self.sim_plan.to_dict()
+        if self.duty_profile is not None:
+            d["duty_profile"] = [list(seg) for seg in self.duty_profile]
         if self.dataset_id is not None:
             d["dataset_id"] = self.dataset_id
         return d
@@ -66,6 +79,9 @@ class RunConfig:
         sim_plan = None
         if "sim_plan" in d and d["sim_plan"] is not None:
             sim_plan = SimPlan.from_dict(d["sim_plan"])
+        duty_profile = None
+        if d.get("duty_profile") is not None:
+            duty_profile = tuple((float(t), float(dt)) for t, dt in d["duty_profile"])
         return cls(
             motor=motor,
             model=d["model"],
@@ -74,6 +90,8 @@ class RunConfig:
             nonlinear=d.get("nonlinear", False),
             sim_plan=sim_plan,
             j_s=d.get("j_s", 0.0),
+            i_fault=d.get("i_fault"),
+            duty_profile=duty_profile,
             dataset_id=d.get("dataset_id"),
         )
 
@@ -111,7 +129,12 @@ class RunResult:
     source: Source = "computed"
     tolerances: dict[str, float] | None = None
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
-    schema_version: str = "v2.0"
+    # Registry model-code version at save time (stamped by ResultStore.save,
+    # including v1 — an unstamped record must not be confusable with a v1
+    # one). None on records loaded from pre-v2.1 stores: unknown vintage,
+    # treated as stale by the read-side checks.
+    model_version: int | None = None
+    schema_version: str = "v2.1"
 
     @property
     def motor_config_id(self) -> str:
@@ -128,6 +151,7 @@ class RunResult:
             "elapsed_s": self.elapsed_s,
             "error_msg": self.error_msg,
             "timestamp": self.timestamp,
+            "model_version": self.model_version,
             "schema_version": self.schema_version,
         }
         if self.tolerances:
@@ -146,6 +170,7 @@ class RunResult:
             source=d.get("source", "computed"),
             tolerances=d.get("tolerances"),
             timestamp=d.get("timestamp", ""),
+            model_version=d.get("model_version"),
             schema_version=d.get("schema_version", "v2.0"),
         )
 
@@ -179,11 +204,12 @@ def compute_run_id(
         "n_theta": str(rc.n_theta),
         "nonlinear": str(rc.nonlinear),
         "j_s": f"{rc.j_s:.6f}",
+        "i_fault": "none" if rc.i_fault is None else f"{rc.i_fault:.6g}",
         # Drive params live on the motor but are excluded from
         # Motor.config_id (keeps archived motor_config_id groupings valid)
-        "U_DC": f"{drive.U_DC:.6g}",
-        "MAX_I_S": f"{drive.MAX_I_S:.6g}",
-        "W_REF": f"{drive.W_REF:.6g}",
+        "U_DC": "none" if drive.U_DC is None else f"{drive.U_DC:.6g}",
+        "MAX_I_S": "none" if drive.MAX_I_S is None else f"{drive.MAX_I_S:.6g}",
+        "W_REF": "none" if drive.W_REF is None else f"{drive.W_REF:.6g}",
         "I_LIMIT": "none" if drive.I_LIMIT is None else f"{drive.I_LIMIT:.6g}",
     }
     if rc.sim_plan is not None:
@@ -191,6 +217,11 @@ def compute_run_id(
         # change metrics, so they must change the run ID too
         solver_params["sim_plan"] = json.dumps(
             rc.sim_plan.to_dict(), sort_keys=True
+        )
+    if rc.duty_profile is not None:
+        # The torque-time profile drives every thermal-duty metric
+        solver_params["duty_profile"] = json.dumps(
+            [list(seg) for seg in rc.duty_profile], sort_keys=True
         )
 
     if needs is not None:

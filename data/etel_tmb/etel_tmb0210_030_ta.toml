@@ -1,0 +1,71 @@
+# ETEL TMB+0210-030 (winding TA) — direct-drive conventional torque motor
+# 44-pole reverse-salient PMSM (L_d > L_q, saliency L_q/L_d = 0.894), water-cooled.
+# Source (single manufacturer datasheet, all values on one page):
+#   ETEL S.A., "CONVENTIONAL TORQUE MOTOR TMB+0210-030", 07.01.2019,
+#   doc code Y2gH-FAAX-FhIA-QCEC, column "TA - WATER COOLING"
+#   https://www.etel.ch/wp-content/uploads/TMB0210-030.pdf
+#
+# Datasheet footnote (*): Ku, R20, Ld/Lq are terminal-to-terminal (line-line);
+# per-phase (wye) = value / 2 for R and L. psi_f is DERIVED from the back-EMF
+# constant Ku (magnet-only — no reluctance double-count, unlike deriving from
+# Kt): psi_f = sqrt(2)·Ku / (sqrt(3)·n_p) = sqrt(2)·4.04 / (sqrt(3)·22).
+# Two independent datasheet cross-checks of that derivation + conventions:
+#   Isc: psi_f/L_d = 15.87 A_peak = 11.22 A_rms vs datasheet Isc 11.2 (+0.17%)
+#   Kt:  model k_T_effective at Ic = 7.03 Nm/A_rms vs datasheet Kt 7.05 (-0.2%)
+
+[motor]
+name = "ETEL TMB+0210-030 TA torque motor"
+type = "reverse-salient PMSM (direct-drive torque motor)"
+
+[circuit]
+n_p = 22               # 2p = 44 poles (datasheet)
+R_s = 2.215            # Ohm per-phase at 20 C (datasheet R20 = 4.43 terminal-to-terminal)
+L_d = 0.00945          # H per-phase (datasheet Ld 18.9 mH line-line); L_d > L_q
+L_q = 0.00845          # H per-phase (datasheet Lq 16.9 mH line-line)
+psi_f = 0.149938       # Wb, peak per-phase — derived from Ku (see header)
+I_rated_rms = 10.9     # A rms continuous (datasheet Ic, water cooling)
+
+[drive]
+U_DC = 600.0           # V (datasheet Udc nominal DC bus)
+MAX_I_S = 35.355       # A peak = sqrt(2)·25.0 A_rms (datasheet Ip)
+W_REF = 76.865         # rad/s = 2·pi·734/60 (datasheet nn rated speed)
+
+[thermal]
+winding_temp_limit = 130.0   # C (datasheet θmax maximum coil temperature)
+ambient_temp = 20.0          # C (datasheet θamb; = inlet water temp θw)
+r_th = 0.0948                # K/W (datasheet Rth, coil to cooling reference)
+thermal_time_constant = 53.6  # s (datasheet τth — enables the transient march)
+
+[rated]
+torque_Nm = 69.1       # datasheet Tc continuous torque @ Ic (water cooling)
+speed_rpm = 734        # datasheet nn rated speed (Tn = 46.0 Nm / In = 7.53 A_rms there)
+
+[provenance]
+source = "ETEL TMB+0210-030 datasheet 07.01.2019 (Y2gH-FAAX-FhIA-QCEC), winding TA"
+url = "https://www.etel.ch/wp-content/uploads/TMB0210-030.pdf"
+motor_model = "ETEL TMB+0210-030 TA (conventional torque motor, water-cooled)"
+duty = "S1 continuous at Ic/Tc with water cooling (inlet 20 C, dT_w 5 K, 3.5 l/min); Di = 40%, Dp = 5% intermittent/peak zones"
+thermal_time_constant_s = 53.6   # datasheet τth
+P_c_dissipation_W = 1110.0       # datasheet Pc, power dissipation @ Ic
+I_sc_Arms = 11.2                 # datasheet Isc max short-circuit current
+# Torque-speed envelope points (REQ-0814 anchor class; speeds in rpm):
+envelope_In_Arms = 7.53          # datasheet In rated current
+envelope_nb_rpm = 817.0          # datasheet nb base speed (at In)
+envelope_nm_rpm = 983.0          # datasheet nm max speed without flux weakening
+envelope_Tn_Nm = 46.0            # datasheet Tn rated torque
+notes = """
+First reverse-salient anchor (L_d > L_q): exercises the gamma < 0 MTPA branch
+(magnetizing i_d) on real citable hardware. Also the first
+thermal_resistance-path anchor — the datasheet publishes r_th, coil/ambient
+temps AND the continuous dissipation Pc on one page: copper loss at Ic with
+R_s(130 C) = 1131 W vs published Pc = 1110 W (+1.9%, pure loss-model check),
+and vs the dT/r_th budget = 1160 W (0.97 — the r_th path reproduces the
+manufacturer's continuous rating within ~3%).
+Deliberately NOT in _NAMEPLATE_ANCHORS (the 0.92 MTPA/nameplate band): that
+band is air-cooled S1 servos on the rated_current budget path. This
+water-cooled rating sits lower (Tc / tau_mtpa = 0.90) and the saliency is
+mild, so it anchors the R_th path and the reverse-salient branch instead.
+Saturation note: Kt at peak current collapses (Tp/Ip = 5.1 vs Kt 7.05
+Nm/A_rms), so linear-magnetics results above Ic are upper bounds.
+Eligible for: rated_torque, stall_torque, thermal_duty (thermal_resistance path).
+"""

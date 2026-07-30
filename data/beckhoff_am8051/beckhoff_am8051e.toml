@@ -1,0 +1,101 @@
+# Beckhoff AM8051-E — synchronous servo motor (8-pole)
+# Fourth multi-voltage torque-speed envelope anchor (REQ-0814): the
+# operation manual tabulates the SAME winding's S1 nominal point
+# (Nn, Mn, Pn) at FOUR mains voltages — UN = 115/230/400/480 VAC →
+# 500/1400/2500/3000 rpm — all far below the 9000 rpm mechanical cap.
+# Unlike the Kollmorgen/ABB/Tecnotion sheets, the corner voltages are
+# MAINS AC values: the corner reconstruction assumes an ideal rectified
+# bus U_DC = sqrt(2)*UN (AX5000/AX8000 drive; no DC bus value is printed
+# in the motor manual) — documented assumption, unique to this anchor.
+# Source (single manufacturer manual):
+#   Beckhoff, "AM8000 and AM8500 | Synchronous Servomotors" Operation
+#   Instructions, Version 4.9.1 (2023-09), section 4.7 "AM805x & AM855x"
+#   electrical data, column 51E; conventions in section 4.1/4.1.1.
+#   https://download.beckhoff.com/download/document/motion/am8000_am8500_ba_en.pdf
+#
+# Manual conventions (section 4.1, verbatim): "All data, with the
+# exception of the voltage constant, are based on 40 C ambient
+# temperature and 100 K overtemperature of the winding. The data can
+# have a tolerance of +/- 10 %." KErms [mVmin] is "the induced motor EMF
+# at 20 C, based on 1000 rpm ... specified as the sine RMS value between
+# two terminals" (line-line rms, COLD). KTrms is defined by M0 = I0 x KT
+# (HOT, per the blanket statement; 1.77 * 2.70 = 4.78 vs M0 4.80 closes
+# their own row). R20 is "Ph-Ph" (line-line, 20 C) -> per-phase / 2.
+# L is "the average value for one motor revolution, with two energized
+# phases, at 1 kHz. Saturation of the motor must be taken into account."
+# — a line-line (two-phase) small-signal value -> per-phase / 2; the
+# position-averaging wording implies mild saliency, treated as SPM with
+# a single L (documented caveat).
+#
+# psi_f is DERIVED from KE (magnet-only, EMF route, cold like the repo
+# convention):
+#   psi_f = sqrt(2) * [125 / (1000*2*pi/60)] / (sqrt(3) * n_p)
+#         = sqrt(2) * 1.193662 / (sqrt(3) * 4) = 0.243655 Wb
+# Datasheet cross-checks:
+#   KT: model k_T = 1.5*n_p*psi_f*sqrt(2) = 2.067 Nm/Arms vs printed
+#       KT 1.77 (-14.4%) — the documented hot/cold split: KT is hot by
+#       definition while KE is 20 C; the gap matches reversible NdFeB
+#       loss at the 100 K+ rating rise (larger than Kollmorgen's -5.7%
+#       because Beckhoff rates KT itself at full overtemperature).
+#   M0 = KT*I0: 1.77 * 2.70 = 4.78 vs printed 4.80 (-0.4%, their pair)
+#   In(400 V) printed 2.55 A vs Mn/KT = 4.60/1.77 = 2.60 (+1.9%) — the
+#   only corner with a printed current; others derive as Mn/KT.
+
+[motor]
+name = "Beckhoff AM8051-E servo motor"
+type = "surface-magnet PMSM (synchronous servo, mild-saliency caveat)"
+
+[circuit]
+n_p = 4                # 8 poles (manual "Number of poles: 8", AM805x)
+R_s = 5.70             # Ohm per-phase at 20 C (manual R20 11.40 ohm Ph-Ph)
+L_d = 0.02135          # H per-phase (manual L 42.70 mH Ph-Ph, 1 kHz)
+L_q = 0.02135          # = L_d (single catalog L; position-averaged, see header)
+psi_f = 0.243655       # Wb, peak per-phase — derived from KE (see header)
+I_rated_rms = 2.70     # A rms standstill current I0 (continuous, hot rating)
+
+[drive]
+U_DC = 565.685         # V = sqrt(2)*400 (rectifier assumption, see header)
+MAX_I_S = 17.112       # A peak = sqrt(2) * 12.10 A_rms (manual I0max)
+W_REF = 261.799        # rad/s = 2*pi*2500/60 (nominal speed at UN = 400 V)
+
+[rated]
+torque_Nm = 4.60       # manual Mn at UN = 400 V (S1 at nominal speed)
+speed_rpm = 2500       # manual Nn at UN = 400 V
+
+[provenance]
+source = "Beckhoff AM8000/AM8500 Operation Instructions v4.9.1 (2023-09), section 4.7 AM805x electrical data, column 51E"
+url = "https://download.beckhoff.com/download/document/motion/am8000_am8500_ba_en.pdf"
+motor_model = "Beckhoff AM8051-E (AM8000 series, one-cable technology)"
+duty = "S1 continuous at Mn/Nn, 40 C ambient, 100 K winding overtemperature, reference flange 305 x 305 x 10 mm aluminum"
+# Multi-voltage S1 nominal points (REQ-0814 anchor class; the key evidence):
+#   UN [VAC] | U_DC = sqrt(2)*UN | Mn [Nm] | Nn [rpm] | Pn [kW] | In [A]
+#     115    |      162.6        |  4.80   |    500   |  0.25   |   —
+#     230    |      325.3        |  4.70   |   1400   |  0.69   |   —
+#     400    |      565.7        |  4.60   |   2500   |  1.20   |  2.55
+#     480    |      678.8        |  4.50   |   3000   |  1.41   |   —
+# Max mechanical speed 9000 rpm — every Nn far below it.
+standstill_torque_Nm = 4.80       # manual M0
+peak_torque_Nm = 17.74            # manual M0max
+notes = """
+Fourth multi-voltage envelope anchor (Kollmorgen AKM44H, ABB
+BSM50N-233, Tecnotion QTR-A-105-25-N precede it) — four S1 nominal
+points from one winding, printed as table numbers per mains voltage.
+Model corner sits +11..+16% above Nn at 230/400/480 V and +35% at the
+115 V outlier (fixed drive drops loom largest on the smallest bus —
+same low-voltage-outlier shape as the Kollmorgen 160 Vdc point);
+published-point utilization 0.80-0.91. No-load limit at 115 V
+(920 rpm) < Nn(230 V) = 1400, and at 230 V (1840) < Nn(400 V) = 2500 —
+the ceiling discriminator. Claims one-sided + pinned, as for the other
+three vendors. Unique caveats: (a) rectifier assumption U_DC =
+sqrt(2)*UN documented above; (b) L is a 1 kHz position-averaged
+two-phase value with the manual's own saturation warning — the
+mild-saliency hint is treated as SPM with a single L.
+[thermal] deliberately UNSET (comparability rule; the manual publishes
+no r_th — only a thermal time constant definition).
+Deliberately NOT in _NAMEPLATE_ANCHORS: KT is hot by definition, so an
+MTPA/nameplate comparison would fold the -14.4% hot/cold flux gap into
+the 0.92 band's clean cold-parameter pattern.
+Eligible for: rated_torque, stall_torque (bound), torque_speed
+(four-voltage nominal points, one-sided + pinned), thermal_duty
+(rated_current path).
+"""

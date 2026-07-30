@@ -126,9 +126,9 @@ class TestExecuteParallel:
         motor = _analytical_motor()
         jobs = [_make_job(motor)]
         with patch("phasesweep.parallel._worker_init") as mock_init:
-            # Sequential path doesn't call _worker_init
+            # Sequential path must honor cache_dir like the pool path does
             execute_parallel(jobs, workers=1, cache_dir="/tmp/test_cache")
-            mock_init.assert_not_called()
+            mock_init.assert_called_once_with("/tmp/test_cache")
 
     def test_mixed_ok_and_error(self):
         good = _make_job(_analytical_motor(), tag="good", delta_idx=0)
@@ -171,3 +171,23 @@ class TestExecuteParallel:
         assert len(results) == 1
         assert results[0]["status"] == "TIMEOUT"
         assert results[0]["point_idx"] == 3
+
+    def test_pool_deadline_distinguishes_not_started(self):
+        """A queued job hit by the pool deadline reports elapsed 0 and a
+        'not started' message — not the full deadline as if it had run."""
+        jobs = [
+            {"tag": t, "sleep_s": 30, "point_idx": i}
+            for i, t in enumerate("abcd")
+        ]
+        results = execute_generic(_sleepy_worker, jobs, workers=2, timeout_s=2)
+        assert len(results) == 4
+        assert all(r["status"] == "TIMEOUT" for r in results)
+        queued = [r for r in results if "Not started" in r["error_msg"]]
+        running = [r for r in results if "deadline while" in r["error_msg"]]
+        # 2 workers prefetch workers+1 jobs into the call queue (those are
+        # uncancellable); the 4th sits beyond the buffer and must be
+        # reported as never started, not as having run the full deadline
+        assert len(queued) >= 1
+        assert len(queued) + len(running) == 4
+        assert all(r["elapsed_s"] == 0.0 for r in queued)
+        assert all(r["elapsed_s"] == 2.0 for r in running)

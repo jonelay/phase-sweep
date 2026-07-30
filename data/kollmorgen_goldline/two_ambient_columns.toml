@@ -1,0 +1,357 @@
+# Kollmorgen GOLDLINE B-series two-ambient rating columns (25 windings)
+#
+# Source: Kollmorgen, "GOLDLINE Brushless Servomotor Series" datasheet
+#   (Artisan Technology Group reprint), 10x/20x/40x PERFORMANCE DATA tables
+#   (printed pages 3-5, 11-13, 19-21), all 4-pole, VMax 250 Vrms line-line.
+#   https://www.artisantg.com/info/Kollmorgen_GoldLineMotorSeries_Datasheet.pdf
+#   Same document and column format as the B-104-B anchor
+#   (data/kollmorgen_b104b/kollmorgen_b104b_ipm.toml).
+#
+# Every column publishes continuous stall torque at TWO ambients
+# (Tc @ 40 C and Tc @ 25 C), the continuous line current Ic (pairs with the
+# 40 C rating via the printed Kt), DC line-line resistance
+# Rm at 25 C, motor constant Km at 25 C, and stall thermal resistance Rth.
+# That over-determines the winding rating temperature theta two
+# datasheet-only ways, with NO electrical model (no Ld/Lq/psi_f) needed:
+#   ratio path    (Tc25/Tc40)^2 = (theta-25)/(theta-40)   [R_s, Rth cancel]
+#   absolute path theta = 40 + Rth * 1.5*Rm*Ic^2 * (1 + alpha_cu*(theta-25))
+#                 (3-phase copper loss at Ic, per-phase R = Rm/2, copper
+#                  derated to theta)
+# Result (pinned in tests/test_thermal_duty.py): the absolute path lands at
+# 154.6-158.4 C on ALL 25 columns — the whole family is rated to one
+# winding design temperature (~156 C, Class H limit 180 C, thermostats
+# 155/170 C) through exactly the relation thermal_duty's
+# thermal_resistance budget path models. The ratio path agrees at the
+# median but scatters (121-182 C): Tc is quoted to 2-3 significant
+# figures, and the ratio is ill-conditioned against that rounding.
+#
+# Units: Tc in N-m, Ic in A rms (line), Kt in Nm/A_rms (stall +/-10%),
+# Kb in Vrms(line-line)/kRPM (+/-10%), Rm in Ohm line-line at 25 C
+# (+/-10%), Km in Nm/sqrt(W) at 25 C, Rth in K/W at stall, n_rated in RPM.
+# Continuous ratings on the 203x305x6.4 mm isolated aluminum heat sink.
+#
+# Transcription note: B-402-A's Kt is entered as 2.25 Nm/A_rms, converted
+# from the printed 1.66 lb-ft/A_rms; the datasheet's own N-m row misprints
+# 2.51 there (1.66 lb-ft = 2.251 N-m, and sqrt(3)*Kb confirms 2.25 — the
+# per-column Kt = sqrt(3)*Kb consistency test in the suite is what caught
+# it). All other N-m values are the datasheet's own.
+
+[provenance]
+source = "Kollmorgen GOLDLINE Brushless Servomotor Series datasheet (Artisan reprint), 10x/20x/40x performance tables"
+url = "https://www.artisantg.com/info/Kollmorgen_GoldLineMotorSeries_Datasheet.pdf"
+duty = "S1 continuous stall ratings at 25 C and 40 C ambient, air-cooled on reference heat sink"
+notes = """
+Two-ambient air-cooled r_th consistency family: extends the B-104-B
+two-ambient analysis (n=1) to n=25 with datasheet-only
+values. NOT motor anchors — no per-column electrical model exists (only
+B-104-B has thesis-measured Ld/Lq/psi_f), so these columns validate the
+thermal rating relation, not MTPA. B-104-B's row must stay consistent
+with data/kollmorgen_b104b/kollmorgen_b104b_ipm.toml (guarded in tests).
+Eligible for: thermal_duty rating-relation consistency tests only.
+"""
+
+# --- 10x frame (printed pages 3-5) ---
+
+[[columns]]
+model = "B-102-A"
+tc40_Nm = 0.84
+tc25_Nm = 0.89
+ic_Arms = 2.4
+kt_Nm_per_Arms = 0.35
+kb_Vrms_per_krpm = 20.9
+rm_ll_Ohm = 6.80
+km_Nm_per_sqrtW = 0.111
+rth_K_per_W = 1.30
+n_rated_rpm = 7500
+
+[[columns]]
+model = "B-104-A"
+tc40_Nm = 1.55
+tc25_Nm = 1.64
+ic_Arms = 3.00
+kt_Nm_per_Arms = 0.51
+kb_Vrms_per_krpm = 31.0
+rm_ll_Ohm = 5.30
+km_Nm_per_sqrtW = 0.194
+rth_K_per_W = 1.07
+n_rated_rpm = 5600
+
+[[columns]]
+model = "B-104-B"
+tc40_Nm = 1.57
+tc25_Nm = 1.67
+ic_Arms = 4.20
+kt_Nm_per_Arms = 0.37
+kb_Vrms_per_krpm = 22.5
+rm_ll_Ohm = 2.72
+km_Nm_per_sqrtW = 0.196
+rth_K_per_W = 1.07
+n_rated_rpm = 7500
+
+[[columns]]
+model = "B-106-A"
+tc40_Nm = 2.20
+tc25_Nm = 2.33
+ic_Arms = 3.0
+kt_Nm_per_Arms = 0.72
+kb_Vrms_per_krpm = 43.7
+rm_ll_Ohm = 6.50
+km_Nm_per_sqrtW = 0.249
+rth_K_per_W = 0.87
+n_rated_rpm = 4200
+
+[[columns]]
+model = "B-106-B"
+tc40_Nm = 2.22
+tc25_Nm = 2.36
+ic_Arms = 6.0
+kt_Nm_per_Arms = 0.37
+kb_Vrms_per_krpm = 22.5
+rm_ll_Ohm = 1.60
+km_Nm_per_sqrtW = 0.253
+rth_K_per_W = 0.89
+n_rated_rpm = 7500
+
+# --- 20x frame (printed pages 11-13) ---
+
+[[columns]]
+model = "B-202-A"
+tc40_Nm = 2.25
+tc25_Nm = 2.39
+ic_Arms = 1.70
+kt_Nm_per_Arms = 1.32
+kb_Vrms_per_krpm = 79.5
+rm_ll_Ohm = 17.7
+km_Nm_per_sqrtW = 0.272
+rth_K_per_W = 1.00
+n_rated_rpm = 2500
+
+[[columns]]
+model = "B-202-B"
+tc40_Nm = 2.44
+tc25_Nm = 2.59
+ic_Arms = 3.0
+kt_Nm_per_Arms = 0.81
+kb_Vrms_per_krpm = 49.0
+rm_ll_Ohm = 6.98
+km_Nm_per_sqrtW = 0.266
+rth_K_per_W = 0.81
+n_rated_rpm = 3800
+
+[[columns]]
+model = "B-202-C"
+tc40_Nm = 2.44
+tc25_Nm = 2.59
+ic_Arms = 5.00
+kt_Nm_per_Arms = 0.49
+kb_Vrms_per_krpm = 29.4
+rm_ll_Ohm = 2.34
+km_Nm_per_sqrtW = 0.276
+rth_K_per_W = 0.87
+n_rated_rpm = 6200
+
+[[columns]]
+model = "B-204-A"
+tc40_Nm = 4.47
+tc25_Nm = 4.7
+ic_Arms = 2.7
+kt_Nm_per_Arms = 1.66
+kb_Vrms_per_krpm = 100.5
+rm_ll_Ohm = 9.46
+km_Nm_per_sqrtW = 0.466
+rth_K_per_W = 0.74
+n_rated_rpm = 1900
+
+[[columns]]
+model = "B-204-B"
+tc40_Nm = 4.47
+tc25_Nm = 4.7
+ic_Arms = 5.3
+kt_Nm_per_Arms = 0.85
+kb_Vrms_per_krpm = 51.2
+rm_ll_Ohm = 2.48
+km_Nm_per_sqrtW = 0.464
+rth_K_per_W = 0.73
+n_rated_rpm = 3600
+
+[[columns]]
+model = "B-204-C"
+tc40_Nm = 4.79
+tc25_Nm = 5.1
+ic_Arms = 9.8
+kt_Nm_per_Arms = 0.49
+kb_Vrms_per_krpm = 29.6
+rm_ll_Ohm = 0.786
+km_Nm_per_sqrtW = 0.477
+rth_K_per_W = 0.68
+n_rated_rpm = 6200
+
+[[columns]]
+model = "B-206-A"
+tc40_Nm = 6.51
+tc25_Nm = 6.9
+ic_Arms = 3.0
+kt_Nm_per_Arms = 2.15
+kb_Vrms_per_krpm = 130.0
+rm_ll_Ohm = 8.82
+km_Nm_per_sqrtW = 0.632
+rth_K_per_W = 0.64
+n_rated_rpm = 1400
+
+[[columns]]
+model = "B-206-B"
+tc40_Nm = 6.24
+tc25_Nm = 6.62
+ic_Arms = 5.8
+kt_Nm_per_Arms = 1.08
+kb_Vrms_per_krpm = 65.1
+rm_ll_Ohm = 2.32
+km_Nm_per_sqrtW = 0.611
+rth_K_per_W = 0.65
+n_rated_rpm = 2800
+
+[[columns]]
+model = "B-206-C"
+tc40_Nm = 6.44
+tc25_Nm = 6.83
+ic_Arms = 10.0
+kt_Nm_per_Arms = 0.62
+kb_Vrms_per_krpm = 37.7
+rm_ll_Ohm = 0.82
+km_Nm_per_sqrtW = 0.616
+rth_K_per_W = 0.62
+n_rated_rpm = 4900
+
+[[columns]]
+model = "B-206-D"
+tc40_Nm = 6.51
+tc25_Nm = 6.90
+ic_Arms = 15.0
+kt_Nm_per_Arms = 0.43
+kb_Vrms_per_krpm = 26.2
+rm_ll_Ohm = 0.38
+km_Nm_per_sqrtW = 0.609
+rth_K_per_W = 0.60
+n_rated_rpm = 7000
+
+# --- 40x frame (printed pages 19-21) ---
+
+[[columns]]
+model = "B-402-A"
+tc40_Nm = 6.8
+tc25_Nm = 7.2
+ic_Arms = 3.0
+kt_Nm_per_Arms = 2.25    # from printed 1.66 lb-ft; sheet's N-m row misprints 2.51 (see header)
+kb_Vrms_per_krpm = 136.0
+rm_ll_Ohm = 10.5
+km_Nm_per_sqrtW = 0.604
+rth_K_per_W = 0.54
+n_rated_rpm = 1500
+
+[[columns]]
+model = "B-402-B"
+tc40_Nm = 6.8
+tc25_Nm = 7.4
+ic_Arms = 6.4
+kt_Nm_per_Arms = 1.11
+kb_Vrms_per_krpm = 67.2
+rm_ll_Ohm = 2.60
+km_Nm_per_sqrtW = 0.587
+rth_K_per_W = 0.48
+n_rated_rpm = 3000
+
+[[columns]]
+model = "B-402-C"
+tc40_Nm = 6.5
+tc25_Nm = 6.9
+ic_Arms = 9.8
+kt_Nm_per_Arms = 0.66
+kb_Vrms_per_krpm = 40.2
+rm_ll_Ohm = 0.97
+km_Nm_per_sqrtW = 0.583
+rth_K_per_W = 0.55
+n_rated_rpm = 5000
+
+[[columns]]
+model = "B-404-A"
+tc40_Nm = 13.0
+tc25_Nm = 13.8
+ic_Arms = 6.0
+kt_Nm_per_Arms = 2.31
+kb_Vrms_per_krpm = 139.0
+rm_ll_Ohm = 4.10
+km_Nm_per_sqrtW = 0.926
+rth_K_per_W = 0.35
+n_rated_rpm = 1500
+
+[[columns]]
+model = "B-404-B"
+tc40_Nm = 13.3
+tc25_Nm = 14.1
+ic_Arms = 9.9
+kt_Nm_per_Arms = 1.34
+kb_Vrms_per_krpm = 81.2
+rm_ll_Ohm = 1.32
+km_Nm_per_sqrtW = 1.01
+rth_K_per_W = 0.40
+n_rated_rpm = 2500
+
+[[columns]]
+model = "B-404-C"
+tc40_Nm = 13.1
+tc25_Nm = 13.9
+ic_Arms = 19.8
+kt_Nm_per_Arms = 0.66
+kb_Vrms_per_krpm = 40.2
+rm_ll_Ohm = 0.34
+km_Nm_per_sqrtW = 0.982
+rth_K_per_W = 0.38
+n_rated_rpm = 5000
+
+[[columns]]
+model = "B-404-D"
+tc40_Nm = 13.1
+tc25_Nm = 14.0
+ic_Arms = 15.0
+kt_Nm_per_Arms = 0.877
+kb_Vrms_per_krpm = 53.0
+rm_ll_Ohm = 0.63
+km_Nm_per_sqrtW = 0.952
+rth_K_per_W = 0.36
+n_rated_rpm = 3700
+
+[[columns]]
+model = "B-406-A"
+tc40_Nm = 17.6
+tc25_Nm = 18.7
+ic_Arms = 9.5
+kt_Nm_per_Arms = 1.87
+kb_Vrms_per_krpm = 113.0
+rm_ll_Ohm = 1.70
+km_Nm_per_sqrtW = 1.23
+rth_K_per_W = 0.33
+n_rated_rpm = 1700
+
+[[columns]]
+model = "B-406-B"
+tc40_Nm = 18.6
+tc25_Nm = 19.7
+ic_Arms = 19.1
+kt_Nm_per_Arms = 0.98
+kb_Vrms_per_krpm = 58.8
+rm_ll_Ohm = 0.44
+km_Nm_per_sqrtW = 1.27
+rth_K_per_W = 0.32
+n_rated_rpm = 3200
+
+[[columns]]
+model = "B-406-C"
+tc40_Nm = 17.0
+tc25_Nm = 18.0
+ic_Arms = 27.2
+kt_Nm_per_Arms = 0.63
+kb_Vrms_per_krpm = 37.7
+rm_ll_Ohm = 0.20
+km_Nm_per_sqrtW = 1.21
+rth_K_per_W = 0.35
+n_rated_rpm = 5000

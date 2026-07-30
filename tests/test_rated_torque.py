@@ -12,7 +12,7 @@ Validation sources:
 - Demo motors A/B/C: synthetic test fixtures (inline). No published source.
 """
 
-from math import asin, degrees, sqrt
+from math import degrees, sqrt
 
 import pytest
 
@@ -87,12 +87,12 @@ def test_registry_entry():
     info = MODEL_REGISTRY["rated_torque"]
     assert info.cost == "fast"
     assert info.source == "computed"
-    assert {"tau_mtpa", "k_T", "k_T_rms", "gamma_opt_deg"}.issubset(info.produces)
+    assert {"tau_mtpa", "k_T", "k_T_rms", "k_T_effective", "gamma_opt_deg"}.issubset(info.produces)
 
     m = _make_motor(I_rated=5.0)
     info.validate(m)
     result = info.fn(_make_config(m))
-    assert {"tau_mtpa", "k_T", "k_T_rms", "gamma_opt_deg"}.issubset(set(result.keys()))
+    assert {"tau_mtpa", "k_T", "k_T_rms", "k_T_effective", "gamma_opt_deg"}.issubset(set(result.keys()))
 
 
 # --- Test 8: TOML load populates I_rated ---
@@ -103,12 +103,27 @@ def test_toml_load():
     assert abs(m.I_rated - 0.21 * sqrt(2)) < 1e-10
 
 
-# --- Test 9: Reverse saliency (L_d > L_q) falls through to non-salient ---
+# --- Test 9: Reverse saliency (L_d > L_q) takes the MTPA branch ---
 def test_reverse_saliency():
     m = _make_motor(I_rated=5.0, L_d=6e-3, L_q=4e-3)
     result = MODEL_REGISTRY["rated_torque"].fn(_make_config(m))
-    expected = 1.5 * 2 * 0.1 * 5.0  # gamma=0: k_T * I_rated
-    assert abs(result["tau_mtpa"] - expected) < 1e-12
+    # Hand-calc: Morimoto + root with dL=-2e-3, psi_f=0.1, I=5, n_p=2:
+    # gamma=-5.6284009065 deg (magnetizing i_d), tau=1.5074088669
+    # vs 1.5 Nm at gamma=0 — brute-force verified global optimum
+    assert result["tau_mtpa"] == pytest.approx(1.5074088669, rel=1e-9)
+    assert result["tau_mtpa"] > 1.5 * 2 * 0.1 * 5.0  # beats k_T * I_rated
+    assert result["gamma_opt_deg"] == pytest.approx(-5.6284009065, abs=1e-6)
+
+
+def test_reverse_saliency_mirror_symmetry():
+    """Swapping L_d and L_q negates gamma and preserves tau_mtpa."""
+    psi_f, I_s = 0.1, 5.0
+    g_fwd = mtpa_gamma(psi_f, 4e-3, 6e-3, I_s)
+    g_rev = mtpa_gamma(psi_f, 6e-3, 4e-3, I_s)
+    assert g_rev == pytest.approx(-g_fwd, rel=1e-12)
+    tau_fwd = mtpa_torque(2, psi_f, 4e-3, 6e-3, I_s, g_fwd)
+    tau_rev = mtpa_torque(2, psi_f, 6e-3, 4e-3, I_s, g_rev)
+    assert tau_rev == pytest.approx(tau_fwd, rel=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -146,10 +161,124 @@ def test_awan_ipm_mtpa_angle():
     """
     psi_f, L_d, L_q = 0.545, 0.036, 0.051
     I_s = 4.3 * sqrt(2)
-    dL = L_q - L_d
-    sin_g = (-psi_f + sqrt(psi_f**2 + 8 * dL**2 * I_s**2)) / (4 * dL * I_s)
-    gamma = degrees(asin(sin_g))
+    gamma = degrees(mtpa_gamma(psi_f, L_d, L_q, I_s))
     assert gamma == pytest.approx(9.144, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# ETEL TMB reverse-salient anchors (manufacturer datasheets, L_d > L_q)
+# ---------------------------------------------------------------------------
+# First real machines exercising the reverse-salient MTPA branch (gamma < 0,
+# magnetizing i_d): ETEL water-cooled direct-drive torque motors, saliency
+# L_q/L_d 0.82-0.93, 22 to 88 poles across five frame sizes. psi_f is derived
+# from the back-EMF constant Ku (magnet-only — no reluctance double-count)
+# and cross-checked against two independent datasheet values: the
+# short-circuit current (psi_f/L_d = sqrt(2)·Isc) and the torque constant Kt.
+# kt_ratio (model k_T_effective / catalog Kt) is pinned per anchor: it drifts
+# above 1.0 with the frame's reluctance share (gamma at Ic), reaching +3.2%
+# on the strongly salient 0450 VA — direction is physics (the linear MTPA
+# model adds reluctance torque the catalog small-signal Kt does not carry),
+# the magnitude is a pinned observation. Sources in the TOMLs.
+
+# (toml, gamma_opt_deg, k_T_effective_rms, catalog_Kt_Nm_per_Arms, kt_ratio,
+#  Isc_Arms)
+_ETEL_ANCHORS = [
+    ("data/etel_tmb/etel_tmb0140_030_ra.toml", -9.1371, 4.4238, 4.35, 1.0170, 4.67),
+    ("data/etel_tmb/etel_tmb0210_030_ta.toml", -5.7808, 7.0340, 7.05, 0.9977, 11.2),
+    ("data/etel_tmb/etel_tmb0290_030_ra.toml", -3.3480, 19.6059, 19.6, 1.0003, 9.37),
+    ("data/etel_tmb/etel_tmb0360_030_ta.toml", -8.1471, 32.9084, 32.6, 1.0095, 6.65),
+    ("data/etel_tmb/etel_tmb0450_030_va.toml", -13.6786, 42.3966, 41.1, 1.0315, 8.02),
+]
+
+
+@pytest.mark.parametrize("toml,gamma_deg,kteff_rms,kt_cat,kt_ratio,isc",
+                         _ETEL_ANCHORS)
+def test_etel_reverse_salient_mtpa(toml, gamma_deg, kteff_rms, kt_cat,
+                                   kt_ratio, isc):
+    from phasesweep.configs import load_motor
+    m = load_motor(REPO_ROOT / toml)
+    assert m.L_d > m.L_q
+    result = MODEL_REGISTRY["rated_torque"].fn(_make_config(m))
+    assert result["gamma_opt_deg"] == pytest.approx(gamma_deg, abs=1e-3)
+    assert result["tau_mtpa"] > result["k_T"] * m.I_rated  # reluctance adds
+    k_eff_rms = result["k_T_effective"] * sqrt(2)
+    assert k_eff_rms == pytest.approx(kteff_rms, abs=1e-3)
+    # Catalog torque constant reproduced within ~1% on the mildly salient
+    # frames; the pinned ratio tracks the reluctance-share drift (see block
+    # comment).
+    assert k_eff_rms / kt_cat == pytest.approx(kt_ratio, abs=0.002)
+
+
+@pytest.mark.parametrize("toml,gamma_deg,kteff_rms,kt_cat,kt_ratio,isc",
+                         _ETEL_ANCHORS)
+def test_etel_psi_f_isc_crosscheck(toml, gamma_deg, kteff_rms, kt_cat,
+                                   kt_ratio, isc):
+    # psi_f/L_d equals the datasheet max short-circuit current (peak) —
+    # independent confirmation of the Ku-derived psi_f AND the per-phase
+    # (/2 terminal-to-terminal) convention. Guards future TOML edits.
+    # Tolerance is the 3-significant-figure rounding budget of the inputs
+    # (Ku alone contributes up to ~0.45%); observed family worst case is
+    # -0.24% (0290 RA).
+    from phasesweep.configs import load_motor
+    m = load_motor(REPO_ROOT / toml)
+    assert m.psi_f / m.L_d == pytest.approx(sqrt(2) * isc, rel=0.004)
+
+
+# ---------------------------------------------------------------------------
+# Du et al. 2021 CLF-RSPMSM — reverse-salient literature anchor (FEM-only)
+# ---------------------------------------------------------------------------
+# Du, Liu, Fu, Liang, Huang, CES Trans. Electr. Mach. Syst. 5(2):163-173,
+# 2021, DOI 10.30941/cestems.2021.00020 (open access). 10 kW, 48-slot/8-pole
+# CLF-RSPMSM deliberately designed reverse-salient (Table VI: Ld = 9.8 mH,
+# phi_dq = Ld/Lq = 1.08, psi_pm = 0.245 Wb no-load; rated 35 A phase).
+# Fig. 12(b) FEM torque vs current angle at rated amplitude 50 A: maximum
+# 86.6 Nm at -5 deg with i_d = +4.4 A (magnetizing). Grounds the sign and
+# operating point of the gamma < 0 branch; provenance in
+# data/du2021_clf_rspmsm/du2021_clf_rspmsm.toml.
+
+_DU2021 = dict(psi_f=0.245, L_d=9.8e-3, L_q=9.8e-3 / 1.08)
+
+
+def test_du2021_mtpa_angle_sign_and_flat_optimum():
+    from math import radians, sin
+    g = mtpa_gamma(I_s=50.0, **_DU2021)
+    # Linear-model optimum with Table VI params: same side as the paper's
+    # FEM optimum (-5 deg, i_d = +4.4 A) — magnetizing i_d, gamma < 0.
+    assert degrees(g) == pytest.approx(-8.173, abs=0.01)
+    assert -50.0 * sin(g) == pytest.approx(7.108, abs=0.01)
+    # The angle disagreement vs the FEM (-8.2 vs -5 deg) is low-stakes: the
+    # MTPA optimum is flat. Evaluating the linear model AT the paper's angle
+    # costs only 0.16% torque — and must cost > 0 (ours is the optimum).
+    tau_ours = mtpa_torque(4, I_s=50.0, gamma=g, **_DU2021)
+    tau_paper_angle = mtpa_torque(4, I_s=50.0, gamma=radians(-5.0), **_DU2021)
+    assert tau_paper_angle < tau_ours
+    assert tau_paper_angle / tau_ours == pytest.approx(0.9984, abs=1e-3)
+
+
+def test_du2021_torque_with_load_dependent_flux():
+    # VLF caveat: Table VI psi_f is no-load; the CLF rotor's d-axis flux
+    # rises to 0.2904 Wb under heavy load (Fig. 10a). The linear model
+    # under-predicts the FEM peak with the no-load value and reproduces it
+    # within 1.4% with the loaded value — the discrepancy is the machine's
+    # designed flux variability, not the MTPA math.
+    n_p, i_pk = 4, 50.0
+    g = mtpa_gamma(I_s=i_pk, **_DU2021)
+    tau_noload = mtpa_torque(n_p, I_s=i_pk, gamma=g, **_DU2021)
+    assert tau_noload == pytest.approx(74.29, abs=0.01)  # ~14% below 86.6
+    loaded = dict(_DU2021, psi_f=0.2904)
+    g2 = mtpa_gamma(I_s=i_pk, **loaded)
+    tau_loaded = mtpa_torque(n_p, I_s=i_pk, gamma=g2, **loaded)
+    assert tau_loaded == pytest.approx(86.6, rel=0.015)
+
+
+def test_du2021_toml_rated_torque():
+    from phasesweep.configs import load_motor
+    m = load_motor(REPO_ROOT / "data/du2021_clf_rspmsm/du2021_clf_rspmsm.toml")
+    assert m.L_d > m.L_q
+    result = MODEL_REGISTRY["rated_torque"].fn(_make_config(m))
+    assert result["gamma_opt_deg"] == pytest.approx(-8.0965, abs=1e-3)
+    assert result["tau_mtpa"] > result["k_T"] * m.I_rated  # reluctance adds
+    assert result["k_T_effective"] == pytest.approx(1.4854, abs=1e-3)
 
 
 
@@ -169,11 +298,9 @@ def test_creator_mtpa_angle(I_rms, published_angle_deg):
     of the FEM-derived MTPA angles. Small discrepancy expected because
     the published values include saturation effects.
     """
-    psi_f, L_d, L_q, n_p = 0.1144, 0.2055, 0.3320, 2
+    psi_f, L_d, L_q = 0.1144, 0.2055, 0.3320
     I_s = I_rms * sqrt(2)
-    dL = L_q - L_d
-    sin_g = (-psi_f + sqrt(psi_f**2 + 8 * dL**2 * I_s**2)) / (4 * dL * I_s)
-    gamma = degrees(asin(sin_g))
+    gamma = degrees(mtpa_gamma(psi_f, L_d, L_q, I_s))
     computed_angle = 90.0 + gamma  # electrical angle from d-axis
     assert abs(computed_angle - published_angle_deg) < 3.0, (
         f"MTPA angle {computed_angle:.1f} deg vs published {published_angle_deg} deg "
@@ -184,12 +311,9 @@ def test_creator_mtpa_angle(I_rms, published_angle_deg):
 def test_creator_mtpa_angle_monotonic():
     """CREATOR MTPA angle increases with current (more reluctance at higher I)."""
     psi_f, L_d, L_q = 0.1144, 0.2055, 0.3320
-    dL = L_q - L_d
     angles = []
     for I_rms in [0.10, 0.15, 0.21, 0.30]:
-        I_s = I_rms * sqrt(2)
-        sin_g = (-psi_f + sqrt(psi_f**2 + 8 * dL**2 * I_s**2)) / (4 * dL * I_s)
-        angles.append(degrees(asin(sin_g)))
+        angles.append(mtpa_gamma(psi_f, L_d, L_q, I_rms * sqrt(2)))
     for i in range(len(angles) - 1):
         assert angles[i] < angles[i + 1]
 

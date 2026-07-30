@@ -2,7 +2,7 @@
     "motor_name": "Awan 2.2-kW IPM",
     "test_type": "torque_test",
     "conditions": {
-        "speed_rpm": 1000,
+        "speed_rpm": 1500,
         "temperature_C": 22.0,
         "load_torque_Nm": 14.0,
         "date": "2019-01-01",
@@ -22,7 +22,7 @@
         "tau_rated": {
             "computed_key": "tau_mtpa",
             "relation": "gte",
-            "semantic_note": "Computed MTPA at I_rated >= published continuous rating"
+            "semantic_note": "14 Nm is the NAMEPLATE rated torque of the catalog ABB M2BJ 100L 6 B3 (Table 6.2 header 'Rated values', 0.80 p.u.), at rated 1500 rpm / 75 Hz -- not a measured dyno point. Cross-check: 2.2 kW / (2*pi*1500/60) = 14.0 Nm. Used as a gte bound: computed MTPA at I_rated must meet or exceed the continuous rating."
         }
     }
 }

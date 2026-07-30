@@ -1,5 +1,6 @@
 """Tests for motor config loading and TOML motor definitions."""
 
+import logging
 import math
 from pathlib import Path
 
@@ -94,6 +95,23 @@ def test_load_motor_missing_file():
         load_motor("nonexistent.toml")
 
 
+def test_load_motor_missing_drive_gives_none(tmp_path, caplog):
+    p = tmp_path / "minimal.toml"
+    p.write_text(
+        "[circuit]\nn_p = 4\n"
+        "[geometry]\n"
+        "r_outer = 1.0\nr_stator = 0.7\nr_magnet = 0.64\nr_rotor = 0.3\n"
+    )
+    with caplog.at_level(logging.WARNING):
+        motor = load_motor(p)
+    assert motor.drive.U_DC is None
+    assert motor.drive.MAX_I_S is None
+    assert motor.drive.W_REF is None
+    assert motor.mu_r_fe == pytest.approx(1000.0)
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "mu_r_fe" in messages
+
+
 def test_load_motor_missing_circuit_section(tmp_path):
     p = tmp_path / "bad.toml"
     p.write_text('[motor]\nname = "bad"\n')
@@ -109,10 +127,14 @@ def test_load_motor_missing_n_p(tmp_path):
 
 
 def test_load_motor_missing_geometry_section(tmp_path):
-    p = tmp_path / "bad.toml"
-    p.write_text('[circuit]\nn_p = 2\n')
-    with pytest.raises(ValueError, match=r"missing required section \[geometry\]"):
-        load_motor(p)
+    # [geometry] is optional: a circuit-only (datasheet) motor loads with
+    # geometry=None and runs the circuit tier.
+    p = tmp_path / "circuit_only.toml"
+    p.write_text('[circuit]\nn_p = 2\nR_s = 0.5\npsi_f = 0.1\n')
+    m = load_motor(p)
+    assert m.geometry is None
+    assert m.R_s == 0.5
+    assert m.psi_f == 0.1
 
 
 def test_load_motor_bad_geometry_radii(tmp_path):
@@ -143,5 +165,18 @@ def test_load_motors_directory():
     assert motors["CREATOR Case PMSM"].n_p == 2
 
 
+def test_load_motors_strict_raises_on_bad_file(tmp_path):
+    (tmp_path / "good.toml").write_text("[circuit]\nn_p = 4\n")
+    (tmp_path / "bad.toml").write_text('[motor]\nname = "x"\n')
+    with pytest.raises(ValueError, match=r"bad\.toml"):
+        load_motors(tmp_path, strict=True)
 
+
+def test_load_motors_default_skips_bad_file(tmp_path, caplog):
+    (tmp_path / "good.toml").write_text("[circuit]\nn_p = 4\n")
+    (tmp_path / "bad.toml").write_text('[motor]\nname = "x"\n')
+    with caplog.at_level(logging.WARNING):
+        motors = load_motors(tmp_path)
+    assert len(motors) == 1
+    assert any("bad.toml" in r.getMessage() for r in caplog.records)
 

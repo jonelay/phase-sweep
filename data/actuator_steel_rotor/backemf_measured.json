@@ -1,0 +1,24 @@
+{
+  "motor_name": "Actuator Steel Rotor",
+  "test_type": "backemf_capture",
+  "conditions": {
+    "speed_rpm": 10000,
+    "temperature_C": 22.0,
+    "load_torque_Nm": 0.0,
+    "date": "2026-03-18",
+    "instrument": "RTB2004 oscilloscope",
+    "notes": "Back-EMF fundamental at W_REF (10000 rpm), from the 3-channel 20-120 rps speed sweep: psi_f_measured 0.268 mWb x n_p 6 x 1047.2 rad/s. Linear fit of V_peak vs omega forced through origin, R^2 = 0.99997; W_REF sits above the swept range, extrapolated via the fit."
+  },
+  "quantities": {
+    "backemf_fundamental": 1.6839
+  },
+  "waveforms": {},
+  "uncertainty": {
+    "backemf_fundamental": 0.017
+  },
+  "tolerances": {
+    "backemf_fundamental": 1.0
+  },
+  "source_file": "data/actuator_steel_rotor/backemf_speed_sweep.json",
+  "provenance_note": "Import-format distillation of the raw sweep (backemf_speed_sweep.json + captures/). Deliberately NOT tagged derived_params: the motor TOML omits psi_f (derived from B_rem) and carries nominal N52 B_rem = 1.45 T, so fitting B_rem against this dataset is the flagship calibration case (manual inversion -> effective B_rem 1.139 T; since automated, REQ-0819). Uncertainty ~1% from the per-channel Ke spread (1.599-1.612 mV/(rad/s))."
+}

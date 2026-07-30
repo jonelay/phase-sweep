@@ -1,0 +1,97 @@
+# ABB BSM50N-233 — brushless AC servo motor (surface PM, 4-pole, WYE)
+# Second multi-voltage torque-speed envelope anchor (REQ-0814): the brochure
+# prints the SAME winding's rated speed at TWO voltages as table numbers —
+# "Rated speed @ 300 volts: 7500 rpm" and "Rated speed @ 160 volts:
+# 4000 rpm" — and 7500/4000 = 1.875 = 300/160 EXACTLY: the rated speed is
+# proportional to the supply voltage, i.e. voltage-set by construction
+# (max speed is a separate 10,000 rpm line). Speed-torque curves carry
+# explicit "160V DC BUS" / "320V DC BUS" voltage-limit lines.
+# Source (single manufacturer brochure):
+#   ABB, "AC Servo Motors" brochure 9AKK106417 (Dec 2015), BSM N-series
+#   data table column BSM50N-233 + "Motor data" conventions page.
+#   https://library.e.abb.com/public/d7e5741298fe4760a818106caec8a45a/9AKK106417%20E%20Servo%20Motors_1215_WEB.pdf
+#
+# Brochure conventions ("Motor data" page, verbatim): "All BSM motors are
+# 3-phase WYE connected... All motor parameters are expressed as phase to
+# phase (line-to-line) figures. This includes voltage constant, resistance
+# and inductance." Ke is measured as a generator at 1000 rpm and printed
+# in BOTH conventions (32 Vpk/krpm, 22.7 Vrms/krpm; 32/sqrt(2) = 22.6 —
+# no rms/peak trap). Cold (25 C) figures: Ke, Kt, R, L, peak torque/
+# current; hot (155 C) figures: continuous stall torque/current. Hot/cold
+# coefficient printed: 0.90 on Ke and Kt for the N-series; R x1.5 from
+# 25 C to 155 C. Curves plotted for 25 C ambient (40 C ambient: derate 6%).
+#
+# VOLTAGE DISCREPANCY, documented: the series overview table lists the same
+# 7500 rpm under "Speed RPM @ 320V" ("Nominal rpm shown at 320 Vdc bus for
+# convenience. For 640 Vdc double the speed."), while the per-model table
+# says "@ 300 volts". The exact 1.875 speed ratio matches 300/160, not
+# 320/160 (= 2.0), so 300/160 V is taken as the effective pair for U_DC;
+# using 320 V instead shifts the model margins up by +6.7%.
+#
+# psi_f is DERIVED from the peak voltage constant (magnet-only, EMF route):
+#   psi_f = [32 / (1000*2*pi/60)] / (sqrt(3) * n_p)
+#         = 0.305577 / (sqrt(3) * 2) = 0.088213 Wb
+# Datasheet cross-checks:
+#   L/R: 8.3 mH / 4 ohm = 2.075 ms vs printed electrical time constant
+#        2.1 ms (+1.2%)
+#   Kt (cold): model k_T = 1.5*n_p*psi_f*sqrt(2) = 0.374 Nm/Arms vs printed
+#        0.36 (+4.0%; the sheet's own Kt is loosely rounded — its lb-in/amp
+#        figure 3.25 = 0.367 Nm/A disagrees with its Nm figure by 2%)
+#   Hot coefficient: Tcs/Ics = 0.9/2.87 = 0.314 Nm/Arms vs 0.90*Kt_cold =
+#        0.324 (-3.2% — the printed 0.90 N-series hot derating closes the
+#        stall row, confirming the hot/cold split reading)
+
+[motor]
+name = "ABB BSM50N-233 servo motor"
+type = "surface-magnet PMSM (brushless AC servo)"
+
+[circuit]
+n_p = 2                # 4 poles (datasheet "Number of motor poles: 4")
+R_s = 2.0              # Ohm per-phase at 25 C (datasheet R 4 ohm line-line)
+L_d = 0.00415          # H per-phase (datasheet L 8.3 mH line-line); SPM
+L_q = 0.00415          # = L_d (surface magnets, single catalog L)
+psi_f = 0.088213       # Wb, peak per-phase — derived from Ke (see header)
+I_rated_rms = 2.87     # A rms continuous stall (hot, 155 C rating)
+
+[drive]
+U_DC = 300.0           # V ("Rated speed @ 300 volts"; see discrepancy note)
+MAX_I_S = 14.015       # A peak = sqrt(2) * 9.91 A_rms (datasheet peak current)
+W_REF = 785.398        # rad/s = 2*pi*7500/60 (rated speed at 300 V)
+
+[rated]
+torque_Nm = 0.9        # datasheet continuous stall torque (hot, 155 C)
+speed_rpm = 7500       # datasheet rated speed at 300 V
+
+[provenance]
+source = "ABB AC Servo Motors brochure 9AKK106417 (Dec 2015), BSM N-series, column BSM50N-233"
+url = "https://library.e.abb.com/public/d7e5741298fe4760a818106caec8a45a/9AKK106417%20E%20Servo%20Motors_1215_WEB.pdf"
+motor_model = "ABB BSM50N-233 (BSM N-series, low inertia)"
+duty = "S1 continuous at stall torque/current, 155 C max winding temperature, 25 C ambient curves (40 C ambient: derate 6%)"
+# Multi-voltage rated speeds (REQ-0814 anchor class; the key evidence):
+#   V [V] | rated speed [rpm]
+#    160  |      4000
+#    300  |      7500        (overview table prints the same figure @ 320 Vdc)
+# 7500/4000 = 1.875 = 300/160 exactly; max speed 10,000 rpm is a separate
+# line, above both. Peak torque 3.65 Nm / peak current 9.91 A (cold).
+thermal_resistance_C_per_W = 2.6   # datasheet — provenance only, see notes
+thermal_time_constant_min = 11.0   # datasheet TCT
+notes = """
+Second multi-voltage envelope anchor (after kollmorgen_akm44h) and the
+sharpest voltage-set evidence in the registry: the two printed rated
+speeds are exactly proportional to the printed voltages (1.875 = 300/160),
+which only a voltage limit produces — mechanical and inverter-frequency
+ceilings do not scale with supply. No torque/current is printed AT the
+rated speed (only hot stall and cold peak), so the claims are: model
+no-load voltage limit above the rated speed by an identical pinned margin
+at BOTH voltages (proportionality transfers exactly to the model), and
+the rated speed remains voltage-feasible even carrying the full hot
+stall current. See tests/test_torque_speed.py TestAbbBsmEnvelope.
+[thermal] is deliberately UNSET: Rth/TCT recorded above as provenance so
+the motor stays on the rated_current budget path (comparability rule;
+same treatment as kollmorgen_b104b/akm44h).
+Deliberately NOT in _NAMEPLATE_ANCHORS: the continuous rating is a stall
+point (no rated-speed nameplate torque/current is printed).
+Eligible for: rated_torque, stall_torque (bound), torque_speed
+(two-voltage rated speeds, one-sided + pinned), thermal_duty
+(rated_current path).
+"""

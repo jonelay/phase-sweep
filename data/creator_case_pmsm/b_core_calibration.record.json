@@ -1,0 +1,72 @@
+{
+  "motor_name": "CREATOR Case PMSM [B_core unfitted]",
+  "source_config_id": "7e043f2595b2",
+  "calibrated_config_id": "82cb4fd55387",
+  "params": [
+    {
+      "param": "B_core",
+      "initial": 0.2733360779175627,
+      "final": 0.4974997363330395,
+      "delta": 0.820102710638454,
+      "stderr_indicative": null
+    }
+  ],
+  "quantities": [
+    "p_fe"
+  ],
+  "models": [
+    "iron_loss"
+  ],
+  "dataset_ids": [
+    "iron_loss_noload"
+  ],
+  "residuals_before": [
+    {
+      "dataset": "iron_loss_noload",
+      "quantity": "p_fe",
+      "measured_model": "iron_loss_test",
+      "computed_model": "iron_loss",
+      "measured": 0.49929,
+      "computed": 0.18249149866641365,
+      "rel_pct": 63.44979898127067,
+      "tol_pct": 5.0,
+      "passed": false
+    }
+  ],
+  "residuals_after": [
+    {
+      "dataset": "iron_loss_noload",
+      "quantity": "p_fe",
+      "measured_model": "iron_loss_test",
+      "computed_model": "iron_loss",
+      "measured": 0.49929,
+      "computed": 0.4992899999999999,
+      "rel_pct": 2.2236035663144793e-14,
+      "tol_pct": 5.0,
+      "passed": true
+    }
+  ],
+  "model_versions": {
+    "iron_loss": 1
+  },
+  "optimizer": {
+    "method": "scipy.optimize.least_squares (trf)",
+    "cost_initial": 80.51753981527311,
+    "cost_final": 9.88882564025294e-30,
+    "nfev": 6,
+    "status": 1,
+    "message": "`gtol` termination condition is satisfied.",
+    "success": true,
+    "bounds": {
+      "B_core": [
+        -0.5,
+        2.0
+      ]
+    }
+  },
+  "warnings": [
+    "exactly determined: 1 param(s) against 1 residual row(s) \u2014 the fit is an inversion with no redundancy; indicative uncertainty unavailable"
+  ],
+  "closed": true,
+  "timestamp": "2026-07-30T14:25:48.534764"
+}

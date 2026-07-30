@@ -14,22 +14,18 @@ import numpy as np
 import pytest
 
 from phasesweep.configs import load_motor
-from phasesweep.fem_field import harmonics_1sided, solve_field_fem
+from phasesweep.fem_field import solve_field_fem
+from phasesweep.harmonics import harmonics_1sided
+from phasesweep.rated_torque import magnet_torque_constant, mtpa_torque
 from phasesweep.solver_params import prepare_fem
+from tests.conftest import CREATOR_DATASET_SKIP
 
 MOTOR_TOML = Path(__file__).parent.parent / "motors" / "creator_case_pmsm.toml"
 DATA_DIR = Path(__file__).parent.parent / "data" / "creator_case_pmsm"
 MEAS_DIR = DATA_DIR / "PM_synchronous_motor" / "Measurement_results" / "No_load_tests"
 
 _has_meas = MEAS_DIR.is_dir()
-needs_dataset = pytest.mark.skipif(
-    not _has_meas,
-    reason=(
-        "CREATOR full dataset not found — download from "
-        "https://doi.org/10.3217/sns1d-77m43 "
-        "(see data/creator_case_pmsm/README.md)"
-    ),
-)
+needs_dataset = pytest.mark.skipif(not _has_meas, reason=CREATOR_DATASET_SKIP)
 
 
 @pytest.fixture(scope="module")
@@ -84,6 +80,177 @@ def creator_slotted_fem(creator):
     )
 
 
+# ---------------------------------------------------------------------------
+# FEM k_T cross-check — the j_s <-> phase-current mapping
+# closes the loop between the FEM Maxwell-stress torque and the circuit tier
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def creator_torque_fem(creator):
+    """Magnet-only and armature-only slotted solves on the real slot
+    geometry (body ratio 0.61 + opening taper), armature at rated current
+    via j_s_from_phase_current. Shared mesh (j_s/B_rem not in the mesh key)."""
+    from phasesweep.solver_params import j_s_from_phase_current
+
+    params = prepare_fem(creator)
+    geo = params.geometry
+    kw = dict(geo=geo, n_p=params.n_p, mu_r_pm=params.mu_r_pm,
+              mu_r_fe=params.mu_r_fe, n_theta=360,
+              maxh_fraction=0.03 / geo.r_outer, n_slots=geo.n_slots,
+              alpha_p=params.alpha_p, k_w=creator.k_w, return_full=True)
+    i_peak = creator.I_rated
+    j_s = j_s_from_phase_current(creator, i_peak)
+    _, Br_mag, mesh, gfu_mag = solve_field_fem(
+        j_s=0.0, B_rem=params.B_rem, **kw)
+    _, _, _, gfu_arm = solve_field_fem(j_s=j_s, B_rem=1e-30, **kw)
+    return mesh, gfu_mag, gfu_arm, Br_mag, i_peak
+
+
+@pytest.mark.timeout(600)
+def test_fem_torque_constant_crosscheck(creator, creator_torque_fem):
+    """FEM mean torque at rated current vs the circuit tier, two ways.
+
+    The synchronous mean is the order-n_p interaction component between
+    the magnet and armature fields. Against the circuit route THROUGH THE
+    SAME FEM FIELD (1.5·n_p·ψ_fem·Î, ψ_fem from the no-load fundamental)
+    the ratio is the armature-field effectiveness — a few percent below 1
+    (slot openings Carter-widen the armature gap). Against the published
+    rated point (0.10 N·m at 0.21 A rms) it currently lands within ~2%
+    (ψ_fem is ~8% high, effectiveness ~8% low — partial cancellation).
+
+    The full static maxwell_stress_torque sits well BELOW the mean here:
+    for 6 slots / n_p=2 the armature comb sidebands at 6m±2 = 10, 14
+    collide with the magnet's 5th/7th magnetization harmonics (α_p=0.5
+    square wave), freezing one position of the classic concentrated-
+    winding torque ripple into the snapshot (~ −25% at this position).
+    """
+    from phasesweep.fem_field import (
+        maxwell_interaction_torque_order,
+        maxwell_stress_torque,
+    )
+    from phasesweep.solver_params import winding_transfer
+
+    mesh, gfu_mag, gfu_arm, Br_mag, i_peak = creator_torque_fem
+    n_p = creator.n_p
+    geo = creator.geometry
+    B1 = float(harmonics_1sided(Br_mag)[n_p])
+    psi_fem = winding_transfer(creator) * B1
+    L = creator.L_stk
+
+    tau_mean = maxwell_interaction_torque_order(
+        mesh, gfu_mag, gfu_arm, geo.r_ag, order=n_p, L_stk=L)
+    tau_circuit_fem = 1.5 * n_p * psi_fem * i_peak
+
+    # k_T cross-check proper: FEM torque route vs FEM flux-linkage route
+    assert 0.85 < tau_mean / tau_circuit_fem < 1.00, (
+        f"mean torque {tau_mean:.4f} vs circuit(psi_fem) "
+        f"{tau_circuit_fem:.4f} (ratio {tau_mean/tau_circuit_fem:.3f})"
+    )
+    # Anchor: published rated point tau = 0.10 N·m at I = 0.21 A rms
+    assert tau_mean == pytest.approx(0.10, rel=0.10), (
+        f"FEM mean torque {tau_mean:.4f} vs catalog rated 0.10"
+    )
+    # Cogging/noise floor of the magnet-only static integral stays well
+    # below the mean torque (the two solves are otherwise position-locked)
+    tau_cogging = maxwell_stress_torque(mesh, gfu_mag, geo.r_ag, L_stk=L)
+    assert abs(tau_cogging) < 0.05 * tau_mean
+
+
+def _solve_cogging_torque(creator, phi):
+    """Magnet-only slotted solve with the rotor at mechanical angle phi;
+    Maxwell-stress torque on the rotor (production mesh settings, same as
+    creator_torque_fem)."""
+    from phasesweep.fem_field import maxwell_stress_torque
+
+    params = prepare_fem(creator)
+    geo = params.geometry
+    _, _, mesh, gfu = solve_field_fem(
+        geo=geo, n_p=params.n_p, B_rem=params.B_rem,
+        mu_r_pm=params.mu_r_pm, mu_r_fe=params.mu_r_fe,
+        n_theta=360, maxh_fraction=0.03 / geo.r_outer,
+        n_slots=geo.n_slots, j_s=0.0, alpha_p=params.alpha_p,
+        rotation=float(phi), return_full=True,
+    )
+    return maxwell_stress_torque(mesh, gfu, geo.r_ag, L_stk=creator.L_stk)
+
+
+# Cogging fundamental: lcm(n_slots, 2*n_p) = lcm(6, 4) = 12 periods/rev.
+_COGGING_PERIOD = 2 * math.pi / 12
+
+
+@pytest.mark.timeout(600)
+def test_cogging_equilibria_at_aligned_positions(creator):
+    """Cogging torque vanishes at the reflection-symmetric rotor positions.
+
+    Pole axes sit at k*pi/n_p and slot axes at 2*pi*k/n_slots, so rotation 0
+    aligns a pole center with a slot center — a reflection-symmetric
+    position where the cogging torque must vanish; antisymmetry about that
+    position plus the 30 deg periodicity forces a second zero at the half
+    period. The quarter-period torque provides the scale: the residuals at
+    the equilibria are the mesh-to-mesh noise floor of the swept-rotor
+    Maxwell integral (~0.3% of peak at these settings).
+    """
+    tau_0 = _solve_cogging_torque(creator, 0.0)
+    tau_quarter = _solve_cogging_torque(creator, _COGGING_PERIOD / 4)
+    tau_half = _solve_cogging_torque(creator, _COGGING_PERIOD / 2)
+    assert abs(tau_quarter) > 20 * abs(tau_0), (
+        f"tau(0) = {tau_0*1e3:.3f} mN·m not << quarter-period "
+        f"{tau_quarter*1e3:.3f} mN·m"
+    )
+    assert abs(tau_quarter) > 20 * abs(tau_half), (
+        f"tau(T/2) = {tau_half*1e3:.3f} mN·m not << quarter-period "
+        f"{tau_quarter*1e3:.3f} mN·m"
+    )
+
+
+@needs_dataset
+@pytest.mark.timeout(900)
+def test_cogging_waveform_vs_measured(creator, cogging_csv):
+    """12-position rotor sweep vs the measured cogging waveform.
+
+    The peak-to-peak envelope is the calibrated claim: FEM currently lands
+    within ~2% of the measured 73.4 mN·m (and +1.3% on the paper's
+    0.0357 N·m peak scalar). The harmonic SPLIT is not: the ideal
+    square-wave magnetization sharpens the pole edges and shifts energy
+    from order 24 into order 12 (FEM ~1.5x measured at 12/rev, ~0.5x at
+    24/rev) — the same idealization signature the back-EMF 5th-harmonic
+    test documents. Bands assert both the envelope agreement and the
+    known direction of the split.
+    """
+    n_pts = 12
+    phis = _COGGING_PERIOD * np.arange(n_pts) / n_pts
+    tau = np.array([_solve_cogging_torque(creator, p) for p in phis])
+
+    c = np.fft.rfft(tau) / n_pts
+    fem_amps = 2 * np.abs(c[1 : n_pts // 2])  # orders 12..60 per rev
+    fem_dominant_order = 12 * (int(np.argmax(fem_amps)) + 1)
+    assert fem_dominant_order == 12
+
+    # Dense reconstruction for the p-p envelope (12 samples resolve the
+    # series; grid min/max alone would under-read the peaks)
+    dense = np.fft.irfft(np.fft.rfft(tau), 512) * (512 / n_pts)
+    fem_pp = dense.max() - dense.min()
+
+    angle_deg = cogging_csv[:, 0]
+    torque = cogging_csv[:, 1]
+    n_res = 4096
+    angle_u = np.linspace(angle_deg.min(), angle_deg.max(), n_res,
+                          endpoint=False)
+    torque_u = np.interp(angle_u, angle_deg, torque)
+    meas_pp = torque_u.max() - torque_u.min()
+    meas_amps = np.abs(np.fft.rfft(torque_u)) / n_res
+    meas_amps[1:] *= 2
+
+    assert fem_pp == pytest.approx(meas_pp, rel=0.15), (
+        f"FEM p-p {fem_pp*1e3:.1f} mN·m vs measured {meas_pp*1e3:.1f}"
+    )
+    r12 = fem_amps[0] / meas_amps[12]
+    r24 = fem_amps[1] / meas_amps[24]
+    assert 1.0 < r12 < 2.0, f"order-12 FEM/measured = {r12:.2f}"
+    assert 0.25 < r24 < 1.0, f"order-24 FEM/measured = {r24:.2f}"
+
+
 def test_back_emf_from_psi_f(creator):
     """Published E₀=47.37V @ 2000rpm vs computed from published ψ_f=0.1144Wb."""
     n_p = creator.n_p
@@ -95,25 +262,24 @@ def test_back_emf_from_psi_f(creator):
 
 
 def test_torque_constant_from_psi_f(creator):
-    """Published τ=0.10Nm @ I=0.21A_rms vs computed from published ψ_f=0.1144Wb."""
-    n_p = creator.n_p
-    psi_f = creator.psi_f
-    k_T = 1.5 * n_p * psi_f
+    """Published τ=0.10Nm @ I=0.21A_rms vs phasesweep k_T from the TOML ψ_f.
+
+    Routed through magnet_torque_constant rather than an inline 1.5·n_p·ψ_f so
+    the published number tests library code, not this file's arithmetic.
+    """
     I_peak = 0.21 * math.sqrt(2)
-    tau = k_T * I_peak
+    tau = magnet_torque_constant(creator.n_p, creator.psi_f) * I_peak
     assert tau == pytest.approx(0.10, rel=0.05)
 
 
 def test_max_torque_from_max_current(creator):
-    """Published τ_max=0.15Nm @ I=0.30A_rms, β=110° vs saliency-aware torque eq."""
-    n_p = creator.n_p
-    psi_f = creator.psi_f
-    L_d, L_q = creator.L_d, creator.L_q
+    """Published τ_max=0.15Nm @ I=0.30A_rms, β=110° vs phasesweep's
+    saliency-aware torque equation. γ is measured from the q-axis, so the
+    datasheet's β from the d-axis is β − 90°."""
     I_peak = 0.30 * math.sqrt(2)
-    beta = math.radians(110)
-    i_d = I_peak * math.cos(beta)
-    i_q = I_peak * math.sin(beta)
-    tau = 1.5 * n_p * (psi_f * i_q + (L_d - L_q) * i_d * i_q)
+    gamma = math.radians(110) - math.pi / 2
+    tau = mtpa_torque(creator.n_p, creator.psi_f, creator.L_d, creator.L_q,
+                      I_peak, gamma)
     assert tau == pytest.approx(0.15, rel=0.08)
 
 
@@ -174,7 +340,7 @@ def test_fem_fundamental_range(creator):
 
     Regression gate: CREATOR's 4-pole geometry with α_p=0.5 discrete
     magnet arcs and ferrite magnets. Smooth-bore FEM with arcs gives
-    ~0.305 T fundamental under the square-wave convention (S110).
+    ~0.305 T fundamental under the square-wave convention.
     The range anchors the FEM solver against published arXiv:2501.15921.
     """
     params = prepare_fem(creator)
@@ -232,7 +398,7 @@ def test_back_emf_waveform_shape(back_emf_csv, creator_slotted_fem):
 
     Measured waveform has strong 5th/7th electrical harmonics from rectangular
     magnetization. FEM with discrete magnet arcs, square-wave magnetization
-    (S110), and slot harmonics produces comparable peaking (currently
+    and slot harmonics produces comparable peaking (currently
     1.44 vs measured 1.37). Both ratios should exceed 1.25 and agree
     within 10%.
     """
@@ -268,7 +434,7 @@ def test_back_emf_harmonic_spectrum(back_emf_csv, creator_slotted_fem):
 
     For 3-phase concentrated winding, the trapezoidal magnet shape produces
     strong 5th and 7th electrical harmonics (mechanical orders 10, 14).
-    The square-wave magnetization model (S110) produces the 5th where the
+    The square-wave magnetization model produces the 5th where the
     old sinusoidal source suppressed it; the ideal 2D rectangular model
     overshoots the measured ratio (currently 1.6×) because real
     magnetization profiles and 3D fringing round the edges.

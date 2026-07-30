@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import matplotlib
 import numpy as np
+
+if TYPE_CHECKING:
+    from phasesweep.geometry import Geometry
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -23,7 +27,7 @@ def _save(fig: plt.Figure, output_dir: Path | str | None, filename: str) -> str:
 
 
 def plot_geometry(
-    geo,
+    geo: Geometry,
     *,
     n_p: int = 2,
     alpha_p: float = 1.0,
@@ -102,11 +106,10 @@ def plot_geometry(
                         else geo.slot_width_ratio)
                        * 180.0 / geo.n_slots)
 
+        r_bore = geo.r_stator * 1e3
         if geo.topology == "outrunner":
-            r_bore = geo.r_stator * 1e3
             r_bottom = (geo.r_stator - geo.slot_depth) * 1e3
         else:
-            r_bore = geo.r_stator * 1e3
             r_bottom = (geo.r_stator + geo.slot_depth) * 1e3
 
         from phasesweep.defaults import SLOT_OPENING_FRACTION
@@ -159,12 +162,13 @@ def plot_geometry(
     ax.add_patch(c_ag)
 
     # Legend — only show regions present in this geometry
+    from matplotlib.artist import Artist
     from matplotlib.patches import Patch
     used_labels = dict.fromkeys(label for _, label in regions)
     if geo.n_slots > 0 and geo.slot_depth > 0:
         used_labels["Windings"] = None
-    handles = [Patch(fc=COLORS[label], ec="black", lw=0.5, label=label)
-               for label in used_labels]
+    handles: list[Artist] = [Patch(fc=COLORS[label], ec="black", lw=0.5, label=label)
+                             for label in used_labels]
     handles.append(plt.Line2D([0], [0], color="green", ls="--", lw=1.0,
                               label=f"r_ag = {geo.r_ag*1e3:.1f} mm"))
     ax.legend(handles=handles, loc="upper right", fontsize=8)
@@ -212,7 +216,6 @@ def plot_sweep_1d(
 
     plt.tight_layout()
     out = _save(fig, output_dir, filename)
-    print(f"1D sweep plot saved to {out}")
     return out
 
 
@@ -258,5 +261,4 @@ def plot_sweep_2d(
 
     plt.tight_layout()
     out = _save(fig, output_dir, filename)
-    print(f"2D sweep plot saved to {out}")
     return out

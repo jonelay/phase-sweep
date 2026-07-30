@@ -56,7 +56,7 @@ class TestBelkhadirOutrunner:
         assert yoke_t == pytest.approx(7.0, abs=0.01)
 
     def test_analytical_fundamental(self, analytical_result):
-        """B₁ regression anchor under the square-wave convention (S110).
+        """B₁ regression anchor under the square-wave convention.
 
         The published 0.806/0.818 T values are waveform *peaks* — under
         the sinusoidal convention the fundamental happened to sit near
@@ -90,8 +90,8 @@ class TestBelkhadirOutrunner:
         )
 
     def test_analytical_vs_fem_agreement(self, analytical_result, fem_result):
-        """Analytical vs FEM fundamental within 3% (shared source convention,
-        S110; residual is slotting/mesh, currently < 1%)."""
+        """Analytical vs FEM fundamental within 3% (shared source
+        convention; residual is slotting/mesh, currently < 1%)."""
         a = analytical_result["fundamental"]
         f = fem_result["fundamental"]
         rel_diff = abs(a - f) / a * 100
@@ -155,16 +155,20 @@ class TestBelkhadirPublishedCrossval:
     def test_published_source_tier(self, published_import):
         assert published_import.source == "published"
 
-    def test_b_ag_peak_curve_compare(self, published_import, fem_run_result):
-        # Published 0.776 T is a waveform peak (eq 2 flat-top) — compared
-        # against the FEM waveform, per the JSON's semantic_note. The
-        # analytical waveform is fundamental-only and not a valid peak
-        # comparand under the square-wave convention (S110).
-        rows = compare_results(published_import, fem_run_result)
-        curve_rows = [r for r in rows if r.comparison_type == "curve"]
-        b_rows = [r for r in curve_rows if r.quantity == "B_ag_peak"]
+    @pytest.mark.parametrize("computed_fixture", [
+        "analytical_run_result", "fem_run_result",
+    ])
+    def test_b_ag_fundamental(self, published_import, computed_fixture, request):
+        # Eq (2) flat-top 0.776 T converted to commensurate B₁ = 0.9625 T
+        # via (4/π)·sin(π·α_p/2) — compared fundamental-to-fundamental,
+        # not extract=max.
+        computed = request.getfixturevalue(computed_fixture)
+        rows = compare_results(published_import, computed)
+        b_rows = [r for r in rows if r.quantity == "B_ag_fundamental"]
         assert len(b_rows) == 1
-        assert b_rows[0].passed, f"B_ag_peak: {b_rows[0].rel_pct:.1f}% > {b_rows[0].tol_pct}%"
+        assert b_rows[0].passed, (
+            f"B_ag_fundamental: {b_rows[0].rel_pct:.1f}% > {b_rows[0].tol_pct}%"
+        )
 
     def test_backemf_key_mapping(self, published_import, analytical_run_result):
         rows = compare_results(published_import, analytical_run_result)

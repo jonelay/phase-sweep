@@ -3,13 +3,17 @@
 
 Produces output/back_emf_validation/report.md with comparison tables,
 sensitivity sweeps, and B_r waveform plots.
+
+The raw steel-rotor oscilloscope captures under data/actuator_steel_rotor/
+are not distributed in the public repository; sections that need them are
+skipped when the files are absent.
 """
 
 from __future__ import annotations
 
 import json
 import sys
-from math import pi
+from math import isclose, pi
 from pathlib import Path
 from typing import Any, NotRequired, TypedDict
 
@@ -22,19 +26,19 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from phasesweep.configs import load_motor
-from phasesweep.fem_field import (
+from phasesweep.analytical import (
     _derive_B_rem,
     carter_adjusted_radii,
-    compute_thd,
     end_effect_factor,
-    harmonics_1sided,
-    solve_field_fem,
+    end_effect_factor_pole_pitch,
     zhu_howe_Br,
 )
+from phasesweep.configs import load_motor
+from phasesweep.fem_field import sample_Br, solve_field_fem
+from phasesweep.harmonics import compute_thd, harmonics_1sided
 from phasesweep.motor import Motor
 from phasesweep.solver_params import (
-    _derive_psi_f,
+    derive_psi_f_smooth,
     n_eff,
     prepare_analytical,
     prepare_drive_sim,
@@ -50,9 +54,10 @@ CAPTURES_DIR = ROOT / "data" / "actuator_steel_rotor" / "captures"
 SWEEP_JSON = ROOT / "data" / "actuator_steel_rotor" / "backemf_speed_sweep.json"
 
 # Test conditions (80 rps reference point)
-W_MECH = 501.8      # rad/s mechanical (79.86 rps actual)
+RPS_REF = 79.86     # actual rps at the 80 rps command point
+W_MECH = RPS_REF * 2 * pi  # 501.8 rad/s mechanical
 N_P = 6
-W_ELEC = W_MECH * N_P  # 3010.8 rad/s
+W_ELEC = W_MECH * N_P  # 3010.6 rad/s
 SPEED_RPM = 4792
 
 # Measured values (3-channel speed sweep 2026-03-18, linear fit R²=0.99997)
@@ -62,6 +67,27 @@ V_LN_PEAK_MEAS = 0.8087 # V (3-channel avg at 79.86 rps)
 KE_MEAS = 0.001607       # V/(rad/s) mechanical (combined linear fit)
 KT_MEAS = 0.002412       # Nm/A (1.5 * n_p * psi_f)
 THD_MEAS_BOUND = 2.5     # % upper bound (5th harmonic ~1.6% dominates)
+
+
+def check_measured_scalars() -> None:
+    """Cross-check the hand-entered measured scalars against each other.
+
+    Every scalar above is tied to a speed; a transcription error in any one
+    of them breaks a known identity. V_LN_PEAK_MEAS is a single-speed point
+    measurement while KE_MEAS is the all-speed fit, so it gets a looser
+    tolerance.
+    """
+    checks = [
+        ("SPEED_RPM vs W_MECH", SPEED_RPM, W_MECH * 60 / (2 * pi), 1e-3),
+        ("PSI_F_MEAS = KE_MEAS / N_P", PSI_F_MEAS, KE_MEAS / N_P, 5e-3),
+        ("KT_MEAS = 1.5 * N_P * PSI_F_MEAS", KT_MEAS, 1.5 * N_P * PSI_F_MEAS, 5e-3),
+        ("V_LN_PEAK_MEAS vs KE_MEAS * W_MECH", V_LN_PEAK_MEAS, KE_MEAS * W_MECH, 1e-2),
+    ]
+    for label, val, expected, rtol in checks:
+        if not isclose(val, expected, rel_tol=rtol):
+            raise ValueError(
+                f"measured-scalar inconsistency: {label}: "
+                f"{val:.6g} vs expected {expected:.6g} (rtol={rtol})")
 
 # ── Paul Tol vibrant palette (colorblind-safe) ───────────────────────
 # https://personal.sron.nl/~pault/data/colourschemes.pdf
@@ -84,10 +110,15 @@ CLR_SMOOTH = TOL_CYAN      # smooth-bore analytical (no Carter)
 CLR_NEUTRAL = TOL_GREY
 CLR_ACCENT = TOL_MAGENTA
 CLR_FEM_KEND = TOL_TEAL    # FEM + end-effect correction
+FEM_KEND_LABEL = "FEM+k_end(gap)"
 
 
 class FieldResult(TypedDict):
-    """Air-gap field solution and derived scalars (run_analytical / run_fem)."""
+    """Air-gap field solution and derived scalars (run_analytical / run_fem).
+
+    theta/B_r is the midgap waveform (shape/THD); B_g1 is bore-referenced —
+    commensurate with the bore winding formula and _measured_equiv_B_g1.
+    """
     theta: np.ndarray
     B_r: np.ndarray
     B_g1: float
@@ -100,7 +131,7 @@ class FieldResult(TypedDict):
 
 
 class EndEffectResult(TypedDict):
-    """FEM scalars with Russell-Norsworthy k_end applied (apply_end_effect)."""
+    """FEM scalars with the gap-scale k_end heuristic applied (apply_end_effect)."""
     B_g1: float
     psi_f: float
     backemf: float
@@ -120,18 +151,26 @@ class EffectiveBremResult(TypedDict):
     rss: float
 
 
-def compute_end_effect(motor: Motor) -> tuple[float, float]:
-    """Compute Russell-Norsworthy end-effect factor k_end for a motor.
+def compute_end_effect(motor: Motor) -> dict[str, float]:
+    """Compute both candidate end-effect factors for a motor.
 
-    Returns (k_end, g_eff) tuple.  k_end in (0, 1] — multiply B_g1 by k_end
-    to account for axial flux leakage at stack ends.
+    Returns a bracket dict: k_end_gap (in-house exponential on the
+    g_eff scale, the gentle edge) and k_end_pp (tanh on the pole-pitch
+    scale, the aggressive edge), plus the length scales g_eff and tau_p.
+    Both forms are uncalibrated; multiply B_g1 by k_end to account for
+    axial flux leakage at stack ends.
     """
     geo = motor.geometry
     g = abs(geo.r_stator - geo.r_magnet)
     h_m = abs(geo.r_magnet - geo.r_rotor)
     g_eff = g + h_m / motor.mu_r_pm
-    k_end = end_effect_factor(motor.L_stk, g_eff)
-    return k_end, g_eff
+    tau_p = pi * geo.r_ag / motor.n_p
+    return {
+        "k_end_gap": end_effect_factor(motor.L_stk, g_eff),
+        "k_end_pp": end_effect_factor_pole_pitch(motor.L_stk, tau_p),
+        "g_eff": g_eff,
+        "tau_p": tau_p,
+    }
 
 
 def apply_end_effect(fem_result: FieldResult, k_end: float, motor: Motor) -> EndEffectResult:
@@ -181,21 +220,30 @@ def run_analytical(motor: Motor) -> FieldResult:
 
     n_theta = 720
     theta = np.linspace(0, 2 * pi, n_theta, endpoint=False)
+    # r_eval = geo.r_ag matches the registry's analytical runner (model v3
+    # convention) — without it the waveform evaluates at the midgap of the
+    # Carter-widened annulus. Waveform/THD only; B_g1 below is
+    # bore-referenced via psi_f_carter and does not use this waveform.
     B_r = zhu_howe_Br(
-        theta, params.n_p, params.B_rem,
+        theta, params.n_p, params.B_rem, r_eval=geo.r_ag,
         r_stator=r_stator, r_magnet=r_magnet, r_rotor=r_rotor,
         mu_r_pm=params.mu_r_pm, alpha_p=params.alpha_p,
     )
     amps = harmonics_1sided(B_r)
-    fund_idx = min(params.n_p, len(amps) - 1)
-    B_g1 = float(amps[fund_idx])
-    thd = compute_thd(amps, fund_idx)
+    if n_theta <= 2 * params.n_p:
+        raise ValueError(f"n_theta={n_theta} cannot resolve n_p={params.n_p}")
+    thd = compute_thd(amps, params.n_p)
 
-    # psi_f from Carter-corrected B_g1 (consistent with B_g1 in the table)
-    psi_f = B_g1 * winding_transfer(motor)
+    # Bore-consistent psi_f: Carter radii for the field, original bore for
+    # evaluation and winding — identical to the registry's flux_linkage_peak.
+    psi_f = psi_f_carter(motor, r_stator, r_magnet, params.B_rem)
+    assert psi_f is not None
+    # Bore-referenced fundamental, commensurate with _measured_equiv_B_g1
+    # (the midgap waveform above is kept for shape/THD only).
+    B_g1 = psi_f / winding_transfer(motor)
 
     # Also keep smooth-bore baseline for reference
-    psi_f_smooth = _derive_psi_f(motor)
+    psi_f_smooth = derive_psi_f_smooth(motor)
 
     # Back-EMF at test speed
     backemf = W_ELEC * psi_f if psi_f else None
@@ -210,24 +258,51 @@ def run_analytical(motor: Motor) -> FieldResult:
     }
 
 
+def _bore_B_g1(mesh, gfu, geo, n_p: int, n_theta: int = 720) -> float:
+    """Fundamental B_r at the bore via two-radius harmonic extrapolation.
+
+    The gap annulus (r_stator..r_magnet) is source-free air even when
+    slotted, so B1(r) = a·x^(n-1) + b·x^-(n+1) with x = r/r_stator exactly.
+    Sampling at two interior radii avoids slot-opening locality at the
+    bore itself.
+    """
+    lo, hi = sorted((geo.r_stator, geo.r_magnet))
+    g = hi - lo
+    radii = (lo + 0.15 * g, lo + 0.85 * g)
+    vals = []
+    for r in radii:
+        _, B_r = sample_Br(mesh, gfu, r, n_theta)
+        amps = harmonics_1sided(B_r)
+        vals.append(float(amps[n_p]))
+    x1, x2 = (r / geo.r_stator for r in radii)
+    n = n_p
+    A = np.array([[x1 ** (n - 1), x1 ** -(n + 1)],
+                  [x2 ** (n - 1), x2 ** -(n + 1)]])
+    a, b = np.linalg.solve(A, np.array(vals))
+    return float(a + b)  # B1 at x = 1, the bore
+
+
 def run_fem(motor: Motor, nonlinear: bool = False) -> FieldResult:
     params = prepare_fem(motor)
     geo = params.geometry
 
-    theta, B_r = solve_field_fem(
+    theta, B_r, mesh, gfu = solve_field_fem(
         geo=geo, n_p=params.n_p, B_rem=params.B_rem,
         mu_r_pm=params.mu_r_pm, mu_r_fe=params.mu_r_fe,
         maxh_fraction=0.03, n_theta=720,
         nonlinear=nonlinear,
         j_s=0.0,
         alpha_p=params.alpha_p,
+        return_full=True,
     )
     amps = harmonics_1sided(B_r)
-    fund_idx = min(params.n_p, len(amps) - 1)
-    B_g1 = float(amps[fund_idx])
-    thd = compute_thd(amps, fund_idx)
+    if 720 <= 2 * params.n_p:
+        raise ValueError(f"n_theta=720 cannot resolve n_p={params.n_p}")
+    thd = compute_thd(amps, params.n_p)
 
-    # FEM-derived psi_f: use B_g1 from field solution with winding formula
+    # Bore-referenced fundamental (midgap waveform kept for shape/THD);
+    # psi_f then uses the bore winding formula consistently.
+    B_g1 = _bore_B_g1(mesh, gfu, geo, params.n_p)
     psi_f_fem = B_g1 * winding_transfer(motor)
 
     backemf = W_ELEC * psi_f_fem
@@ -256,7 +331,7 @@ def sweep_parameter(motor, param_name, values, carter_geo=None):
         if carter_geo:
             psi_f = _psi_f_carter(m, *carter_geo)
         else:
-            psi_f = _derive_psi_f(m)
+            psi_f = derive_psi_f_smooth(m)
         results.append(psi_f)
     return np.array(results)
 
@@ -275,6 +350,52 @@ def find_matching_value(motor, param_name, values, target_psi_f, carter_geo=None
 def _measured_equiv_B_g1(motor):
     """Back-derive B_g1 from measured psi_f using winding formula (inverse)."""
     return PSI_F_MEAS / winding_transfer(motor)
+
+
+def _kw_harmonic_ratio(k: int, n_p: int, n_slots: int) -> float:
+    """k_w(k)/k_w(1) for a single-tooth concentrated winding.
+
+    Pitch factor |sin(k*n_p*pi/n_slots)| per electrical harmonic k. In the
+    9s/12p layout the three coils of a phase sit at the same electrical
+    angle for every rotor harmonic, so the distribution factor is 1.
+    Triplen harmonics are pitched out exactly (ratio 0).
+    """
+    kw1 = abs(np.sin(n_p * pi / n_slots))
+    if kw1 < 1e-12:
+        raise ValueError(
+            f"degenerate fundamental pitch factor (n_p={n_p}, n_slots={n_slots})")
+    return abs(np.sin(k * n_p * pi / n_slots)) / kw1
+
+
+def _emf_from_rotor_harmonics(
+    B_r: np.ndarray, n_p: int, n_slots: int, v_scale: float, n_harm: int = 13,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Synthesize one electrical cycle of phase EMF from a static B_r solution.
+
+    Only the rotor-locked spatial orders k*n_p link the winding as the rotor
+    turns; stator-locked slot-ripple orders induce no EMF and are dropped.
+    Each kept harmonic is scaled by its own winding factor, and the time
+    derivative shifts every harmonic 90 deg in its own argument (a shape
+    change, not a rigid shift). Coefficients are re-phased so the
+    fundamental is a pure sine.
+
+    Returns (theta_e_deg, emf_V) over one electrical cycle.
+    """
+    spec = np.fft.rfft(B_r) / len(B_r)
+    theta_e = np.linspace(0, 2 * pi, 720, endpoint=False)
+    coeffs = {}
+    for k in range(1, n_harm + 1):
+        nu = k * n_p
+        if nu >= len(spec):
+            break
+        coeffs[k] = 2 * spec[nu] * _kw_harmonic_ratio(k, n_p, n_slots) * (-1j)
+    if 1 not in coeffs:
+        raise ValueError(f"spectrum too short to resolve n_p={n_p}")
+    theta0 = np.angle(coeffs[1]) + pi / 2
+    e = np.zeros_like(theta_e)
+    for k, c in coeffs.items():
+        e += np.real(c * np.exp(1j * k * (theta_e - theta0)))
+    return np.degrees(theta_e), e * v_scale
 
 
 def _extract_cycle(signal, dt, f_e):
@@ -409,11 +530,11 @@ def compute_effective_B_rem(
                                     geo, motor.mu_r_pm, motor.alpha_p, carter_geo=cg)
         unc[f"N={N_alt}"] = b_alt
 
-    # RSS of independent uncertainties (psi_f + k_w)
-    components = []
+    # RSS of all quantified perturbations (psi_f + k_w + alpha_p) — indicative
+    # only; k_w and alpha_p are systematic unknowns, not statistical spreads
+    components = [unc["k_w"][2], unc["alpha_p"][2]]
     if "psi_f" in unc:
         components.append(unc["psi_f"][2])
-    components.append(unc["k_w"][2])
     rss = np.sqrt(sum(c**2 for c in components))
 
     return {
@@ -684,21 +805,21 @@ def load_capture_aligned(rps_cmd: int, n_p: int, actual_rps: float):
     return results if results else None
 
 
-def plot_measured_overlay(ana, fem, motor, out_dir, fem_kend=None):
+def plot_measured_overlay(ana, fem, motor, out_dir, fem_kend: EndEffectResult):
     """Back-EMF waveform at 80 rps: model predictions + 3 measured channels.
 
     Each measured channel is aligned to its own rising zero-crossing so all three
     collapse onto the same waveform shape (they are 120 electrical degrees apart
     in the raw capture).
     """
-    channels = load_capture_aligned(80, motor.n_p, actual_rps=79.86)
+    channels = load_capture_aligned(80, motor.n_p, actual_rps=RPS_REF)
     if channels is None:
         print("  [skip] 80 rps capture not found — run after CSV publish")
         return False
 
-    w_e_80 = 79.86 * 2 * pi * motor.n_p
-    k_end = fem_kend["k_end"] if fem_kend else 1.0
-    fem_label = "FEM+k_end" if fem_kend else "FEM"
+    w_e_80 = RPS_REF * 2 * pi * motor.n_p
+    k_end = fem_kend["k_end"]
+    fem_label = FEM_KEND_LABEL
 
     # Terminal voltage = fundamental only (winding filters slot harmonics)
     v_ana_pk = ana["psi_f"] * w_e_80 * 1e3 if ana["psi_f"] else 0
@@ -715,7 +836,7 @@ def plot_measured_overlay(ana, fem, motor, out_dir, fem_kend=None):
             linewidth=1.5, color=CLR_ANALYTICAL)
     ax.plot(theta_plot, v_fem_pk * np.sin(theta_rad),
             label=f'{fem_label} ({v_fem_pk:.0f} mV pk)',
-            linewidth=1.5, color=CLR_FEM_KEND if fem_kend else CLR_FEM, linestyle="--")
+            linewidth=1.5, color=CLR_FEM_KEND, linestyle="--")
 
     # Measured channels — each aligned to its own zero-crossing
     for theta, voltage, label, color in channels:
@@ -753,13 +874,15 @@ def plot_vpeak_vs_speed(motor, out_dir, carter_geo=None, fem=None, fem_kend=None
     v_ch4 = np.array([pt["V_pk_mV"][2] for pt in points])
 
     # Model prediction lines
-    psi_f = _psi_f_carter(motor, *carter_geo) if carter_geo else _derive_psi_f(motor)
-    psi_f_smooth = _derive_psi_f(motor)
+    psi_f = _psi_f_carter(motor, *carter_geo) if carter_geo else derive_psi_f_smooth(motor)
+    psi_f_smooth = derive_psi_f_smooth(motor)
     Ke_model = psi_f * motor.n_p  # V/(rad/s)
     Ke_smooth = psi_f_smooth * motor.n_p
 
-    # Measured linear fit (forced through origin)
+    # Measured linear fit (forced through origin); R² from the dataset's
+    # own fit record (same method) rather than recomputed here
     Ke_meas = np.sum(omegas * v_avg * 1e-3) / np.sum(omegas**2)  # V/(rad/s)
+    r2_meas = sweep["fit"]["R_squared"]
 
     omega_line = np.linspace(0, max(omegas) * 1.05, 100)
 
@@ -777,7 +900,7 @@ def plot_vpeak_vs_speed(motor, out_dir, carter_geo=None, fem=None, fem_kend=None
     # Measured fit line
     ax.plot(omega_line, Ke_meas * omega_line * 1e3,
             color=CLR_MEASURED, linewidth=1.5, linestyle="--",
-            label="Measured fit (R²=0.99997)")
+            label=f"Measured fit (R²={r2_meas:.5f})")
 
     # Smooth-bore analytical
     ax.plot(omega_line, Ke_smooth * omega_line * 1e3,
@@ -801,7 +924,7 @@ def plot_vpeak_vs_speed(motor, out_dir, carter_geo=None, fem=None, fem_kend=None
         Ke_kend = fem_kend["psi_f"] * motor.n_p
         ax.plot(omega_line, Ke_kend * omega_line * 1e3,
                 color=CLR_FEM_KEND, linewidth=1.5, linestyle=":",
-                label=f"FEM+k_end (Ke={Ke_kend*1e3:.3f}, {(Ke_kend/Ke_meas - 1)*100:+.1f}%)")
+                label=f"{FEM_KEND_LABEL} (Ke={Ke_kend*1e3:.3f}, {(Ke_kend/Ke_meas - 1)*100:+.1f}%)")
 
     # Shade the gap between FEM (or Carter) and measured
     Ke_upper = fem["psi_f"] * motor.n_p if fem else Ke_model
@@ -824,16 +947,17 @@ def plot_vpeak_vs_speed(motor, out_dir, carter_geo=None, fem=None, fem_kend=None
     return True
 
 
-def plot_br_waveforms(ana, fem, motor, out_dir, fem_kend=None):
+def plot_br_waveforms(ana, fem, motor, out_dir, fem_kend: EndEffectResult):
     B_g1_meas = _measured_equiv_B_g1(motor)
-    k_end = fem_kend["k_end"] if fem_kend else 1.0
+    k_end = fem_kend["k_end"]
     B_g1_fem_eff = fem["B_g1"] * k_end
     backemf_fem_eff = fem["backemf"] * k_end
-    fem_label = "FEM+k_end" if fem_kend else "FEM"
+    fem_label = FEM_KEND_LABEL
+    n_slots = motor.geometry.n_slots
 
-    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7))
 
-    # ── Top panel: air-gap B_r ──
+    # ── Top panel: air-gap B_r (spatial, one mechanical revolution) ──
     ax = axes[0]
     theta_deg_ana = np.degrees(ana["theta"])
     theta_deg_fem = np.degrees(fem["theta"])
@@ -841,37 +965,46 @@ def plot_br_waveforms(ana, fem, motor, out_dir, fem_kend=None):
             label=f'Analytical (B$_1$={ana["B_g1"]:.4f} T)', linewidth=1.5, color=CLR_ANALYTICAL)
     ax.plot(theta_deg_fem, fem["B_r"] * k_end,
             label=f'{fem_label} (B$_1$={B_g1_fem_eff:.4f} T)', linewidth=1.5,
-            color=CLR_FEM_KEND if fem_kend else CLR_FEM, linestyle="--")
+            color=CLR_FEM_KEND, linestyle="--")
     # Measured-equivalent fundamental as cosine envelope
     theta_rad = ana["theta"]
     B_meas_cos = B_g1_meas * np.cos(motor.n_p * theta_rad)
     ax.plot(theta_deg_ana, B_meas_cos,
             label=f'Measured equiv. (B$_1$={B_g1_meas:.4f} T)', linewidth=2,
             color=CLR_MEASURED, linestyle="-.", alpha=0.85)
+    ax.set_xlabel("Mechanical angle (degrees)")
     ax.set_ylabel("B$_r$ (T)")
     ax.set_title("Air-Gap Radial Flux Density")
     ax.legend(fontsize=9, loc="upper right")
     ax.grid(True, alpha=0.3)
+    ax.set_xlim(0, 360)
 
-    # ── Bottom panel: back-EMF voltage ──
+    # ── Bottom panel: back-EMF voltage (time domain, one electrical cycle) ──
+    # Synthesized from rotor-locked harmonics with per-harmonic winding
+    # factors — the raw spatial waveform is NOT the EMF shape (slot ripple
+    # is stator-locked and induces nothing).
     ax2 = axes[1]
     v_scale = W_ELEC * winding_transfer(motor)
 
-    ax2.plot(theta_deg_ana, ana["B_r"] * v_scale,
-             label=f'Analytical ({ana["backemf"]:.4f} V pk)', linewidth=1.5, color=CLR_ANALYTICAL)
-    ax2.plot(theta_deg_fem, fem["B_r"] * k_end * v_scale,
-             label=f'{fem_label} ({backemf_fem_eff:.4f} V pk)', linewidth=1.5,
-             color=CLR_FEM_KEND if fem_kend else CLR_FEM, linestyle="--")
-    # Measured back-EMF fundamental
-    v_meas_cos = V_LN_PEAK_MEAS * np.cos(motor.n_p * theta_rad)
-    ax2.plot(theta_deg_ana, v_meas_cos,
+    th_e, emf_ana = _emf_from_rotor_harmonics(ana["B_r"], motor.n_p, n_slots, v_scale)
+    _, emf_fem = _emf_from_rotor_harmonics(fem["B_r"], motor.n_p, n_slots, v_scale)
+    ax2.plot(th_e, emf_ana,
+             label=f'Analytical (E$_1$={ana["backemf"]:.4f} V)', linewidth=1.5,
+             color=CLR_ANALYTICAL)
+    ax2.plot(th_e, emf_fem * k_end,
+             label=f'{fem_label} (E$_1$={backemf_fem_eff:.4f} V)', linewidth=1.5,
+             color=CLR_FEM_KEND, linestyle="--")
+    # Measured back-EMF fundamental (phase-aligned with the synthesis)
+    v_meas_sin = V_LN_PEAK_MEAS * np.sin(np.radians(th_e))
+    ax2.plot(th_e, v_meas_sin,
              label=f'Measured ({V_LN_PEAK_MEAS:.4f} V pk)', linewidth=2,
              color=CLR_MEASURED, linestyle="-.", alpha=0.85)
     ax2.axhline(V_LN_PEAK_MEAS, color=CLR_MEASURED, linewidth=0.8, alpha=0.4)
     ax2.axhline(-V_LN_PEAK_MEAS, color=CLR_MEASURED, linewidth=0.8, alpha=0.4)
     ax2.set_xlabel("Electrical angle (degrees)")
     ax2.set_ylabel("Phase back-EMF (V)")
-    ax2.set_title("Back-EMF Voltage at 4820 RPM (phase-to-neutral)")
+    ax2.set_title(f"Back-EMF Voltage at {SPEED_RPM} RPM (phase-to-neutral, "
+                  "synthesized from rotor harmonics)")
     ax2.legend(fontsize=9, loc="upper right")
     ax2.grid(True, alpha=0.3)
     ax2.set_xlim(0, 360)
@@ -881,50 +1014,88 @@ def plot_br_waveforms(ana, fem, motor, out_dir, fem_kend=None):
     plt.close(fig)
 
 
-def plot_harmonics(ana, fem, n_p, out_dir, measured_harmonics=None):
-    fig, ax = plt.subplots(figsize=(10, 5))
+def plot_harmonics(ana, fem, motor: Motor, out_dir, measured_harmonics=None):
+    """Top: spatial B_r spectrum (model only — not what a voltmeter sees).
+    Bottom: EMF time harmonics — model prediction with per-harmonic winding
+    factors vs measured voltage harmonics. The fundamental is the
+    normalization in both, so only k >= 2 carries information.
+    """
+    n_p = motor.n_p
+    n_slots = motor.geometry.n_slots
+    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+
     max_order = min(60, len(ana["amps"]) - 1, len(fem["amps"]) - 1)
     orders = np.arange(1, max_order + 1)
-    ana_fund = ana["amps"][n_p] or 1
-    fem_fund = fem["amps"][n_p] or 1
+    ana_fund = float(ana["amps"][n_p])
+    fem_fund = float(fem["amps"][n_p])
+    if ana_fund <= 1e-12 or fem_fund <= 1e-12:
+        raise ValueError(
+            f"degenerate fundamental (ana={ana_fund!r}, fem={fem_fund!r})")
     ana_pct = ana["amps"][1:max_order+1] / ana_fund * 100
     fem_pct = fem["amps"][1:max_order+1] / fem_fund * 100
     width = 0.35
     ax.bar(orders - width/2, ana_pct, width, label="Analytical", alpha=0.7, color=CLR_ANALYTICAL)
     ax.bar(orders + width/2, fem_pct, width, label="FEM", alpha=0.7, color=CLR_FEM)
-
-    # Measured harmonic data — use extracted values if available, else fallback
-    if measured_harmonics is not None:
-        meas_orders = {}
-        for k, pct in measured_harmonics["harmonics_pct"].items():
-            k = int(k)
-            if k > 1:
-                spatial_order = k * n_p
-                meas_orders[spatial_order] = pct
-        thd_label = f"Measured THD = {measured_harmonics['thd_pct']:.2f}%"
-    else:
-        meas_orders = {3 * n_p: 0.47, 5 * n_p: 0.94}
-        thd_label = f"Measured THD < {THD_MEAS_BOUND}%"
-
-    for order, pct in meas_orders.items():
-        if order <= max_order:
-            ax.plot(order, pct, 'D', color=CLR_MEASURED, markersize=8, zorder=5,
-                    markeredgecolor="black", markeredgewidth=0.5)
-    ax.plot([], [], 'D', color=CLR_MEASURED, markersize=8, markeredgecolor="black",
-            markeredgewidth=0.5, label="Measured (voltage harmonics)")
-
-    ax.annotate(thd_label,
-                xy=(max_order * 0.65, 6), fontsize=9, color=CLR_MEASURED,
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=CLR_MEASURED, alpha=0.8))
-
     ax.set_xlabel("Spatial Harmonic Order")
     ax.set_ylabel("Amplitude (% of fundamental)")
-    ax.set_title("Harmonic Spectrum — B$_r$ (model) vs Voltage (measured)")
+    ax.set_title("Spatial B$_r$ Spectrum (model) — includes stator-locked slot"
+                 " orders that induce no EMF")
     ax.legend(fontsize=9)
     ax.set_xlim(0, max_order + 1)
     ax.set_ylim(0, max(15, ana_pct.max() * 1.1, fem_pct.max() * 1.1))
     ax.axvline(n_p, color=CLR_NEUTRAL, linestyle=":", alpha=0.5)
     ax.text(n_p + 0.5, ax.get_ylim()[1] * 0.92, f"n$_p$={n_p}", fontsize=8, color=CLR_NEUTRAL)
+    sh_order = n_slots - n_p
+    if 0 < sh_order <= max_order:
+        ax.axvline(sh_order, color=CLR_ACCENT, linestyle=":", alpha=0.5)
+        ax.text(sh_order + 0.5, ax.get_ylim()[1] * 0.82, "slot", fontsize=8,
+                color=CLR_ACCENT)
+
+    # ── EMF time harmonics: model (per-harmonic k_w) vs measured ──
+    ks = [2, 3, 5, 7]
+
+    def emf_pct(amps, fund):
+        # None (skip the bar) when unresolved — a 0.0 bar would claim
+        # the model predicts no harmonic
+        return [float(amps[k * n_p]) / fund * _kw_harmonic_ratio(k, n_p, n_slots) * 100
+                if k * n_p < len(amps) else None
+                for k in ks]
+
+    x = np.arange(len(ks))
+    for offs, pct, label, color in [
+        (-width/2, emf_pct(ana["amps"], ana_fund), "Analytical EMF prediction", CLR_ANALYTICAL),
+        (+width/2, emf_pct(fem["amps"], fem_fund), "FEM EMF prediction", CLR_FEM),
+    ]:
+        xs = [xi + offs for xi, p in zip(x, pct) if p is not None]
+        ax2.bar(xs, [p for p in pct if p is not None], width, label=label,
+                alpha=0.7, color=color)
+
+    if measured_harmonics is not None:
+        meas = {int(k): pct for k, pct in measured_harmonics["harmonics_pct"].items()
+                if int(k) > 1}
+        thd_label = f"Measured THD = {measured_harmonics['thd_pct']:.2f}%"
+    else:
+        meas = {3: 0.47, 5: 0.94}
+        thd_label = f"Measured THD < {THD_MEAS_BOUND}%"
+    for i, k in enumerate(ks):
+        if k in meas:
+            ax2.plot(i, meas[k], 'D', color=CLR_MEASURED, markersize=8, zorder=5,
+                     markeredgecolor="black", markeredgewidth=0.5)
+    ax2.plot([], [], 'D', color=CLR_MEASURED, markersize=8, markeredgecolor="black",
+             markeredgewidth=0.5, label="Measured (voltage harmonics)")
+    ax2.annotate(thd_label,
+                 xy=(0.65, 0.85), xycoords="axes fraction", fontsize=9,
+                 color=CLR_MEASURED,
+                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=CLR_MEASURED,
+                           alpha=0.8))
+    ax2.set_xticks(x)
+    ax2.set_xticklabels([str(k) for k in ks])
+    ax2.set_xlabel("EMF Time Harmonic k (of electrical fundamental)")
+    ax2.set_ylabel("Amplitude (% of fundamental)")
+    ax2.set_title("EMF Harmonics — model spatial orders k·n$_p$ scaled by"
+                  " k$_w$(k)/k$_w$(1) vs measured voltage")
+    ax2.legend(fontsize=9)
+
     fig.tight_layout()
     fig.savefig(out_dir / "harmonics.png", dpi=150)
     plt.close(fig)
@@ -1056,7 +1227,7 @@ def plot_brem_kw_contour(
     for i in range(len(k_vals)):
         for j in range(len(b_vals)):
             m = replace(motor, B_rem=b_vals[j], k_w=k_vals[i])
-            psi = _psi_f_carter(m, *carter_geo) if carter_geo else _derive_psi_f(m)
+            psi = _psi_f_carter(m, *carter_geo) if carter_geo else derive_psi_f_smooth(m)
             PSI[i, j] = psi * 1e3 if psi else 0
 
     # Smooth-bore grid
@@ -1064,7 +1235,7 @@ def plot_brem_kw_contour(
     for i in range(len(k_vals)):
         for j in range(len(b_vals)):
             m = replace(motor, B_rem=b_vals[j], k_w=k_vals[i])
-            psi = _derive_psi_f(m)
+            psi = derive_psi_f_smooth(m)
             PSI_SMOOTH[i, j] = psi * 1e3 if psi else 0
 
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -1229,7 +1400,7 @@ def plot_grade_error_budget(motor, out_dir, carter_geo=None):
     from dataclasses import replace
 
     def _psi(m):
-        return _psi_f_carter(m, *carter_geo) if carter_geo else _derive_psi_f(m)
+        return _psi_f_carter(m, *carter_geo) if carter_geo else derive_psi_f_smooth(m)
 
     psi_model = _psi(motor) * 1e3
     psi_meas = PSI_F_MEAS * 1e3
@@ -1343,7 +1514,7 @@ def plot_kw_alphap_heatmap(
     from dataclasses import replace
 
     def _psi(m):
-        return _psi_f_carter(m, *carter_geo) if carter_geo else _derive_psi_f(m)
+        return _psi_f_carter(m, *carter_geo) if carter_geo else derive_psi_f_smooth(m)
 
     grades = [("N45", 1.28), ("N48", 1.32), ("N50", 1.37)]
 
@@ -1414,7 +1585,7 @@ def compute_parameter_triplets(motor, psi_f_target, carter_geo=None):
     from scipy.optimize import brentq
 
     def _psi(m):
-        return _psi_f_carter(m, *carter_geo) if carter_geo else _derive_psi_f(m)
+        return _psi_f_carter(m, *carter_geo) if carter_geo else derive_psi_f_smooth(m)
 
     grades = [("N45", 1.28), ("N48", 1.32), ("N50", 1.37), ("N52", 1.45)]
     rows = []
@@ -1452,7 +1623,7 @@ def plot_kw_alphap_tradeoff(
     from scipy.optimize import brentq
 
     def _psi(m):
-        return _psi_f_carter(m, *carter_geo) if carter_geo else _derive_psi_f(m)
+        return _psi_f_carter(m, *carter_geo) if carter_geo else derive_psi_f_smooth(m)
 
     grades = [("N45", 1.28), ("N48", 1.32), ("N50", 1.37), ("N52", 1.45)]
     grade_colors = [TOL_TEAL, TOL_BLUE, TOL_ORANGE, TOL_RED]
@@ -1520,7 +1691,7 @@ def plot_kw_alphap_tradeoff(
                 xytext=(motor.alpha_p - 0.06, motor.k_w - 0.03),
                 arrowprops=dict(arrowstyle="->", color="black"),
                 fontsize=9, ha="center")
-    ax.text(0.02, 0.02, "* k_w is placeholder", transform=ax.transAxes,
+    ax.text(0.02, 0.02, "* k_w is the ideal value (unequal layer turns)", transform=ax.transAxes,
             fontsize=7, color=TOL_GREY, style="italic")
 
     ax.set_xlabel("α_p (pole-arc ratio, from geometry)")
@@ -1541,7 +1712,7 @@ def plot_waterfall(motor, triplets, out_dir, carter_geo=None):
     from dataclasses import replace
 
     def _psi(m):
-        return _psi_f_carter(m, *carter_geo) if carter_geo else _derive_psi_f(m)
+        return _psi_f_carter(m, *carter_geo) if carter_geo else derive_psi_f_smooth(m)
 
     psi_model = _psi(motor) * 1e3  # mWb
     psi_meas = PSI_F_MEAS * 1e3
@@ -1679,8 +1850,7 @@ def generate_report(
     drive_sim_result: dict[str, Any] | None = None,
     meas_unc: dict[str, Any] | None = None,
     triplets: list[dict[str, Any]] | None = None,
-    fem_kend: EndEffectResult | None = None,
-    fem_nl_kend: EndEffectResult | None = None,
+    kend_bracket: dict[str, float] | None = None,
 ) -> Path:
     psi_f_ana = ana["psi_f"]
     psi_f_fem = fem["psi_f"]
@@ -1697,11 +1867,6 @@ def generate_report(
     psi_f_nl = fem_nl["psi_f"] if fem_nl else None
     backemf_nl = fem_nl["backemf"] if fem_nl else None
 
-    psi_f_kend = fem_kend["psi_f"] if fem_kend else None
-    backemf_kend = fem_kend["backemf"] if fem_kend else None
-    psi_f_nl_kend = fem_nl_kend["psi_f"] if fem_nl_kend else None
-    backemf_nl_kend = fem_nl_kend["backemf"] if fem_nl_kend else None
-
     lines = []
     def w(s=""):
         lines.append(s)
@@ -1710,8 +1875,9 @@ def generate_report(
     w()
     w(f"**Motor:** {motor.name} ({TOML.name})")
     w("**Measurement date:** 2026-03-18")
-    w("**Models:** Zhu & Howe analytical, 2D FEM (NGSolve, linear + nonlinear iron), "
-      "2D FEM + Russell-Norsworthy end-effect correction")
+    w("**Models:** Zhu & Howe analytical, 2D FEM (NGSolve, linear + nonlinear iron). "
+      "3D end effects are estimated separately as an uncalibrated two-form bracket (§3) — "
+      "they are not part of any model column.")
     w("**Convention:** B_rem is physical remanence; both solvers model square-wave "
       "radial magnetization (source fundamental M_1 = (4/π)(B_rem/μ0)·sin(πα_p/2)). "
       "Supersedes reports generated before 2026-06-11, which used a sinusoidal source "
@@ -1722,7 +1888,7 @@ def generate_report(
     w()
     w("| Parameter | Value |")
     w("|-----------|-------|")
-    w("| Rotor variant | Steel (Harvey C) |")
+    w("| Rotor variant | Steel |")
     w(f"| Mechanical speed | 79.86 rps ({SPEED_RPM} RPM) |")
     w(f"| ω_mech | {W_MECH:.1f} rad/s |")
     w(f"| ω_elec | {W_ELEC:.1f} rad/s |")
@@ -1764,14 +1930,13 @@ def generate_report(
     w("## 3. Model Comparison")
     w()
     w(f"Carter factor k_c = {ana['k_c']:.4f} (applied to analytical model for slotted stator)")
-    if fem_kend:
-        w(f"End-effect factor k_end = {fem_kend['k_end']:.4f} "
-          f"(Russell-Norsworthy, L_stk/g_eff aspect ratio correction)")
     w()
-    w("| Quantity | Analytical | FEM (linear) | FEM (nonlinear) | FEM+k_end | FEM(NL)+k_end | Measured |")
-    w("|----------|-----------|-------------|----------------|-----------|---------------|----------|")
+    w("Raw 2D results — no end-effect correction applied (see the bracket below).")
+    w()
+    w("| Quantity | Analytical | FEM (linear) | FEM (nonlinear) | Measured |")
+    w("|----------|-----------|-------------|----------------|----------|")
 
-    def row(name, v_ana, v_fem, v_nl, v_kend, v_nl_kend, v_meas, fmt=".4f"):
+    def row(name, v_ana, v_fem, v_nl, v_meas, fmt=".4f"):
         def f(v):
             return f"{v:{fmt}}" if v is not None else "---"
         def d(v, ref):
@@ -1779,37 +1944,23 @@ def generate_report(
                 return f" ({pct_delta(v, ref):+.1f}%)"
             return ""
         w(f"| {name} | {f(v_ana)}{d(v_ana, v_meas)} | {f(v_fem)}{d(v_fem, v_meas)} "
-          f"| {f(v_nl)}{d(v_nl, v_meas)} | {f(v_kend)}{d(v_kend, v_meas)} "
-          f"| {f(v_nl_kend)}{d(v_nl_kend, v_meas)} | {f(v_meas)} |")
+          f"| {f(v_nl)}{d(v_nl, v_meas)} | {f(v_meas)} |")
 
     row("B_g1 (T)", ana["B_g1"], fem["B_g1"],
         fem_nl["B_g1"] if fem_nl else None,
-        fem_kend["B_g1"] if fem_kend else None,
-        fem_nl_kend["B_g1"] if fem_nl_kend else None,
         None, ".4f")
     row("psi_f (mWb)", psi_f_ana * 1e3 if psi_f_ana else None,
         psi_f_fem * 1e3, psi_f_nl * 1e3 if psi_f_nl else None,
-        psi_f_kend * 1e3 if psi_f_kend else None,
-        psi_f_nl_kend * 1e3 if psi_f_nl_kend else None,
         PSI_F_MEAS * 1e3, ".4f")
     row("Back-EMF V_pk (V)", backemf_ana, backemf_fem,
-        backemf_nl, backemf_kend, backemf_nl_kend,
-        V_LN_PEAK_MEAS, ".4f")
+        backemf_nl, V_LN_PEAK_MEAS, ".4f")
     ke_nl = backemf_nl / W_MECH if backemf_nl else None
-    ke_kend = backemf_kend / W_MECH if backemf_kend else None
-    ke_nl_kend = backemf_nl_kend / W_MECH if backemf_nl_kend else None
     kt_nl = 1.5 * N_P * psi_f_nl if psi_f_nl else None
-    kt_kend = 1.5 * N_P * psi_f_kend if psi_f_kend else None
-    kt_nl_kend = 1.5 * N_P * psi_f_nl_kend if psi_f_nl_kend else None
     row("Ke (mV/(rad/s))", ke_ana * 1e3 if ke_ana else None,
         ke_fem * 1e3, ke_nl * 1e3 if ke_nl else None,
-        ke_kend * 1e3 if ke_kend else None,
-        ke_nl_kend * 1e3 if ke_nl_kend else None,
         KE_MEAS * 1e3, ".4f")
     row("Kt (mNm/A)", kt_ana * 1e3 if kt_ana else None,
         kt_fem * 1e3, kt_nl * 1e3 if kt_nl else None,
-        kt_kend * 1e3 if kt_kend else None,
-        kt_nl_kend * 1e3 if kt_nl_kend else None,
         KT_MEAS * 1e3, ".4f")
     w()
 
@@ -1857,43 +2008,44 @@ def generate_report(
         w(f"**Saturation effect:** Nonlinear FEM psi_f is {sat_effect:+.1f}% vs linear FEM. "
           f"{'Saturation reduces the flux as expected — tooth-tip flux density in the linear solution is well above the B-H knee (the square-wave source raised linear-solve iron peaks ~27% over pre-convention-fix figures).' if sat_effect < 0 else 'Saturation has minimal effect at this operating point.'}")
         w()
-    if fem_kend and psi_f_kend:
-        kend_delta = pct_delta(psi_f_kend, PSI_F_MEAS)
-        kend_reduction = (1 - fem_kend["k_end"]) * 100
-        w(f"**End-effect correction (Tier 0):** The Russell-Norsworthy correction applies a "
-          f"{kend_reduction:.1f}% reduction (k_end = {fem_kend['k_end']:.4f}) to account for axial "
-          f"flux leakage at the stack ends. This motor has L_stk = {motor.L_stk*1e3:.1f} mm with "
-          f"OD = {motor.geometry.r_outer*2e3:.1f} mm (aspect ratio "
-          f"{motor.L_stk / (motor.geometry.r_outer * 2):.2f}). "
-          f"FEM+k_end predicts psi_f {kend_delta:+.1f}% vs measured")
-        if fem_nl_kend and psi_f_nl_kend:
-            nl_kend_delta = pct_delta(psi_f_nl_kend, PSI_F_MEAS)
-            w(f", FEM(NL)+k_end predicts {nl_kend_delta:+.1f}%")
-        fem_delta_raw = pct_delta(psi_f_fem, PSI_F_MEAS)
-        closed_pct = (fem_delta_raw - kend_delta) / fem_delta_raw * 100 if fem_delta_raw else 0
-        w(f". The correction closes about {closed_pct:.0f}% of the raw 2D over-prediction; "
-          f"a {kend_delta:+.1f}% residual remains.")
+    if kend_bracket and psi_f_ana and psi_f_nl:
+        k_gap = kend_bracket["k_end_gap"]
+        k_pp = kend_bracket["k_end_pp"]
+        w("### End-Effect Estimate (3D, uncalibrated two-form bracket)")
         w()
-        w("**Caveat — k_end is uncalibrated (Tier 0).** Axial end leakage is the right order "
-          "of magnitude to explain roughly half the 2D over-prediction, but the split between "
-          "end leakage and magnet/winding parameters is not yet pinned down:")
+        w(f"Axial end leakage is a 3D effect that applies equally to both 2D models "
+          f"(which agree on B_g1 to within "
+          f"{abs(pct_delta(fem['B_g1'], ana['B_g1'])):.1f}%). No published, calibrated "
+          f"formula exists for this geometry; two candidate heuristic forms with sane "
+          f"limits disagree strongly, so they are reported as a bracket rather than a "
+          f"correction. This motor: L_stk = {motor.L_stk*1e3:.1f} mm, "
+          f"g_eff = {kend_bracket['g_eff']*1e3:.2f} mm, "
+          f"tau_p = {kend_bracket['tau_p']*1e3:.2f} mm.")
         w()
-        w(f"1. **Formula applicability:** Russell-Norsworthy was derived for smooth-bore inrunners "
-          f"with uniform airgap. This motor is an outrunner with discrete magnet arcs (α_p = "
-          f"{motor.alpha_p}), 9 slots, and a non-uniform field at the stack ends. The effective "
-          f"length scale for fringing may differ from g_eff = g + h_m/μ_r.")
-        w(f"2. **Residual attribution:** The {kend_delta:+.1f}% remaining after k_end is "
-          f"consistent with the effective-B_rem analysis (§5): datasheet B_rem with ideal "
-          f"square-wave magnetization is an upper bound on the source fundamental — the real "
-          f"magnetization profile (between square-wave and sinusoidal) plus unmodeled leakage "
-          f"absorbs the rest.")
-        w("3. **Validation needed:** A true 3D FEM solve (Tier 2) would provide a ground-truth "
-          "k_end_3d for this geometry. If 3D gives a materially different k_end, the residual "
-          "attribution shifts between end leakage and the magnet/winding factors above.")
+        w("| Form | Length scale | k_end | Analytical psi_f | FEM (NL) psi_f |")
+        w("|------|-------------|-------|------------------|----------------|")
+        for label, k in (
+            ("Gap-scale exponential (in-house heuristic)", k_gap),
+            ("Pole-pitch tanh (commonly attributed to Russell-Norsworthy; unverified)", k_pp),
+        ):
+            w(f"| {label} | {'g_eff' if k is k_gap else 'tau_p'} | {k:.3f} "
+              f"| {pct_delta(psi_f_ana * k, PSI_F_MEAS):+.1f}% "
+              f"| {pct_delta(psi_f_nl * k, PSI_F_MEAS):+.1f}% |")
         w()
-        w("**Status:** Tier 0 — axial leakage plausibly explains about half the 2D FEM "
-          "over-prediction; quantitative trust requires Tier 2 (3D FEM) calibration. "
-          "Production psi_f remains end-effect-uncorrected; k_end here is informational.")
+        lo = pct_delta(psi_f_nl * k_pp, PSI_F_MEAS)
+        hi = pct_delta(psi_f_nl * k_gap, PSI_F_MEAS)
+        w(f"The two forms bracket the measurement from opposite sides: end-corrected "
+          f"FEM (NL) spans {lo:+.1f}% .. {hi:+.1f}% vs measured. The honest conclusion "
+          f"is that 2D models plus an uncalibrated end correction cannot resolve how the "
+          f"raw {pct_delta(psi_f_nl, PSI_F_MEAS):+.1f}% over-prediction splits between "
+          f"magnet grade (effective B_rem, §5), magnetization profile, winding factor, "
+          f"and 3D leakage — end effects of this size are *plausible*, nothing more.")
+        w()
+        w("**Resolution path:** (1) the gaussmeter B_rem measurement collapses the "
+          "magnet-grade axis independently of any end-effect assumption; (2) a Tier 2 "
+          "3D FEM solve gives a ground-truth k_end for this geometry. "
+          "Production psi_f remains end-effect-uncorrected; where figures show a single "
+          f"corrected curve they use the gap-scale form (k_end = {k_gap:.2f}, illustrative).")
         w()
 
     w("## 4. Waveforms and Spectra")
@@ -1906,16 +2058,26 @@ def generate_report(
       "at the amplitude implied by measured psi_f — no spatial harmonic content is available "
       "from a terminal voltage measurement.")
     w()
-    w(f"Bottom panel: back-EMF voltage at {SPEED_RPM} RPM. Model waveforms are scaled from "
-      "the air-gap field solution; measured is the sinusoidal fit fundamental.")
+    w(f"Bottom panel: back-EMF voltage at {SPEED_RPM} RPM over one electrical cycle, "
+      "synthesized from the rotor-locked spatial harmonics (orders k·n_p) with "
+      "per-harmonic winding factors. The raw spatial waveform is not the EMF shape: "
+      "slot ripple is stator-locked and induces no EMF, and each harmonic carries "
+      "its own pitch factor (triplen harmonics are pitched out exactly in this "
+      "9s/12p winding). Measured is the sinusoidal fit fundamental.")
     w()
     w("![B_r and back-EMF waveforms](br_waveforms.png)")
     w()
-    w("Harmonic spectrum shows spatial harmonics of B_r (model) with measured voltage "
-      "harmonics overlaid as diamonds. Measured 3rd and 5th voltage harmonics map to "
-      "spatial orders 3n_p = 18 and 5n_p = 30. Note: slot harmonics visible in FEM "
-      "(order 3 = n_slots - n_p) are spatially filtered by the winding and do not "
-      "appear in the terminal voltage.")
+    w("Harmonic spectra: the top panel is the spatial B_r spectrum (model only — "
+      "a terminal voltage measurement cannot see it directly). The bottom panel "
+      "compares EMF time harmonics: model spatial orders k·n_p scaled by the "
+      "per-harmonic winding-factor ratio k_w(k)/k_w(1) against measured voltage "
+      "harmonics. The fundamental is the normalization on both sides, so it "
+      "matches by construction and is omitted; only k >= 2 tests the model. "
+      "Slot harmonics in the FEM spectrum (order 3 = n_slots - n_p) are "
+      "stator-locked and induce no EMF. Model harmonic amplitudes are taken "
+      "from the midgap waveform; the radial decay of high-order harmonics "
+      "between midgap and the winding bore is not applied, so the model EMF "
+      "harmonic content is an upper bound.")
     w()
     w("![Harmonic spectrum](harmonics.png)")
     w()
@@ -1964,9 +2126,9 @@ def generate_report(
     else:
         w("| alpha_p | 0.635 | Below sweep range | N/A |")
     if k_match:
-        w(f"| k_w | 0.945 | {k_match:.3f} | {k_match/0.945:.3f} |")
+        w(f"| k_w | {motor.k_w:.3f} | {k_match:.3f} | {k_match/motor.k_w:.3f} |")
     else:
-        w("| k_w | 0.945 | Below sweep range | N/A |")
+        w(f"| k_w | {motor.k_w:.3f} | Below sweep range | N/A |")
     w()
 
     w("### Interpretation")
@@ -2001,7 +2163,8 @@ def generate_report(
         w("2. **Effective pole-arc** — could not match within sweep range.")
     w()
     if k_match:
-        w(f"3. **Winding factor.** k_w = {motor.k_w} is a placeholder for ideal double-layer 12p/9s. "
+        w(f"3. **Winding factor.** k_w = {motor.k_w} is the ideal double-layer 9s/12p value "
+          f"(equal layer turns assumed). "
           f"A k_w of {k_match:.3f} would match by itself ({(k_match/motor.k_w - 1)*100:+.1f}% "
           f"from nominal).")
     else:
@@ -2014,10 +2177,11 @@ def generate_report(
 
     w("### Most Physically Plausible Combination")
     w()
-    if psi_f_ana:
-        w(f"The {pct_delta(psi_f_ana, PSI_F_MEAS):+.1f}% gap is too large for any single "
-          f"parameter at a plausible value (the single-parameter B_rem match sits below any "
-          f"sintered NdFeB grade). The likely combination:")
+    if psi_f_ana and b_match:
+        w(f"The {pct_delta(psi_f_ana, PSI_F_MEAS):+.1f}% gap maps to a single-parameter "
+          f"B_rem match of {b_match:.2f} T ({_ndfeb_grade(b_match)}-class) — plausible "
+          f"only if the magnets are well below their claimed N52 grade. The likely "
+          f"combination:")
     else:
         w("The measured gap is most likely a combination of:")
     w()
@@ -2025,9 +2189,10 @@ def generate_report(
       "uniformly magnetized arcs with sharp edges — an upper bound on the source "
       "fundamental. A profile between square-wave and sinusoidal removes up to ~21% "
       "(the full 4/π factor).")
-    w("- **~10-16% 3D leakage** (end-turn + axial fringing on a 7mm stack; "
-      "k_end = 0.84 Russell-Norsworthy estimate, uncalibrated)")
-    w("- **k_w below the 0.945 placeholder** (actual winding has unequal layer turns)")
+    w("- **3D leakage of uncertain magnitude** (end-turn + axial fringing on a 7mm "
+      "stack; the two candidate end-effect forms give k_end 0.66-0.84 — see the "
+      "bracket in §3, uncalibrated)")
+    w("- **k_w below the 0.866 ideal** (actual winding has unequal layer turns)")
     w("- **Effective pole-arc slightly narrower than geometric** "
       "(flat-on-curved magnet geometry)")
     w()
@@ -2067,7 +2232,7 @@ def generate_report(
           "to match measured psi_f:")
         w()
         w(f"| Grade | B_rem (T) | k_w (α_p = {motor.alpha_p}, measured) "
-          f"| α_p (k_w = {motor.k_w}, placeholder) |")
+          f"| α_p (k_w = {motor.k_w}, ideal) |")
         w("|-------|-----------|----------------------|----------------------|")
         for trip in triplets:
             kw_str = f"{trip['k_w']:.3f}" if trip['k_w'] else "> 1.0"
@@ -2077,9 +2242,9 @@ def generate_report(
         w(f"Note: the two columns have different confidence levels. "
           f"α_p = {motor.alpha_p} is derived from caliper measurements and chord-to-arc "
           f"correction — physically grounded, though flat-on-curved magnet geometry may "
-          f"make the effective arc narrower. k_w = {motor.k_w} is a textbook value for "
-          f"ideal double-layer 12p/9s and is explicitly a placeholder in the motor definition "
-          f"(actual winding has unequal layer turns). The k_w column is therefore the more "
+          f"make the effective arc narrower. k_w = {motor.k_w} is the ideal textbook value "
+          f"for double-layer 9s/12p (corrected from the 9s/8p-10p 0.945) — "
+          f"actual winding has unequal layer turns. The k_w column is therefore the more "
           f"trustworthy constraint; the α_p column is conditioned on an unverified assumption.")
         w()
 
@@ -2099,7 +2264,10 @@ def generate_report(
         w()
         w("The waterfall below decomposes the model gap at N50 grade, "
           "with B_rem, effective pole-arc, winding factor, and 3D leakage "
-          "as contributing factors.")
+          "as contributing factors. Note the weights are partly assumed: "
+          "the 3D-leakage share is fixed at 20% of the post-B_rem residual, "
+          "and the remainder is split by single-factor sensitivity — this is "
+          "an illustration of plausible attribution, not a computed decomposition.")
         w()
         w("![Over-prediction decomposition](waterfall.png)")
         w()
@@ -2111,7 +2279,7 @@ def generate_report(
             w()
             w(f"The Carter-corrected analytical model **under-predicts** psi_f by "
               f"{abs(ana_delta):.1f}%. This is within the combined uncertainty of "
-              f"k_w (placeholder), α_p (flat-on-curved geometry), and 3D leakage. "
+              f"k_w (unequal layer turns), α_p (flat-on-curved geometry), and 3D leakage. "
               f"No error budget decomposition is needed — the model is close enough "
               f"that the remaining gap does not point to a single dominant factor.")
             w()
@@ -2123,6 +2291,8 @@ def generate_report(
         w("The error budget depends on the assumed magnet grade. At lower grades, "
           "B_rem accounts for more of the gap. At N52 (nominal), B_rem contributes "
           "nothing and the entire gap must be explained by α_p, k_w, and 3D leakage. "
+          "As in the waterfall, the 3D-leakage share is an assumed 20% of the "
+          "post-B_rem residual (not computed). "
           "A direct B_rem measurement pins the grade and collapses this ambiguity.")
         w()
         w("![Error budget by grade](grade_error_budget.png)")
@@ -2153,7 +2323,7 @@ def generate_report(
         w()
         b_eff = b_rem_result["B_rem_eff"]
         w(f"- **Effective B_rem:** {b_eff:.3f} T "
-          f"(conditioned on placeholder k_w = {motor.k_w} and geometric α_p = {motor.alpha_p})")
+          f"(conditioned on ideal k_w = {motor.k_w} and geometric α_p = {motor.alpha_p})")
         w()
         if b_eff < 1.08:
             w(f"This sits **below any sintered NdFeB grade** (N30 ≈ 1.08 T) — taken literally "
@@ -2161,8 +2331,16 @@ def generate_report(
               f"square-wave convention: the physical magnets are presumably mid-grade "
               f"(nominal {motor.B_rem} T), and the ~{(1 - b_eff/motor.B_rem)*100:.0f}% "
               f"shortfall is the combined effect of a real magnetization profile below ideal "
-              f"square-wave, 3D leakage, and winding-parameter error — not magnet degradation "
-              f"(see `notes/review-findings-audit-2026-06-11.md` for the convention analysis).")
+              f"square-wave, 3D leakage, and winding-parameter error — not magnet degradation.")
+            w()
+        else:
+            w(f"This is {_ndfeb_grade(b_eff)}-class — a real (if low) magnet grade, "
+              f"plausible only if the magnets sit well below their nominal "
+              f"{motor.B_rem} T (claimed N52). The "
+              f"~{(1 - b_eff/motor.B_rem)*100:.0f}% shortfall from nominal is the combined "
+              f"effect of magnet grade, a real magnetization profile below ideal "
+              f"square-wave, 3D leakage, and winding-parameter error; a direct gaussmeter "
+              f"B_rem measurement separates the first from the rest.")
             w()
         w("A single ± scalar would misrepresent the uncertainty structure: the systematic "
           "unknowns (k_w, α_p, N) move the back-calculated value *along* the measured "
@@ -2179,7 +2357,7 @@ def generate_report(
               f"{lo:.3f} .. {hi:.3f} | {hw:.4f} |")
         if "k_w" in unc:
             lo, hi, hw = unc["k_w"]
-            w(f"| k_w (placeholder) | +/- 5% of {motor.k_w:.3f} | "
+            w(f"| k_w (ideal, layer turns unequal) | +/- 5% of {motor.k_w:.3f} | "
               f"{lo:.3f} .. {hi:.3f} | {hw:.4f} |")
         if "alpha_p" in unc:
             lo, hi, hw = unc["alpha_p"]
@@ -2191,7 +2369,7 @@ def generate_report(
                 w(f"| N = {N_alt} turns/coil | Top layer {motor.N - N_alt} fewer | "
                   f"{val:.3f} (point est.) | — |")
         w()
-        w(f"The placeholder parameters dominate (k_w +/- {unc['k_w'][2]:.4f} T, "
+        w(f"The winding/arc parameters dominate (k_w +/- {unc['k_w'][2]:.4f} T, "
           f"alpha_p +/- {unc['alpha_p'][2]:.4f} T vs psi_f +/- {unc['psi_f'][2]:.4f} T). "
           f"A direct gaussmeter B_rem measurement collapses the contour to a point and "
           f"separates magnet from winding effects.")
@@ -2369,20 +2547,18 @@ def generate_report(
     return report_path
 
 
-def main():
-    OUT.mkdir(parents=True, exist_ok=True)
-    motor = load_motor(str(TOML))
-    cg = carter_adjusted_radii(motor.geometry, motor.mu_r_pm)[:2]
-    print(f"Loaded: {motor.name}, n_p={motor.n_p}, B_rem={motor.B_rem}, alpha_p={motor.alpha_p}")
-    print(f"Geometry: r_outer={motor.geometry.r_outer*1e3:.2f}mm, "
-          f"r_stator={motor.geometry.r_stator*1e3:.2f}mm, "
-          f"r_magnet={motor.geometry.r_magnet*1e3:.2f}mm, "
-          f"r_rotor={motor.geometry.r_rotor*1e3:.2f}mm")
-    print(f"Winding: N={motor.N}, k_w={motor.k_w}, coils_series={motor.coils_series}")
+def compute_results(motor: Motor, cg: tuple[float, float]) -> dict[str, Any]:
+    """All model evaluation and measured-data analysis — no figures, no report.
+
+    Returns the results bundle consumed by render_figures and
+    generate_report. Sensitivity matches (b/a/k_match) are added by
+    render_figures (the sweep lives in plot_sensitivity).
+    """
+    r: dict[str, Any] = {}
 
     # 1. Analytical
     print("\n--- Analytical (Zhu & Howe) ---")
-    ana = run_analytical(motor)
+    ana = r["ana"] = run_analytical(motor)
     print(f"  B_g1 = {ana['B_g1']:.4f} T")
     print(f"  psi_f = {ana['psi_f']*1e3:.4f} mWb" if ana["psi_f"] else "  psi_f = N/A")
     print(f"  Back-EMF = {ana['backemf']:.4f} V" if ana["backemf"] else "  Back-EMF = N/A")
@@ -2391,33 +2567,40 @@ def main():
 
     # 2. FEM (linear)
     print("\n--- FEM (NGSolve, linear iron) ---")
-    fem = run_fem(motor, nonlinear=False)
+    fem = r["fem"] = run_fem(motor, nonlinear=False)
     print(f"  B_g1 = {fem['B_g1']:.4f} T")
     print(f"  psi_f = {fem['psi_f']*1e3:.4f} mWb")
     print(f"  Back-EMF = {fem['backemf']:.4f} V")
     print(f"  THD = {fem['thd_pct']:.2f}%")
 
-    # 2b. FEM (nonlinear) — check saturation effect
+    # 3. FEM (nonlinear) — check saturation effect
     print("\n--- FEM (NGSolve, nonlinear iron) ---")
-    fem_nl = run_fem(motor, nonlinear=True)
+    fem_nl = r["fem_nl"] = run_fem(motor, nonlinear=True)
     print(f"  B_g1 = {fem_nl['B_g1']:.4f} T")
     print(f"  psi_f = {fem_nl['psi_f']*1e3:.4f} mWb")
     print(f"  Back-EMF = {fem_nl['backemf']:.4f} V")
     print(f"  THD = {fem_nl['thd_pct']:.2f}%")
 
-    # 2c. End-effect correction (Russell-Norsworthy)
-    k_end, g_eff = compute_end_effect(motor)
-    print("\n--- End-Effect Correction (Russell-Norsworthy) ---")
-    print(f"  g_eff = {g_eff*1e3:.3f} mm, L_stk = {motor.L_stk*1e3:.1f} mm")
-    print(f"  k_end = {k_end:.4f} ({(1-k_end)*100:.1f}% reduction)")
-    fem_kend = apply_end_effect(fem, k_end, motor)
-    print(f"  FEM+k_end B_g1 = {fem_kend['B_g1']:.4f} T")
-    print(f"  FEM+k_end psi_f = {fem_kend['psi_f']*1e3:.4f} mWb")
-    print(f"  FEM+k_end Back-EMF = {fem_kend['backemf']:.4f} V")
-    fem_nl_kend = apply_end_effect(fem_nl, k_end, motor)
-    print(f"  FEM(NL)+k_end psi_f = {fem_nl_kend['psi_f']*1e3:.4f} mWb")
+    # 4. End-effect estimate — two uncalibrated candidate forms (bracket)
+    bracket = r["kend_bracket"] = compute_end_effect(motor)
+    print("\n--- End-Effect Estimate (uncalibrated two-form bracket) ---")
+    print(f"  g_eff = {bracket['g_eff']*1e3:.3f} mm, "
+          f"tau_p = {bracket['tau_p']*1e3:.3f} mm, "
+          f"L_stk = {motor.L_stk*1e3:.1f} mm")
+    print(f"  k_end (gap-scale heuristic)  = {bracket['k_end_gap']:.4f} "
+          f"({(1-bracket['k_end_gap'])*100:.1f}% reduction)")
+    print(f"  k_end (pole-pitch tanh form) = {bracket['k_end_pp']:.4f} "
+          f"({(1-bracket['k_end_pp'])*100:.1f}% reduction)")
+    # Figures use the gap-scale form where a single corrected curve is shown
+    k_end = bracket["k_end_gap"]
+    fem_kend = r["fem_kend"] = apply_end_effect(fem, k_end, motor)
+    print(f"  {FEM_KEND_LABEL} B_g1 = {fem_kend['B_g1']:.4f} T")
+    print(f"  {FEM_KEND_LABEL} psi_f = {fem_kend['psi_f']*1e3:.4f} mWb")
+    print(f"  {FEM_KEND_LABEL} Back-EMF = {fem_kend['backemf']:.4f} V")
+    fem_nl_kend = r["fem_nl_kend"] = apply_end_effect(fem_nl, k_end, motor)
+    print(f"  FEM(NL)+k_end(gap) psi_f = {fem_nl_kend['psi_f']*1e3:.4f} mWb")
 
-    # 3. Measured comparison
+    # 5. Measured comparison
     print("\n--- Measured ---")
     print(f"  psi_f = {PSI_F_MEAS*1e3:.3f} mWb")
     print(f"  Back-EMF = {V_LN_PEAK_MEAS:.4f} V")
@@ -2427,36 +2610,24 @@ def main():
         print(f"  Analytical psi_f:    {pct_delta(ana['psi_f'], PSI_F_MEAS):+.1f}%")
     print(f"  FEM (linear) psi_f:  {pct_delta(fem['psi_f'], PSI_F_MEAS):+.1f}%")
     print(f"  FEM (nonlin) psi_f:  {pct_delta(fem_nl['psi_f'], PSI_F_MEAS):+.1f}%")
-    print(f"  FEM+k_end psi_f:     {pct_delta(fem_kend['psi_f'], PSI_F_MEAS):+.1f}%")
-    print(f"  FEM(NL)+k_end psi_f: {pct_delta(fem_nl_kend['psi_f'], PSI_F_MEAS):+.1f}%")
+    print(f"  end-corrected bracket (NL): "
+          f"{pct_delta(fem_nl['psi_f'] * bracket['k_end_pp'], PSI_F_MEAS):+.1f}% .. "
+          f"{pct_delta(fem_nl['psi_f'] * bracket['k_end_gap'], PSI_F_MEAS):+.1f}%")
 
-    # 4. Plots
-    print("\nGenerating plots...")
-    plot_br_waveforms(ana, fem, motor, OUT, fem_kend=fem_kend)
-
-    # 4a. Measured harmonics (FFT extraction)
-    print("Extracting measured harmonics (80 rps)...")
-    measured_harmonics = extract_measured_harmonics(80, motor.n_p, actual_rps=79.86)
+    # 6. Measured harmonics (FFT extraction)
+    print("\nExtracting measured harmonics (80 rps)...")
+    measured_harmonics = r["measured_harmonics"] = extract_measured_harmonics(
+        80, motor.n_p, actual_rps=RPS_REF)
     if measured_harmonics:
         print(f"  THD = {measured_harmonics['thd_pct']:.2f}%")
         for k, pct in sorted(measured_harmonics["harmonics_pct"].items(), key=lambda x: int(x[0])):
             if int(k) > 1:
                 print(f"  {k}th harmonic = {pct:.2f}%")
 
-    plot_harmonics(ana, fem, motor.n_p, OUT, measured_harmonics=measured_harmonics)
-
-    # 4b. Measured overlay (requires CSV capture)
-    print("Measured waveform overlay (80 rps)...")
-    plot_measured_overlay(ana, fem, motor, OUT, fem_kend=fem_kend)
-
-    # 4c. V_peak vs speed
-    print("Amplitude vs speed plot...")
-    plot_vpeak_vs_speed(motor, OUT, carter_geo=cg, fem=fem, fem_kend=fem_kend)
-
-    # 4d. FEM alpha_p sweep (sparse points for sensitivity plot)
+    # 7. FEM alpha_p sweep (sparse points for sensitivity plot)
     print("FEM alpha_p sweep (sparse)...")
     from dataclasses import replace as _replace
-    fem_alpha_p = []
+    fem_alpha_p = r["fem_alpha_p"] = []
     for ap in np.linspace(0.45, 0.70, 7):
         m_ap = _replace(motor, alpha_p=ap)
         try:
@@ -2466,70 +2637,51 @@ def main():
         except Exception as e:
             print(f"  alpha_p={ap:.3f}: SKIP ({e})")
 
-    # 5. Sensitivity
-    print("Running sensitivity sweeps...")
-    b_match, a_match, k_match = plot_sensitivity(motor, OUT, carter_geo=cg,
-                                                  fem=fem, fem_alpha_p=fem_alpha_p,
-                                                  fem_kend=fem_kend)
-    print(f"  B_rem match: {b_match:.3f} T" if b_match else "  B_rem match: below range")
-    print(f"  alpha_p match: {a_match:.3f}" if a_match else "  alpha_p match: below range")
-    print(f"  k_w match: {k_match:.3f}" if k_match else "  k_w match: below range")
-
-    # 5. Parameter locus contours
-    print("B_rem x k_w contour...")
-    plot_brem_kw_contour(motor, OUT, carter_geo=cg, fem=fem, fem_kend=fem_kend)
-    print("k_w vs alpha_p trade-off...")
-    plot_kw_alphap_tradeoff(motor, OUT, carter_geo=cg, fem=fem, fem_kend=fem_kend)
-    triplets = compute_parameter_triplets(motor, PSI_F_MEAS, carter_geo=cg)
+    # 8. Parameter triplets (consumed by waterfall figure + report)
+    triplets = r["triplets"] = compute_parameter_triplets(motor, PSI_F_MEAS, carter_geo=cg)
     for row in triplets:
         kw_str = f"{row['k_w']:.3f}" if row['k_w'] else "> 1.0"
         ap_str = f"{row['alpha_p']:.3f}" if row['alpha_p'] else "> nom"
         print(f"  {row['grade']}: k_w={kw_str}, alpha_p={ap_str}")
 
-    print("Waterfall decomposition...")
-    plot_waterfall(motor, triplets, OUT, carter_geo=cg)
-
-    print("Grade error budget (N48/N50/N52)...")
-    plot_grade_error_budget(motor, OUT, carter_geo=cg)
-
-    print("k_w x alpha_p heatmap...")
-    plot_kw_alphap_heatmap(motor, OUT, carter_geo=cg, fem=fem, fem_kend=fem_kend)
-
-    # 5a. Measurement uncertainty
+    # 9. Measurement uncertainty
     print("\nMeasurement uncertainty...")
-    meas_unc = compute_measurement_uncertainty()
+    meas_unc = r["meas_unc"] = compute_measurement_uncertainty()
     if meas_unc:
         print(f"  Ke = {meas_unc['ke_mean']*1e3:.3f} +/- {meas_unc['ke_std']*1e3:.3f} mV/(rad/s) "
               f"({meas_unc['ke_rel_pct']:.1f}%)")
         print(f"  psi_f = {meas_unc['psi_f_mean']*1e3:.3f} +/- {meas_unc['psi_f_std']*1e3:.3f} mWb")
 
-    # 5b. Effective B_rem back-calculation
+    # 10. Effective B_rem back-calculation
     print("\nEffective B_rem back-calculation...")
-    b_rem_result = compute_effective_B_rem(motor, PSI_F_MEAS, meas_unc=meas_unc, carter_geo=cg)
-    print(f"  Effective B_rem = {b_rem_result['B_rem_eff']:.3f} +/- {b_rem_result['rss']:.3f} T "
-          f"({b_rem_result['grade_lo']}..{b_rem_result['grade_hi']})")
+    b_rem_result = r["b_rem_result"] = compute_effective_B_rem(
+        motor, PSI_F_MEAS, meas_unc=meas_unc, carter_geo=cg)
+    print(f"  Effective B_rem = {b_rem_result['B_rem_eff']:.3f} T, "
+          f"indicative range +/- {b_rem_result['rss']:.3f} "
+          f"({b_rem_result['grade_lo']}..{b_rem_result['grade_hi']}; "
+          f"systematic perturbations in quadrature)")
 
-    # 5c. Phase balance analysis
+    # 11. Phase balance analysis
     print("\nPhase balance analysis (80 rps)...")
-    balance_result = analyze_phase_balance(80, motor.n_p, actual_rps=79.86)
+    balance_result = r["balance_result"] = analyze_phase_balance(
+        80, motor.n_p, actual_rps=RPS_REF)
     if balance_result:
         for pair, angle in balance_result["angles"].items():
             print(f"  {pair}: {angle:.1f} deg (delta {angle - 120:+.1f})")
-        plot_phase_phasors(balance_result, OUT)
 
-    # 5d. Phase balance across speeds (start at 40 rps: 20/30 give too few
+    # 12. Phase balance across speeds (start at 40 rps: 20/30 give too few
     # crossings for reliable results; no 10 rps capture exists — motor not spinning)
     print("Phase balance across speeds...")
-    sweep_speeds = [(40, 39.58), (50, 50.0), (60, 59.72), (80, 79.86), (100, 100.0), (120, 120.14)]
+    sweep_speeds = [(40, 39.58), (50, 50.0), (60, 59.72), (80, RPS_REF), (100, 100.0), (120, 120.14)]
     for cmd, actual in sweep_speeds:
         bal = analyze_phase_balance(cmd, motor.n_p, actual)
         if bal and bal["angles"]:
             avg_angle = np.mean(list(bal["angles"].values()))
             print(f"  {cmd} rps: avg angle = {avg_angle:.1f} deg")
 
-    # 6. Drive sim with calibrated psi_f
+    # 13. Drive sim with calibrated psi_f
     print("\nDrive simulation (calibrated vs uncalibrated)...")
-    drive_sim_result = run_calibrated_drive_sim(motor, PSI_F_MEAS)
+    drive_sim_result = r["drive_sim_result"] = run_calibrated_drive_sim(motor, PSI_F_MEAS)
     for label in ("uncalibrated", "calibrated"):
         entry = drive_sim_result.get(label, {})
         if "error" in entry:
@@ -2540,18 +2692,96 @@ def main():
             print(f"  {label}: psi_f={entry['psi_f']*1e3:.3f} mWb, "
                   f"{tau_key}={m.get(tau_key, 0):.4f} Nm")
 
+    return r
+
+
+def render_figures(motor: Motor, cg: tuple[float, float], r: dict[str, Any]) -> None:
+    """All figures. Adds the sensitivity matches (b/a/k_match) to ``r`` —
+    the sweep itself lives in plot_sensitivity."""
+    ana, fem, fem_kend = r["ana"], r["fem"], r["fem_kend"]
+
+    print("\nGenerating plots...")
+    plot_br_waveforms(ana, fem, motor, OUT, fem_kend=fem_kend)
+    plot_harmonics(ana, fem, motor, OUT, measured_harmonics=r["measured_harmonics"])
+
+    print("Measured waveform overlay (80 rps)...")
+    plot_measured_overlay(ana, fem, motor, OUT, fem_kend=fem_kend)
+
+    print("Amplitude vs speed plot...")
+    plot_vpeak_vs_speed(motor, OUT, carter_geo=cg, fem=fem, fem_kend=fem_kend)
+
+    print("Running sensitivity sweeps...")
+    b_match, a_match, k_match = plot_sensitivity(motor, OUT, carter_geo=cg,
+                                                  fem=fem, fem_alpha_p=r["fem_alpha_p"],
+                                                  fem_kend=fem_kend)
+    r["b_match"], r["a_match"], r["k_match"] = b_match, a_match, k_match
+    print(f"  B_rem match: {b_match:.3f} T" if b_match else "  B_rem match: below range")
+    print(f"  alpha_p match: {a_match:.3f}" if a_match else "  alpha_p match: below range")
+    print(f"  k_w match: {k_match:.3f}" if k_match else "  k_w match: below range")
+
+    print("B_rem x k_w contour...")
+    plot_brem_kw_contour(motor, OUT, carter_geo=cg, fem=fem, fem_kend=fem_kend)
+    print("k_w vs alpha_p trade-off...")
+    plot_kw_alphap_tradeoff(motor, OUT, carter_geo=cg, fem=fem, fem_kend=fem_kend)
+
+    print("Waterfall decomposition...")
+    plot_waterfall(motor, r["triplets"], OUT, carter_geo=cg)
+
+    print("Grade error budget (N48/N50/N52)...")
+    plot_grade_error_budget(motor, OUT, carter_geo=cg)
+
+    print("k_w x alpha_p heatmap...")
+    plot_kw_alphap_heatmap(motor, OUT, carter_geo=cg, fem=fem, fem_kend=fem_kend)
+
+    if r["balance_result"]:
+        plot_phase_phasors(r["balance_result"], OUT)
+
     print("Drive sim transient figure...")
     plot_drive_sim_transient(motor, PSI_F_MEAS, OUT)
 
-    # 7. Report
+
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+    import pickle
+
+    parser = argparse.ArgumentParser(
+        description="Back-EMF validation: models vs measured (steel actuator)")
+    parser.add_argument("--report-only", action="store_true",
+                        help="regenerate report.md from the saved results bundle "
+                             "(no solves, no figures) — for prose iteration")
+    args = parser.parse_args(argv)
+
+    check_measured_scalars()
+    OUT.mkdir(parents=True, exist_ok=True)
+    motor = load_motor(str(TOML))
+    cg = carter_adjusted_radii(motor.geometry, motor.mu_r_pm)[:2]
+    bundle_path = OUT / "results_bundle.pkl"
+
+    if args.report_only:
+        if not bundle_path.exists():
+            sys.exit(f"No results bundle at {bundle_path}; run without "
+                     "--report-only first")
+        r = pickle.loads(bundle_path.read_bytes())
+    else:
+        print(f"Loaded: {motor.name}, n_p={motor.n_p}, B_rem={motor.B_rem}, alpha_p={motor.alpha_p}")
+        print(f"Geometry: r_outer={motor.geometry.r_outer*1e3:.2f}mm, "
+              f"r_stator={motor.geometry.r_stator*1e3:.2f}mm, "
+              f"r_magnet={motor.geometry.r_magnet*1e3:.2f}mm, "
+              f"r_rotor={motor.geometry.r_rotor*1e3:.2f}mm")
+        print(f"Winding: N={motor.N}, k_w={motor.k_w}, coils_series={motor.coils_series}")
+        r = compute_results(motor, cg)
+        render_figures(motor, cg, r)
+        bundle_path.write_bytes(pickle.dumps(r))
+
     print("\nWriting report...")
-    report_path = generate_report(ana, fem, b_match, a_match, k_match, motor, OUT,
-                                  fem_nl=fem_nl, b_rem_result=b_rem_result,
-                                  measured_harmonics=measured_harmonics,
-                                  balance_result=balance_result,
-                                  drive_sim_result=drive_sim_result,
-                                  meas_unc=meas_unc, triplets=triplets,
-                                  fem_kend=fem_kend, fem_nl_kend=fem_nl_kend)
+    report_path = generate_report(r["ana"], r["fem"], r["b_match"], r["a_match"],
+                                  r["k_match"], motor, OUT,
+                                  fem_nl=r["fem_nl"], b_rem_result=r["b_rem_result"],
+                                  measured_harmonics=r["measured_harmonics"],
+                                  balance_result=r["balance_result"],
+                                  drive_sim_result=r["drive_sim_result"],
+                                  meas_unc=r["meas_unc"], triplets=r["triplets"],
+                                  kend_bracket=r.get("kend_bracket"))
     print(f"Report: {report_path}")
 
 

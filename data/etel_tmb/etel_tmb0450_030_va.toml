@@ -1,0 +1,78 @@
+# ETEL TMB+0450-030 (winding VA) — direct-drive conventional torque motor
+# 88-pole reverse-salient PMSM (L_d > L_q, saliency L_q/L_d = 0.822 — the
+# strongest reverse saliency in the family), water-cooled.
+# Source (single manufacturer datasheet, all values on one page):
+#   ETEL S.A., "CONVENTIONAL TORQUE MOTOR TMB+0450-030", 07.01.2019,
+#   doc code Y2gH-FABw-GRIA-QCEC, column "VA - WATER COOLING"
+#   https://www.etel.ch/wp-content/uploads/TMB0450-030.pdf
+#
+# Datasheet footnote (*): Ku, R20, Ld/Lq are terminal-to-terminal (line-line);
+# per-phase (wye) = value / 2 for R and L. psi_f is DERIVED from the back-EMF
+# constant Ku (magnet-only — no reluctance double-count, unlike deriving from
+# Kt): psi_f = sqrt(2)·Ku / (sqrt(3)·n_p) = sqrt(2)·23.7 / (sqrt(3)·44).
+# Two independent datasheet cross-checks of that derivation + conventions:
+#   Isc: psi_f/L_d = 11.34 A_peak = 8.02 A_rms vs datasheet Isc 8.02 (-0.06%)
+#   Kt:  model k_T_effective at Ic = 42.4 Nm/A_rms vs datasheet Kt 41.1 (+3.2%
+#        — largest reluctance share in the family (gamma = -13.7 deg at Ic);
+#        the drift direction/magnitude is pinned in tests)
+
+[motor]
+name = "ETEL TMB+0450-030 VA torque motor"
+type = "reverse-salient PMSM (direct-drive torque motor)"
+
+[circuit]
+n_p = 44               # 2p = 88 poles (datasheet)
+R_s = 3.98             # Ohm per-phase at 20 C (datasheet R20 = 7.96 terminal-to-terminal)
+L_d = 0.0388           # H per-phase (datasheet Ld 77.6 mH line-line); L_d > L_q
+L_q = 0.0319           # H per-phase (datasheet Lq 63.8 mH line-line)
+psi_f = 0.439795       # Wb, peak per-phase — derived from Ku (see header)
+I_rated_rms = 12.0     # A rms continuous (datasheet Ic, water cooling)
+
+[drive]
+U_DC = 600.0           # V (datasheet Udc nominal DC bus)
+MAX_I_S = 61.942       # A peak = sqrt(2)·43.8 A_rms (datasheet Ip)
+W_REF = 8.59712        # rad/s = 2·pi·82.1/60 (datasheet nn rated speed)
+
+[thermal]
+winding_temp_limit = 130.0   # C (datasheet θmax maximum coil temperature)
+ambient_temp = 20.0          # C (datasheet θamb; = inlet water temp θw)
+r_th = 0.0433                # K/W (datasheet Rth, coil to cooling reference)
+thermal_time_constant = 135.0  # s (datasheet τth — enables the transient march)
+
+[rated]
+torque_Nm = 375.0      # datasheet Tc continuous torque @ Ic (water cooling)
+speed_rpm = 82.1       # datasheet nn rated speed (Tn = 344 Nm / In = 11.4 A_rms there)
+
+[provenance]
+source = "ETEL TMB+0450-030 datasheet 07.01.2019 (Y2gH-FABw-GRIA-QCEC), winding VA"
+url = "https://www.etel.ch/wp-content/uploads/TMB0450-030.pdf"
+motor_model = "ETEL TMB+0450-030 VA (conventional torque motor, water-cooled)"
+duty = "S1 continuous at Ic/Tc with water cooling (inlet 20 C, dT_w 5 K, 7.7 l/min); Di = 40%, Dp = 5% intermittent/peak zones"
+thermal_time_constant_s = 135.0  # datasheet τth
+P_c_dissipation_W = 2460.0       # datasheet Pc, power dissipation @ Ic
+I_sc_Arms = 8.02                 # datasheet Isc max short-circuit current
+# Torque-speed envelope points (REQ-0814 anchor class; speeds in rpm):
+envelope_In_Arms = 11.4          # datasheet In rated current
+envelope_nb_rpm = 97.1           # datasheet nb base speed (at In; see notes)
+envelope_nm_rpm = 167.0          # datasheet nm max speed without flux weakening
+envelope_Tn_Nm = 344.0           # datasheet Tn rated torque
+notes = """
+Largest TMB frame, 88-pole, most saturated rating in the family
+(Tc / (Kt·Ic) = 0.76) and strongest reverse saliency (L_q/L_d = 0.822).
+Water-cooled thermal_resistance-path anchor: copper loss at Ic with
+R_s(130 C) = 2463 W vs published Pc = 2460 W (+0.1%), vs the dT/r_th
+budget = 2540 W (0.97).
+Torque-speed envelope anchor (REQ-0814): nb = 97.1 rpm, nm = 167 rpm;
+model base_speed at In = 86.1 rpm (-11.3% — the family's largest nb miss,
+consistent with its saturation level: the linear L_d overstates the
+voltage drop), zero-current limit 170.9 rpm (+2.4%, right in the family's
+systematic +2.0..2.4% band). nb,i / nb,p deliberately NOT anchored
+(saturated-inductance regime; nb,p even flips sign of the error, +3.9%).
+Deliberately NOT in _NAMEPLATE_ANCHORS (water-cooled, thermal_resistance
+budget path — see the TMB+0210 notes).
+Saturation note: Kt at peak current collapses (Tp/Ip = 16.4 vs Kt 41.1
+Nm/A_rms — Tp is only 1.9x Tc at 3.65x Ic), so linear-magnetics results
+above Ic are upper bounds by a wide margin here (tau_stall/Tp = 3.2).
+Eligible for: rated_torque, stall_torque, thermal_duty (thermal_resistance
+path), torque_speed (nb/nm points at In and no-load only).
+"""

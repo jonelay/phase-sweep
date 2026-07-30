@@ -5,10 +5,11 @@
 # hard-coding a number.
 
 [picard]
-# Backtracking can pin relax at its floor (0.025) after a saturation
-# transient; deeply saturated motors then need ~75 iterations (S112).
+# Relax recovers (x1.5/iter, capped at `relaxation`) after divergence
+# damping, so a saturation transient no longer pins it at the floor (0.02).
+# Headroom kept for deeper saturation (planned per-region materials).
 max_iterations = 200      # Picard fixed-point iterations (nonlinear FEM)
-tolerance      = 0.01     # convergence residual threshold
+tolerance      = 0.01     # raw (unrelaxed) max-norm nu step, relative
 relaxation     = 0.2      # under-relaxation factor (0 < relax <= 1)
 
 [slots]

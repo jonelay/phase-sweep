@@ -1,0 +1,127 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<mxfile host="app.diagrams.net">
+  <diagram name="pipeline-spine" id="ps1">
+    <mxGraphModel grid="1" gridSize="10" page="1" pageWidth="1900" pageHeight="700">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="toml" value="&lt;span style=&quot;font-size:14px&quot;&gt;&lt;b&gt;motors/*.toml&lt;/b&gt;&lt;/span&gt;&lt;br&gt;[circuit] [geometry]&lt;br&gt;[winding] [materials] [drive]&lt;br&gt;&lt;font color=&quot;#616161&quot;&gt;&lt;i&gt;only name, n_p, radii required&lt;/i&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eceff1;strokeColor=#78909c;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="300" width="170" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="motor" value="&lt;span style=&quot;font-size:14px&quot;&gt;&lt;b&gt;Motor &lt;font style=&quot;font-size:11px&quot;&gt;(frozen)&lt;/font&gt;&lt;/b&gt;&lt;/span&gt;&lt;br&gt;&amp;ldquo;what the machine is&amp;rdquo;&lt;br&gt;Geometry + optional&lt;br&gt;electrical / winding / thermal" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e3f2fd;strokeColor=#37474f;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="330" y="300" width="190" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="runconfig" value="&lt;span style=&quot;font-size:14px&quot;&gt;&lt;b&gt;RunConfig&lt;/b&gt;&lt;/span&gt;&lt;br&gt;&amp;ldquo;how to run the analysis&amp;rdquo;&lt;br&gt;Motor + model key&lt;br&gt;+ solver params" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e3f2fd;strokeColor=#37474f;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="580" y="300" width="190" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="params" value="&lt;span style=&quot;font-size:14px&quot;&gt;&lt;b&gt;prepare_*() &amp;rarr; *Params&lt;/b&gt;&lt;/span&gt;&lt;br&gt;solver boundary: validate&lt;br&gt;completeness, derive&lt;br&gt;&amp;psi;f &amp;harr; B_rem (9 dataclasses)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e1;strokeColor=#f57f17;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="850" y="300" width="200" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="modelfn" value="&lt;span style=&quot;font-size:14px&quot;&gt;&lt;b&gt;model fn&lt;/b&gt;&lt;/span&gt;&lt;br&gt;RunConfig &amp;rarr; metrics dict&lt;br&gt;(the model&amp;rsquo;s &lt;i&gt;produces&lt;/i&gt; set)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e1;strokeColor=#f57f17;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="300" width="190" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="store" value="&lt;span style=&quot;font-size:14px&quot;&gt;&lt;b&gt;ResultStore&lt;/b&gt;&lt;/span&gt;&lt;br&gt;every record:&lt;br&gt;motor_config_id &amp;middot; model &amp;middot; source" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#e65100;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1420" y="300" width="180" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="registry" value="&lt;span style=&quot;font-size:14px&quot;&gt;&lt;b&gt;MODEL_REGISTRY&lt;/b&gt;&lt;/span&gt; &amp;mdash; plain dict of ModelInfo (no plugin system)&lt;br&gt;computed: analytical &amp;middot; fem &amp;middot; drive_sim &amp;middot; rated_torque &amp;middot; stall_torque &amp;middot; thermal_duty &amp;middot; torque_speed &amp;middot; iron_loss &amp;middot; demag_screen&lt;br&gt;&lt;font color=&quot;#616161&quot;&gt;measured sources: backemf_capture &amp;middot; inductance_test &amp;middot; resistance_test &amp;middot; torque_test &amp;middot; airgap_flux_test &amp;middot; iron_loss_test&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e1;strokeColor=#f57f17;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="620" y="80" width="700" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="measured" value="&lt;span style=&quot;font-size:14px&quot;&gt;&lt;b&gt;measured / published datasets&lt;/b&gt;&lt;/span&gt;&lt;br&gt;JSON import schema&lt;br&gt;(MeasuredResult + conditions,&lt;br&gt;tolerances, curve/bound/key specs)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#2e7d32;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="520" y="540" width="240" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="crossval" value="&lt;span style=&quot;font-size:14px&quot;&gt;&lt;b&gt;cross-validation&lt;/b&gt;&lt;/span&gt;&lt;br&gt;surface = produces &amp;cap; produces&lt;br&gt;&lt;font color=&quot;#616161&quot;&gt;(derived from the registry)&lt;/font&gt;&lt;br&gt;deltas computed on request, never stored" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e5f5;strokeColor=#7b1fa2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1390" y="540" width="240" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="server" value="&lt;span style=&quot;font-size:14px&quot;&gt;&lt;b&gt;server &lt;font style=&quot;font-size:11px&quot;&gt;(FastAPI)&lt;/font&gt;&lt;/b&gt;&lt;/span&gt;&lt;br&gt;REST: jobs / results /&lt;br&gt;configs / measured&lt;br&gt;+ WebSocket" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f7fa;strokeColor=#00838f;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1720" y="180" width="170" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="dashboard" value="&lt;span style=&quot;font-size:14px&quot;&gt;&lt;b&gt;dashboard&lt;/b&gt;&lt;/span&gt;&lt;br&gt;no-build-step JS panels&lt;br&gt;auto-discover models&lt;br&gt;via &lt;i&gt;produces&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f7fa;strokeColor=#00838f;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1720" y="340" width="170" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="cli" value="&lt;span style=&quot;font-size:14px&quot;&gt;&lt;b&gt;CLI&lt;/b&gt;&lt;/span&gt;&lt;br&gt;phasesweep-crossval&lt;br&gt;phasesweep-import&lt;br&gt;calibrate loop" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f7fa;strokeColor=#00838f;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1720" y="500" width="170" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" value="load_motor()&lt;br&gt;validate at boundary" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#37474f;fontSize=10;" edge="1" parent="1" source="toml" target="motor">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="compose" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#37474f;fontSize=10;" edge="1" parent="1" source="motor" target="runconfig">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#37474f;fontSize=10;" edge="1" parent="1" source="runconfig" target="params">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#37474f;fontSize=10;" edge="1" parent="1" source="params" target="modelfn">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" value="metrics" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#37474f;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="modelfn" target="store">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" value="dispatch: fn &amp;middot; validate &amp;middot;&lt;br&gt;hash_fields &amp;middot; produces" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#f57f17;fontSize=10;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="registry" target="modelfn">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" value="import: CLI / REST&lt;br&gt;source=measured|published" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#2e7d32;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.8;entryDx=0;entryDy=0;" edge="1" parent="1" source="measured" target="store">
+          <mxGeometry relative="1" as="geometry" x="-0.7">
+            <Array as="points">
+              <mxPoint x="1360" y="590" />
+              <mxPoint x="1360" y="380" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#7b1fa2;fontSize=10;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="store" target="crossval">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" value="" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#00838f;fontSize=10;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="store" target="server">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#00838f;fontSize=10;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="server" target="dashboard">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" value="" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#00838f;fontSize=10;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="store" target="cli">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="keysw0" value="" style="rounded=1;fillColor=#eceff1;strokeColor=#78909c;" vertex="1" parent="1">
+          <mxGeometry x="40" y="548" width="26" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="key0" value="&lt;font color=&quot;#616161&quot;&gt;config files&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="72" y="545" width="150" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="keysw1" value="" style="rounded=1;fillColor=#e3f2fd;strokeColor=#37474f;" vertex="1" parent="1">
+          <mxGeometry x="40" y="574" width="26" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="key1" value="&lt;font color=&quot;#616161&quot;&gt;core data objects&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="72" y="571" width="150" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="keysw2" value="" style="rounded=1;fillColor=#fff8e1;strokeColor=#f57f17;" vertex="1" parent="1">
+          <mxGeometry x="40" y="600" width="26" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="key2" value="&lt;font color=&quot;#616161&quot;&gt;registry + models&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="72" y="597" width="150" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="keysw3" value="" style="rounded=1;fillColor=#fff3e0;strokeColor=#e65100;" vertex="1" parent="1">
+          <mxGeometry x="40" y="626" width="26" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="key3" value="&lt;font color=&quot;#616161&quot;&gt;result store&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="72" y="623" width="150" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="keysw4" value="" style="rounded=1;fillColor=#e8f5e9;strokeColor=#2e7d32;" vertex="1" parent="1">
+          <mxGeometry x="220" y="548" width="26" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="key4" value="&lt;font color=&quot;#616161&quot;&gt;measured data&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="252" y="545" width="150" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="keysw5" value="" style="rounded=1;fillColor=#f3e5f5;strokeColor=#7b1fa2;" vertex="1" parent="1">
+          <mxGeometry x="220" y="574" width="26" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="key5" value="&lt;font color=&quot;#616161&quot;&gt;cross-validation&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="252" y="571" width="150" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="keysw6" value="" style="rounded=1;fillColor=#e0f7fa;strokeColor=#00838f;" vertex="1" parent="1">
+          <mxGeometry x="220" y="600" width="26" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="key6" value="&lt;font color=&quot;#616161&quot;&gt;consumers&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="252" y="597" width="150" height="20" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

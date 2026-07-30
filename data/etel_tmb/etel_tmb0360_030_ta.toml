@@ -1,0 +1,66 @@
+# ETEL TMB+0360-030 (winding TA) — direct-drive conventional torque motor
+# 66-pole reverse-salient PMSM (L_d > L_q, saliency L_q/L_d = 0.888), water-cooled.
+# Source (single manufacturer datasheet, all values on one page):
+#   ETEL S.A., "CONVENTIONAL TORQUE MOTOR TMB+0360-030", 07.01.2019,
+#   doc code Y2gH-FABp-GRIA-QCEC, column "TA - WATER COOLING"
+#   https://www.etel.ch/wp-content/uploads/TMB0360-030.pdf
+#
+# Datasheet footnote (*): Ku, R20, Ld/Lq are terminal-to-terminal (line-line);
+# per-phase (wye) = value / 2 for R and L. psi_f is DERIVED from the back-EMF
+# constant Ku (magnet-only — no reluctance double-count, unlike deriving from
+# Kt): psi_f = sqrt(2)·Ku / (sqrt(3)·n_p) = sqrt(2)·18.8 / (sqrt(3)·33).
+# Two independent datasheet cross-checks of that derivation + conventions:
+#   Isc: psi_f/L_d = 9.397 A_peak = 6.645 A_rms vs datasheet Isc 6.65 (-0.08%)
+#   Kt:  model k_T_effective at Ic = 32.91 Nm/A_rms vs datasheet Kt 32.6 (+1.0%)
+
+[motor]
+name = "ETEL TMB+0360-030 TA torque motor"
+type = "reverse-salient PMSM (direct-drive torque motor)"
+
+[circuit]
+n_p = 33               # 2p = 66 poles (datasheet)
+R_s = 6.05             # Ohm per-phase at 20 C (datasheet R20 = 12.1 terminal-to-terminal)
+L_d = 0.0495           # H per-phase (datasheet Ld 99.0 mH line-line); L_d > L_q
+L_q = 0.04395          # H per-phase (datasheet Lq 87.9 mH line-line)
+psi_f = 0.465156       # Wb, peak per-phase — derived from Ku (see header)
+I_rated_rms = 8.75     # A rms continuous (datasheet Ic, water cooling)
+
+[drive]
+U_DC = 600.0           # V (datasheet Udc nominal DC bus)
+MAX_I_S = 35.780       # A peak = sqrt(2)·25.3 A_rms (datasheet Ip)
+W_REF = 10.409         # rad/s = 2·pi·99.4/60 (datasheet nn rated speed)
+
+[thermal]
+winding_temp_limit = 130.0   # C (datasheet θmax maximum coil temperature)
+ambient_temp = 20.0          # C (datasheet θamb; = inlet water temp θw)
+r_th = 0.0537                # K/W (datasheet Rth, coil to cooling reference)
+thermal_time_constant = 93.8  # s (datasheet τth — enables the transient march)
+
+[rated]
+torque_Nm = 231.0      # datasheet Tc continuous torque @ Ic (water cooling)
+speed_rpm = 99.4       # datasheet nn rated speed (Tn = 216 Nm / In = 8.54 A_rms there)
+
+[provenance]
+source = "ETEL TMB+0360-030 datasheet 07.01.2019 (Y2gH-FABp-GRIA-QCEC), winding TA"
+url = "https://www.etel.ch/wp-content/uploads/TMB0360-030.pdf"
+motor_model = "ETEL TMB+0360-030 TA (conventional torque motor, water-cooled)"
+duty = "S1 continuous at Ic/Tc with water cooling (inlet 20 C, dT_w 5 K); Di = 40%, Dp = 5% intermittent/peak zones"
+thermal_time_constant_s = 93.8   # datasheet τth
+P_c_dissipation_W = 1980.0       # datasheet Pc, power dissipation @ Ic
+I_sc_Arms = 6.65                 # datasheet Isc max short-circuit current
+# Torque-speed envelope points (REQ-0814 anchor class; speeds in rpm):
+envelope_In_Arms = 8.54          # datasheet In rated current
+envelope_nb_rpm = 119.0          # datasheet nb base speed (at In)
+envelope_nm_rpm = 211.0          # datasheet nm max speed without flux weakening
+envelope_Tn_Nm = 216.0           # datasheet Tn rated torque
+notes = """
+Second reverse-salient / thermal_resistance-path anchor (see the TMB+0210-030
+TA header for the anchor rationale). Copper loss at Ic with R_s(130 C) =
+1990 W vs published Pc = 1980 W (+0.5%), vs the dT/r_th budget = 2048 W
+(0.97). Different frame size, pole count (66 vs 44) and winding — the
+loss/budget agreement repeating across frames is the point.
+Saturation is heavier on this frame: Tc / (Kt·Ic) = 0.81 and Tp/Ip = 17.4 vs
+Kt 32.6 Nm/A_rms, so the torque-based duty check at Tc reads 0.63 (MTPA
+optimism + saturation) — documented, not a model target.
+Eligible for: rated_torque, stall_torque, thermal_duty (thermal_resistance path).
+"""

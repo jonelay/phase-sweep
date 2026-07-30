@@ -18,8 +18,8 @@ import numpy as np
 import pytest
 
 from phasesweep.configs import load_motor
-from phasesweep.solver_params import _derive_psi_f, prepare_drive_sim
-from tests.conftest import REPO_ROOT
+from phasesweep.solver_params import derive_psi_f_smooth, prepare_drive_sim
+from tests.conftest import CAPTURES_SKIP, REPO_ROOT
 
 MOTOR_TOML = REPO_ROOT / "motors/actuator_steel_rotor.toml"
 SWEEP_JSON = REPO_ROOT / "data/actuator_steel_rotor/backemf_speed_sweep.json"
@@ -54,62 +54,51 @@ def speed_points(sweep_data):
 class TestActuatorSpeedSweep:
 
     def test_predicted_vpeak_at_each_speed(self, motor, speed_points):
-        """Model-predicted V_peak over-predicts by 30-50% at every speed.
+        """Model-predicted V_peak over-predicts by 20-40% at every speed.
 
-        The raw 2D model gap is +42% (square-wave convention, S110): no
-        end effects (k_end ≈ 0.84 for this 7 mm stack), datasheet
-        B_rem = 1.45 T (N52 nominal, grade unmeasured), nominal alpha_p
-        and k_w. This test pins the raw gap so convention/regression
-        drift is visible; the k_end-corrected expectation is Tier-0
-        below. Will tighten after gaussmeter measurement provides true
-        B_rem.
+        The raw 2D smooth-bore gap is +30% (square-wave convention,
+        k_w = 0.866 ideal 9s/12p): no end effects (k_end ≈ 0.84 for
+        this 7 mm stack), datasheet B_rem = 1.45 T (N52 nominal, grade
+        unmeasured), nominal alpha_p. This test pins the raw gap so
+        convention/regression drift is visible; the k_end-corrected
+        expectation is Tier-0 below. Will tighten after gaussmeter
+        measurement provides true B_rem.
         """
-        psi_f = _derive_psi_f(motor)
+        psi_f = derive_psi_f_smooth(motor)
         assert psi_f is not None
         Ke_pred = psi_f * motor.n_p
 
         for omega, v_meas in speed_points:
             v_pred = Ke_pred * omega
             err_pct = (v_pred - v_meas) / v_meas * 100
-            assert 30.0 < err_pct < 50.0, (
+            assert 20.0 < err_pct < 40.0, (
                 f"At ω={omega:.1f} rad/s: predicted {v_pred*1e3:.1f} mV "
                 f"vs measured {v_meas*1e3:.1f} mV ({err_pct:+.1f}% "
-                f"outside [30%, 50%])"
+                f"outside [20%, 40%])"
             )
 
-    def test_predicted_ke_direction(self, motor):
-        """Model Ke should over-predict (2D model, no end effects)."""
-        psi_f = _derive_psi_f(motor)
-        Ke_pred = psi_f * motor.n_p
-        assert Ke_pred > KE_MEASURED, (
-            f"Expected over-prediction but Ke_pred={Ke_pred*1e3:.3f} < "
-            f"Ke_meas={KE_MEASURED*1e3:.3f} mV/(rad/s)"
-        )
-
-    def test_predicted_ke_not_wildly_off(self, motor):
-        """Model Ke within 50% of measured (sanity bound, raw 2D model)."""
-        psi_f = _derive_psi_f(motor)
-        Ke_pred = psi_f * motor.n_p
-        err_pct = abs(Ke_pred - KE_MEASURED) / KE_MEASURED * 100
-        assert err_pct < 50.0, f"Ke delta {err_pct:.1f}% exceeds 50% sanity bound"
+    # The over-prediction direction and the "within 50%" sanity
+    # bound were separate tests, both strictly implied by the [20%, 40%] band
+    # above — three tests, one scalar, one real constraint. Dropped.
 
     def test_ke_with_end_effect_correction(self, motor):
-        """Tier-0: k_end-corrected Ke lands within [8%, 25%] of measured.
+        """Tier-0: k_end-corrected Ke lands within [3%, 18%] of measured.
 
         Russell-Norsworthy k_end ≈ 0.841 for L_stk = 7 mm brings the raw
-        +42% gap to ≈ +19%. Informational tier — k_end is uncalibrated
-        (no 3D validation yet) and is NOT applied to production psi_f;
-        the residual absorbs magnet grade, effective alpha_p, and k_w.
+        +30% gap (k_w = 0.866) to ≈ +9%. Informational tier — k_end
+        is uncalibrated (no 3D validation yet) and is NOT applied to
+        production psi_f; the residual absorbs magnet grade, effective
+        alpha_p, and the magnetization profile.
         """
-        from phasesweep.fem_field import end_effect_factor
-        psi_f = _derive_psi_f(motor)
+        from phasesweep.analytical import end_effect_factor
+        psi_f = derive_psi_f_smooth(motor)
         g = motor.geometry
         g_eff = abs(g.r_stator - g.r_magnet) + abs(g.r_magnet - g.r_rotor) / motor.mu_r_pm
         k_end = end_effect_factor(motor.L_stk, g_eff)
         Ke_corr = psi_f * k_end * motor.n_p
         delta_pct = (Ke_corr - KE_MEASURED) / KE_MEASURED * 100
-        assert 8.0 < delta_pct < 25.0, (
-            f"k_end-corrected Ke delta {delta_pct:+.1f}% outside [8%, 25%]"
+        assert 3.0 < delta_pct < 18.0, (
+            f"k_end-corrected Ke delta {delta_pct:+.1f}% outside [3%, 18%]"
         )
 
     def test_measured_linearity(self, speed_points):
@@ -156,17 +145,20 @@ class TestActuatorSpeedSweep:
         Not a pass/fail — just records the current model-vs-measured delta
         so regressions are visible in test output.
         """
-        psi_f = _derive_psi_f(motor)
+        psi_f = derive_psi_f_smooth(motor)
         Ke_pred = psi_f * motor.n_p
         delta_pct = (Ke_pred - KE_MEASURED) / KE_MEASURED * 100
-        # Current expected: +41.9% (raw 2D, square-wave convention, S110).
-        # Alert if it changes significantly.
-        assert 30.0 < delta_pct < 48.0, (
-            f"Model over-prediction {delta_pct:.1f}% outside expected [30%, 48%] band"
+        # Current expected: +30.0% (raw 2D smooth-bore, square-wave
+        # convention, k_w = 0.866). Alert if it changes.
+        assert 24.0 < delta_pct < 36.0, (
+            f"Model over-prediction {delta_pct:.1f}% outside expected [24%, 36%] band"
         )
 
 
-# Import script functions — optional, tests skip if unavailable. The path
+# Import script functions. scripts/ ships with the repo and the sdist, so a
+# failure here is a real breakage — the former try/except ImportError
+# silently retired 10 of this file's 19 tests (effective-B_rem, measured
+# harmonics, phase balance) with the run still reporting success. The path
 # entry is removed after import so it can't leak into later test modules.
 _scripts_dir = str(REPO_ROOT / "scripts")
 sys.path.insert(0, _scripts_dir)
@@ -178,28 +170,22 @@ try:
         find_matching_value,
         run_calibrated_drive_sim,
     )
-    _HAS_BACKEMF = True
-except ImportError:
-    _HAS_BACKEMF = False
 finally:
     sys.path.remove(_scripts_dir)
 
-_skip_no_script = pytest.mark.skipif(
-    not _HAS_BACKEMF, reason="backemf_validation script not available"
-)
 
-
-@_skip_no_script
 class TestEffectiveBrem:
 
     def test_effective_B_rem_range(self, motor):
-        """Effective B_rem under the square-wave convention is diagnostic, not a
-        grade: it sits below any sintered NdFeB grade (N30 ~ 1.08 T), absorbing
-        the real magnetization profile, 3D leakage, and winding-parameter error.
-        Smooth-bore inversion gives ~1.02 T (Carter-consistent: ~1.04 T)."""
+        """Effective B_rem absorbs the real magnetization profile, 3D leakage,
+        and winding-parameter error. With the corrected k_w = 0.866 (the
+        old 0.945 placeholder put it below any sintered grade) the
+        smooth-bore inversion gives ~1.12 T (Carter-consistent ~1.14 T) —
+        N33-class, plausible only if the magnets are well below claimed N52.
+        Gaussmeter measurement will split magnet grade from the rest."""
         result = compute_effective_B_rem(motor, PSI_F_MEAS)
-        assert 0.95 < result["B_rem_eff"] < 1.08, (
-            f"Effective B_rem {result['B_rem_eff']:.3f} T outside [0.95, 1.08]"
+        assert 1.05 < result["B_rem_eff"] < 1.18, (
+            f"Effective B_rem {result['B_rem_eff']:.3f} T outside [1.05, 1.18]"
         )
 
     def test_effective_B_rem_matches_sweep(self, motor):
@@ -213,13 +199,12 @@ class TestEffectiveBrem:
         )
 
 
-@_skip_no_script
 class TestMeasuredHarmonics:
 
     @pytest.fixture(scope="class")
     def harmonics_80(self):
         if not (CAPTURES_DIR / "backemf_080rps.csv").exists():
-            pytest.skip("80 rps capture not available")
+            pytest.skip(CAPTURES_SKIP)
         return extract_measured_harmonics(80, 6, actual_rps=79.86)
 
     def test_thd_below_bound(self, harmonics_80):
@@ -244,18 +229,17 @@ class TestMeasuredHarmonics:
             if h is not None:
                 thds.append(h["thd_pct"])
         if len(thds) < 3:
-            pytest.skip("Fewer than 3 captures available")
+            pytest.skip(CAPTURES_SKIP)
         spread = max(thds) - min(thds)
         assert spread < 0.5, f"THD spread {spread:.2f}% across {len(thds)} speeds"
 
 
-@_skip_no_script
 class TestPhaseBalance:
 
     @pytest.fixture(scope="class")
     def balance_80(self):
         if not (CAPTURES_DIR / "backemf_080rps.csv").exists():
-            pytest.skip("80 rps capture not available")
+            pytest.skip(CAPTURES_SKIP)
         return analyze_phase_balance(80, 6, actual_rps=79.86)
 
     def test_angles_near_120(self, balance_80):
@@ -277,7 +261,7 @@ class TestPhaseBalance:
             for pair, angle in bal["angles"].items():
                 all_angles.setdefault(pair, []).append(angle)
         if not all_angles:
-            pytest.skip("No captures available")
+            pytest.skip(CAPTURES_SKIP)
         for pair, angles in all_angles.items():
             if len(angles) < 3:
                 continue
@@ -287,7 +271,6 @@ class TestPhaseBalance:
             )
 
 
-@_skip_no_script
 class TestCalibratedDriveSim:
 
     def test_calibrated_psi_f_used(self, motor):
@@ -300,7 +283,7 @@ class TestCalibratedDriveSim:
     def test_calibrated_tau_peak_lower(self, motor):
         """Calibrated psi_f (268 uWb) should give lower tau_peak than uncalibrated."""
 
-        psi_f_uncal = _derive_psi_f(motor)
+        psi_f_uncal = derive_psi_f_smooth(motor)
         assert psi_f_uncal is not None
         assert PSI_F_MEAS < psi_f_uncal  # calibrated is lower
 

@@ -343,6 +343,132 @@ class TestPaperFig5:
 
 
 # ---------------------------------------------------------------------------
+# Verification 4b: odd-harmonic series (production zhu_howe_Br_series)
+# ---------------------------------------------------------------------------
+
+class TestZhuHoweSeries:
+    """Production odd-harmonic series vs the audited per-harmonic Eq 17 sum
+    (TestPaperFig5 machinery), plus its numeric guards."""
+
+    RS, RM, RR = 0.048, 0.040, 0.030
+    P = 4
+    MU_R = 1.05
+    B_rem = 1.2
+
+    def _series(self, theta, **kw):
+        from phasesweep.analytical import zhu_howe_Br_series
+        args = dict(r_eval=0.0405, r_stator=self.RS, r_magnet=self.RM,
+                    r_rotor=self.RR, mu_r_pm=self.MU_R)
+        args.update(kw)
+        return zhu_howe_Br_series(theta, self.P, self.B_rem, **args)
+
+    def test_series_matches_eq17_reference_sum(self):
+        # Same truncation (k odd <= 19) as TestPaperFig5.test_total_Br_peak
+        theta = np.array([0.0, 0.3, 1.1, 2.7])
+        ref = np.zeros_like(theta)
+        for k in range(1, 20, 2):
+            M_n = 2 * self.B_rem / MU0 * np.sin(k * np.pi / 2) / (k * np.pi / 2)
+            ref += eq17_Br(0.0405, theta, self.RS, self.RM, self.RR,
+                           k * self.P, self.MU_R, M_n)
+        got = self._series(theta, max_harmonic=19)
+        np.testing.assert_allclose(got, ref, rtol=1e-9)
+
+    def test_fundamental_bin_unchanged(self):
+        # The n_p FFT bin of the series equals the single-term zhu_howe_Br
+        # amplitude — the series adds harmonics without touching the fundamental
+        # (rel 1e-9: the series normalizes radii for high-order conditioning,
+        # so agreement is to float round-off, not bit-exact).
+        from phasesweep.analytical import zhu_howe_Br
+        from phasesweep.harmonics import harmonics_1sided
+        theta = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+        amp_fund = zhu_howe_Br(
+            np.array([0.0]), self.P, self.B_rem, r_eval=0.0405,
+            r_stator=self.RS, r_magnet=self.RM, r_rotor=self.RR,
+            mu_r_pm=self.MU_R,
+        )[0]
+        amps = harmonics_1sided(self._series(theta))
+        assert amps[self.P] == pytest.approx(amp_fund, rel=1e-9)
+
+    def test_flat_top_sits_below_fundamental(self):
+        # Full-pitch square-wave source: the summed waveform's flat top is
+        # below the Gibbs-overshooting fundamental amplitude.
+        theta = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+        B = self._series(theta)
+        from phasesweep.analytical import zhu_howe_Br
+        amp_fund = zhu_howe_Br(
+            np.array([0.0]), self.P, self.B_rem, r_eval=0.0405,
+            r_stator=self.RS, r_magnet=self.RM, r_rotor=self.RR,
+            mu_r_pm=self.MU_R,
+        )[0]
+        assert 0.0 < np.max(np.abs(B)) < amp_fund
+
+    def test_two_thirds_pole_arc_kills_third_harmonic(self):
+        # alpha_p = 2/3: sin(3*pi*(2/3)/2) = sin(pi) = 0 — the classic
+        # third-harmonic elimination; bin 3*n_p must be empty while 5*n_p
+        # is not.
+        from phasesweep.harmonics import harmonics_1sided
+        theta = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+        amps = harmonics_1sided(self._series(theta, alpha_p=2.0 / 3.0))
+        assert amps[3 * self.P] == pytest.approx(0.0, abs=1e-12)
+        assert amps[5 * self.P] > 1e-4
+
+    def test_high_pole_count_orders_stay_finite(self):
+        # n_p = 44 pushes orders to k*n_p ~ 1276 where raw-radii powers
+        # under/overflow; the normalization + guards must keep the sum
+        # finite and fundamental-dominated.
+        theta = np.linspace(0, 2 * np.pi, 4096, endpoint=False)
+        from phasesweep.analytical import zhu_howe_Br_series
+        B = zhu_howe_Br_series(
+            theta, 44, self.B_rem, r_eval=0.0405,
+            r_stator=self.RS, r_magnet=self.RM, r_rotor=self.RR,
+            mu_r_pm=self.MU_R,
+        )
+        assert np.all(np.isfinite(B))
+        assert np.max(np.abs(B)) > 0
+
+    def test_only_odd_harmonics_present_at_partial_arc(self):
+        # A ±1 square wave has no even harmonics at any pole arc. At
+        # alpha_p = 1 the even coefficients sin(kπ/2) vanish anyway, so
+        # parity is only actually tested off full pitch (a mutation
+        # audit: dropping the loop's step-2 survived every other test in
+        # this module).
+        from phasesweep.harmonics import harmonics_1sided
+        theta = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+        amps = harmonics_1sided(self._series(theta, alpha_p=0.8))
+        for k in (2, 4, 6):
+            assert amps[k * self.P] == pytest.approx(0.0, abs=1e-12), \
+                f"even harmonic k={k} present"
+        assert amps[3 * self.P] > 1e-4
+
+    def test_harmonic_amplitude_scales_with_pole_arc_factor(self):
+        # Each order's source carries the pole-arc factor sin(kπα_p/2) as a
+        # MULTIPLIER. Ratio of the k-th bin between two pole arcs must be
+        # the ratio of those coefficients — the module's other alpha_p test
+        # only checks presence/absence, so it cannot see the factor being
+        # inverted or dropped (mutation audit).
+        from phasesweep.harmonics import harmonics_1sided
+        theta = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+        # 0.7 / 0.5 keep every sin(kπα_p/2) well away from its zeros;
+        # harmonics_1sided returns magnitudes, so compare |coefficients|.
+        a1 = harmonics_1sided(self._series(theta, alpha_p=0.7))
+        a2 = harmonics_1sided(self._series(theta, alpha_p=0.5))
+        for k in (1, 3, 5):
+            expected = abs(np.sin(k * np.pi * 0.5 / 2)
+                           / np.sin(k * np.pi * 0.7 / 2))
+            assert a2[k * self.P] / a1[k * self.P] == pytest.approx(
+                expected, rel=1e-9), f"order k={k} does not scale as sin(kπα_p/2)"
+
+    def test_max_order_truncates_for_fft(self):
+        # max_order = n_theta//2 keeps sampled orders below Nyquist: with
+        # max_order = 3*n_p only k=1 survives (pure cosine).
+        theta = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+        B = self._series(theta, max_order=3 * self.P)
+        from phasesweep.harmonics import harmonics_1sided
+        amps = harmonics_1sided(B)
+        assert amps[3 * self.P] == pytest.approx(0.0, abs=1e-12)
+
+
+# ---------------------------------------------------------------------------
 # Verification 5: np -> 1 continuity (Eq 17 -> Eq 16)
 # ---------------------------------------------------------------------------
 
@@ -399,11 +525,11 @@ class TestRegressionAnchors:
     def test_paper_motor_fundamental(self):
         """Zhu & Howe Fig 5 motor: n_p=4, B_rem=1.2T at r=40.5mm, theta=0.
 
-        Re-frozen S110 (= old anchor × 4/π) for the square-wave
+        Re-frozen (= old anchor × 4/π) for the square-wave
         magnetization convention; matches the paper's Fig 5 fundamental
         (~0.72 T, see TestPaperFig5.test_fundamental_only).
         """
-        from phasesweep.fem_field import zhu_howe_Br
+        from phasesweep.analytical import zhu_howe_Br
         Br = zhu_howe_Br(
             np.array([0.0]), n_p=4, B_rem=1.2, r_eval=0.0405,
             r_stator=0.048, r_magnet=0.040, r_rotor=0.030, mu_r_pm=1.05,
@@ -413,10 +539,11 @@ class TestRegressionAnchors:
     def test_default_inrunner(self):
         """Default geometry (Rs=0.70, Rm=0.64, Rr=0.30), n_p=2, B_rem=1.0T.
 
-        Re-frozen S110 (= old anchor × 4/π, square-wave convention).
+        Re-frozen (= old anchor × 4/π, square-wave convention).
         """
-        from phasesweep.fem_field import zhu_howe_Br
-        Br = zhu_howe_Br(np.array([0.0]), n_p=2, B_rem=1.0)[0]
+        from phasesweep.analytical import zhu_howe_Br
+        Br = zhu_howe_Br(np.array([0.0]), n_p=2, B_rem=1.0,
+                         r_stator=0.70, r_magnet=0.64, r_rotor=0.30)[0]
         assert Br == pytest.approx(7.411415721291222e-01, rel=1e-10)
 
 
@@ -432,7 +559,7 @@ class TestProductionVsReference:
 
     Production uses the square-wave magnetization convention, so the
     reference M_n is the square wave's fundamental Fourier coefficient
-    (4/π)·B_rem/μ0 (paper Eq 6a at n=1, alpha_p=1).
+    (4/π)·B_rem/μ0 (paper Eq 7a at n=1, alpha_p=1).
     """
 
     RS, RM, RR, MU_R = 0.70, 0.64, 0.30, 1.05
@@ -444,8 +571,10 @@ class TestProductionVsReference:
         M_n = (4 / np.pi) * B_rem / MU0
         theta = np.linspace(0, 2 * np.pi, 64, endpoint=False)
 
-        from phasesweep.fem_field import zhu_howe_Br
-        Br_prod = zhu_howe_Br(theta, npp, B_rem, r_eval=r_eval)
+        from phasesweep.analytical import zhu_howe_Br
+        Br_prod = zhu_howe_Br(theta, npp, B_rem, r_eval=r_eval,
+                              r_stator=self.RS, r_magnet=self.RM,
+                              r_rotor=self.RR)
 
         Br_ref = np.array([
             eq17_Br(r_eval, t, self.RS, self.RM, self.RR,
@@ -465,10 +594,13 @@ class TestAlphaPScaling:
 
     def test_alpha_p_reduces_B1(self):
         """alpha_p=0.75 gives lower B₁ than alpha_p=1.0."""
-        from phasesweep.fem_field import zhu_howe_Br
+        from phasesweep.analytical import zhu_howe_Br
         theta = np.array([0.0])
-        Br_full = zhu_howe_Br(theta, n_p=4, B_rem=1.2, alpha_p=1.0)[0]
-        Br_part = zhu_howe_Br(theta, n_p=4, B_rem=1.2, alpha_p=0.75)[0]
+        radii = dict(r_stator=0.70, r_magnet=0.64, r_rotor=0.30)
+        Br_full = zhu_howe_Br(theta, n_p=4, B_rem=1.2, alpha_p=1.0,
+                              **radii)[0]
+        Br_part = zhu_howe_Br(theta, n_p=4, B_rem=1.2, alpha_p=0.75,
+                              **radii)[0]
         assert Br_part < Br_full
         # sin(π*0.75/2) = sin(3π/8) ≈ 0.924
         expected_ratio = np.sin(np.pi * 0.75 / 2)
@@ -476,8 +608,10 @@ class TestAlphaPScaling:
 
     def test_alpha_p_1_unchanged(self):
         """alpha_p=1.0 gives identical result to omitting it."""
-        from phasesweep.fem_field import zhu_howe_Br
+        from phasesweep.analytical import zhu_howe_Br
         theta = np.linspace(0, 2 * np.pi, 64, endpoint=False)
-        Br_default = zhu_howe_Br(theta, n_p=4, B_rem=1.2)
-        Br_explicit = zhu_howe_Br(theta, n_p=4, B_rem=1.2, alpha_p=1.0)
+        radii = dict(r_stator=0.70, r_magnet=0.64, r_rotor=0.30)
+        Br_default = zhu_howe_Br(theta, n_p=4, B_rem=1.2, **radii)
+        Br_explicit = zhu_howe_Br(theta, n_p=4, B_rem=1.2, alpha_p=1.0,
+                                  **radii)
         np.testing.assert_allclose(Br_explicit, Br_default, rtol=1e-15)

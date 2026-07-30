@@ -123,35 +123,45 @@ class TestGapPerturbation:
     @pytest.mark.parametrize("make_motor", [_make_inrunner, _make_outrunner],
                              ids=["inrunner", "outrunner"])
     @pytest.mark.parametrize("delta", [-0.10, 0.05, 0.10])
-    def test_scales_inductances_inversely(self, make_motor, delta):
+    def test_scales_inductances_with_g_eff(self, make_motor, delta):
+        """L scales ~1/g_eff with g_eff = g + l_m/mu_r_pm: the magnet
+        recoil path dominates the d-axis circuit, so a +10% gap moves L far
+        less than 10%."""
         m = make_motor()
         p = _perturb_motor(m, "gap", delta)
         assert p is not None
-        assert p.L_d == pytest.approx(m.L_d / (1.0 + delta))
-        assert p.L_q == pytest.approx(m.L_q / (1.0 + delta))
+        geo = m.geometry
+        gap = abs(geo.r_stator - geo.r_magnet)
+        l_m = abs(geo.r_magnet - geo.r_rotor)
+        g_eff = gap + l_m / m.mu_r_pm
+        factor = g_eff / (gap * (1.0 + delta) + l_m / m.mu_r_pm)
+        assert p.L_d == pytest.approx(m.L_d * factor)
+        assert p.L_q == pytest.approx(m.L_q * factor)
+        # Sensitivity is attenuated relative to the old pure-1/g law
+        assert abs(factor - 1.0) < abs(1.0 / (1.0 + delta) - 1.0)
 
     def test_outrunner_geometry_correct(self):
-        """Outrunner gap: r_magnet moves outward, r_stator and r_rotor fixed.
+        """Outrunner gap: r_stator moves inward, magnet ring untouched.
 
-        Magnet thickness (r_rotor - r_magnet) changes — the magnet absorbs
-        the gap change, not the yoke.
+        The magnet [r_magnet, r_rotor] is a fixed component — the gap change
+        is machined into the stator, mirroring the inrunner branch.
         """
         m = _make_outrunner()
         p = _perturb_motor(m, "gap", 0.10)
         assert p is not None
-        assert p.geometry.r_stator == m.geometry.r_stator
+        assert p.geometry.r_magnet == m.geometry.r_magnet
         assert p.geometry.r_rotor == m.geometry.r_rotor
-        assert p.geometry.r_magnet > m.geometry.r_magnet
-        # Magnet thickness shrinks (r_magnet moved toward r_rotor)
+        assert p.geometry.r_stator < m.geometry.r_stator
+        # Magnet thickness preserved
         orig_mag = m.geometry.r_rotor - m.geometry.r_magnet
         new_mag = p.geometry.r_rotor - p.geometry.r_magnet
-        assert new_mag < orig_mag
+        assert new_mag == orig_mag
 
     def test_inrunner_rejection_stator_exceeds_outer(self):
         m = _make_inrunner()
         assert _perturb_motor(m, "gap", 100.0) is None
 
-    def test_outrunner_rejection_magnet_exceeds_rotor(self):
+    def test_outrunner_rejection_stator_hits_inner(self):
         m = _make_outrunner()
         assert _perturb_motor(m, "gap", 100.0) is None
 
@@ -272,7 +282,7 @@ class TestDeltaZero:
 
     Note: psi_f is still cleared — perturb_motor is not an identity at
     delta=0.  The sensitivity analysis handles delta=0 as a special case
-    (validation_report.py:620-622) and never calls perturb_motor for it.
+    (scripts/validation_report.py) and never calls perturb_motor for it.
 
     Uses introspection so new Motor fields are covered automatically.
     """
@@ -290,6 +300,57 @@ class TestDeltaZero:
             pert = getattr(p, f.name)
             assert pert == orig, f"{param}: {f.name} changed from {orig} to {pert}"
         assert p.psi_f is None  # intentional — documents the asymmetry
+
+
+# ---------------------------------------------------------------------------
+# Circuit params (psi_f, R_s, L_d, L_q) — calibration set
+# ---------------------------------------------------------------------------
+
+class TestCircuitParams:
+
+    @pytest.mark.parametrize("param", ["psi_f", "R_s", "L_d", "L_q"])
+    def test_scales_value(self, param):
+        m = _make_inrunner(psi_f=0.1, B_rem=None)
+        p = _perturb_motor(m, param, 0.10)
+        assert p is not None
+        assert getattr(p, param) == pytest.approx(getattr(m, param) * 1.10)
+
+    @pytest.mark.parametrize("param", ["psi_f", "R_s", "L_d", "L_q"])
+    def test_none_returns_none(self, param):
+        m = _make_inrunner(**{param: None}) if param != "psi_f" \
+            else _make_inrunner(psi_f=None)
+        assert _perturb_motor(m, param, 0.10) is None
+
+    @pytest.mark.parametrize("param", ["psi_f", "R_s", "L_d", "L_q"])
+    def test_nonpositive_result_returns_none(self, param):
+        m = _make_inrunner(psi_f=0.1, B_rem=None)
+        assert _perturb_motor(m, param, -1.0) is None
+
+    def test_works_without_geometry(self):
+        """Datasheet/circuit-only motors (Awan pattern) must be perturbable."""
+        m = Motor(name="circuit_only", geometry=None, n_p=3,
+                  psi_f=0.545, L_d=0.036, L_q=0.051, R_s=3.5)
+        p = _perturb_motor(m, "psi_f", -0.05)
+        assert p is not None
+        assert p.psi_f == pytest.approx(0.545 * 0.95)
+
+    def test_geometry_params_still_need_geometry(self):
+        m = Motor(name="circuit_only", geometry=None, n_p=3,
+                  psi_f=0.545, L_d=0.036, L_q=0.051, R_s=3.5)
+        assert _perturb_motor(m, "gap", 0.05) is None
+
+    def test_psi_f_not_cleared_by_own_perturbation(self):
+        m = _make_inrunner(psi_f=0.1, B_rem=None)
+        p = _perturb_motor(m, "psi_f", 0.10)
+        assert p is not None and p.psi_f is not None
+
+    def test_other_fields_untouched(self):
+        m = _make_inrunner(psi_f=0.1)
+        p = _perturb_motor(m, "R_s", 0.10)
+        assert p is not None
+        assert p.psi_f == m.psi_f
+        assert p.L_d == m.L_d
+        assert p.geometry == m.geometry
 
 
 # ---------------------------------------------------------------------------

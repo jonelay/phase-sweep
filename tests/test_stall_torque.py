@@ -193,14 +193,14 @@ def test_registry_entry():
     info = MODEL_REGISTRY["stall_torque"]
     assert info.cost == "fast"
     assert info.source == "computed"
-    assert {"tau_stall", "I_stall", "k_T", "gamma_opt_deg"}.issubset(info.produces)
+    assert {"tau_stall", "I_stall", "k_T", "k_T_effective", "gamma_opt_deg"}.issubset(info.produces)
     assert {"tau_stall_electromagnetic", "I_stall_electromagnetic"}.issubset(info.produces)
     assert "R_s" in info.needs
 
     m = _make_motor(R_s=1.0)
     info.validate(m)
     result = info.fn(_make_config(m))
-    assert {"tau_stall", "I_stall", "k_T", "gamma_opt_deg"}.issubset(set(result.keys()))
+    assert {"tau_stall", "I_stall", "k_T", "k_T_effective", "gamma_opt_deg"}.issubset(set(result.keys()))
 
 
 # --- TOML motor integration ---
@@ -239,3 +239,72 @@ def test_curve_present_with_saturation_warning():
 def _make_config_for(motor, model):
     from phasesweep.sweep_types import RunConfig
     return RunConfig(motor=motor, model=model)
+
+
+# --- Datasheet anchors (ETEL TMB reverse-salient torque motors) ---
+#
+# First stall_torque anchors against citable hardware, now spanning the
+# five-frame TMB family. Tp for 0210/0360 is recovered from the Tp/Ip ratios
+# recorded in the TOML notes (datasheet peak-duty column): TMB+0210
+# Tp/Ip = 5.1 Nm/A_rms at Ip = 25.0 A_rms; TMB+0360 Tp/Ip = 17.4 at
+# Ip = 25.3. 0140/0290/0450 quote Tp directly from the sheets. All five
+# datasheets show heavy Kt collapse at Ip (vs the catalog Kt), so the
+# linear-magnetics model must sit ABOVE Tp — these are bound anchors, not
+# agreement anchors.
+
+_ETEL_STALL_ANCHORS = [
+    # (toml, Ip_Arms, Tp_Nm, tau_stall/Tp, saturation_ratio, warns)
+    ("data/etel_tmb/etel_tmb0140_030_ra.toml", 15.8, 39.6, 1.881, 2.607, False),
+    ("data/etel_tmb/etel_tmb0210_030_ta.toml", 25.0, 127.5, 1.408, 2.294, False),
+    ("data/etel_tmb/etel_tmb0290_030_ra.toml", 20.6, 286.0, 1.428, 2.747, False),
+    ("data/etel_tmb/etel_tmb0360_030_ta.toml", 25.3, 440.2, 2.016, 2.892, False),
+    ("data/etel_tmb/etel_tmb0450_030_va.toml", 43.8, 719.0, 3.218, 3.650, True),
+]
+
+
+@pytest.mark.parametrize("toml,ip_rms,tp,over,sat,warns", _ETEL_STALL_ANCHORS)
+def test_etel_linear_stall_bounds_datasheet_tp(toml, ip_rms, tp, over, sat,
+                                               warns):
+    """Linear-magnetics stall torque is an upper bound on datasheet Tp."""
+    from phasesweep.configs import load_motor
+    m = load_motor(REPO_ROOT / toml)
+    result = MODEL_REGISTRY["stall_torque"].fn(_make_config(m))
+    assert result["I_stall"] == pytest.approx(sqrt(2) * ip_rms, rel=1e-3)
+    assert result["tau_stall"] > tp
+    # Reverse-salient MTPA branch is exercised at stall (magnetizing i_d)
+    assert result["gamma_opt_deg"] < 0
+
+
+@pytest.mark.parametrize("toml,ip_rms,tp,over,sat,warns", _ETEL_STALL_ANCHORS)
+def test_etel_stall_overprediction_band_pinned(toml, ip_rms, tp, over, sat,
+                                               warns):
+    """Pin the over-prediction ratio so silent drift is visible.
+
+    +41% (0210) to +222% (0450) over Tp — over-prediction grows with each
+    frame's datasheet saturation level (0450 delivers only 1.9x Tc at 3.65x
+    Ic). Direction and ordering are the physics; magnitudes are pinned
+    observations.
+    """
+    from phasesweep.configs import load_motor
+    m = load_motor(REPO_ROOT / toml)
+    result = MODEL_REGISTRY["stall_torque"].fn(_make_config(m))
+    assert result["tau_stall"] / tp == pytest.approx(over, rel=0.02)
+
+
+@pytest.mark.parametrize("toml,ip_rms,tp,over,sat,warns", _ETEL_STALL_ANCHORS)
+def test_etel_saturation_heuristic_boundary(toml, ip_rms, tp, over, sat,
+                                            warns):
+    """Pin where the >3.0 saturation heuristic fires across the family.
+
+    Four frames collapse Kt hard at Ip yet sit below the strict >3.0
+    threshold, so saturation_warning stays False — the documented blind
+    spot. The 0450 VA (Ip/Ic = 3.65) is the first anchor where the
+    heuristic fires, and correctly so (tau_stall/Tp = 3.2 there). The bound
+    framing (test above) is what covers all five machines; if the threshold
+    is ever revisited, this pins the current behavior.
+    """
+    from phasesweep.configs import load_motor
+    m = load_motor(REPO_ROOT / toml)
+    result = MODEL_REGISTRY["stall_torque"].fn(_make_config(m))
+    assert result["saturation_ratio"] == pytest.approx(sat, rel=1e-3)
+    assert result["saturation_warning"] is warns

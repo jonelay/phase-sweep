@@ -9,7 +9,7 @@
         "instrument": "published"
     },
     "quantities": {
-        "B_ag_peak": 0.776,
+        "B_ag_fundamental": 0.9625,
         "backemf_peak": 67.5,
         "flux_linkage_peak": 0.10
     },
@@ -19,22 +19,18 @@
     "notes": "flux_linkage_peak tolerance is wide (30%) by design: the Zhu & Howe fundamental model underestimates flux linkage for 22p/24s FSCW machines because this topology couples via sub-harmonics not captured by k_w × B_1. Expected field-predicted deviation ~24%.",
     "source": "published",
     "tolerances": {
-        "B_ag_peak": 20.0,
+        "B_ag_fundamental": 10.0,
         "backemf_peak": 8.0,
         "flux_linkage_peak": 30.0
     },
-    "curve_compare": {
-        "B_ag_peak": {
-            "curve_x": "theta_list",
-            "curve_y": "B_r_list",
-            "extract": "max",
-            "semantic_note": "Published 0.776 T is from Eq. 2: B_PM = B_r·h_m/(g + h_m/α_p), a simplified flat-top formula assuming infinite μ_r. FEM peak includes slot harmonics and will exceed this value."
-        }
-    },
     "key_mapping": {
+        "B_ag_fundamental": {
+            "computed_key": "fundamental",
+            "semantic_note": "Published Eq. 2 gives the flat-top value 0.776 T (B_PM = B_r·h_m/(g + h_m/α_p), infinite μ_r). Converted to the commensurate fundamental via B₁ = (4/π)·sin(π·α_p/2)·B_PM with α_p = 0.855: 0.776 × 1.2404 = 0.9625 T. A waveform-peak comparison against the fundamental-only analytical model is not meaningful."
+        },
         "backemf_peak": {
             "computed_key": "backemf_fundamental",
-            "semantic_note": "Waveform peak ≈ fundamental for nearly-sinusoidal machine. Valid within stated tolerance."
+            "semantic_note": "Experimental back-EMF at rated 600 rpm (Fig 14); the fixture-level speed_rpm=0 describes the standstill airgap-flux test, not this quantity. The crossval computes the model back-EMF at the motor's rated speed (TOML W_REF), not from conditions.speed_rpm. Waveform peak ≈ fundamental for nearly-sinusoidal machine. Valid within stated tolerance."
         }
     }
 }
