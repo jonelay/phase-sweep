@@ -9,6 +9,8 @@ type = "SPMSM"
 [circuit]
 n_p = 2
 R_s = 8.9462         # Ohm
+# L_d != L_q (saliency 1.6) despite type="SPMSM" — published benchmark
+# values (Dhakal et al. Table 12), kept verbatim
 L_d = 0.2055         # H
 L_q = 0.3320         # H
 psi_f = 0.1144       # Wb
@@ -34,6 +36,9 @@ magnet_span_deg = 45.0
 r_inner = 0.008           # m (shaft diameter 16 mm / 2, Table 12)
 alpha_p = 0.5         # magnet_span_deg=45° / pole_pitch=90°
 slot_height = 0.0196  # m
+# defined at mid-slot radius but applied as a constant angular fraction by
+# the FEM slot cutter — near-bore teeth come out ~50% thinner than actual.
+# Documented simplification; CREATOR is excluded from the analytical track.
 slot_width_ratio = 0.61  # slot_width / slot_pitch at mid-slot radius
 slot_width = 0.0216   # m
 slot_opening_width = 0.00323  # m
@@ -47,6 +52,48 @@ mu_r_fe = 5000              # M250-35A at operating B (peak μ_r ≈ 11572 from 
 magnet_type = "sintered_ferrite"
 B_rem = 0.415         # T (from dataset Ferrite_BH.csv, H=0 intercept)
 mu_r_pm = 1.1         # from dataset Ferrite_properties.csv
+# Demag knee for the demag_screen model: the dataset's Ferrite_BH.csv
+# demag curve is linear (slope exactly mu0*mu_r_pm) all the way to
+# B = 0 at H = -300 kA/m — no knee above zero at the 20 C reference,
+# so B_knee = 0.0 is the data-backed bound (linearity guaranteed to it).
+B_knee = 0.0
+
+[iron]
+# M250-35A Bertotti coefficients from the global two-term fit over the
+# dataset's own 50-1000 Hz specific-loss tables (203 rows, B <= 1.5 T,
+# ~7% median residual) — see fit_bertotti and tests/test_iron_loss.py.
+k_h = 0.0153          # W/(kg Hz T^alpha)
+k_e = 6.35e-5         # W/(kg Hz^2 T^2)
+alpha_fe = 1.62
+# Stator core mass, geometric from Table 12 + steel density 7600 kg/m^3:
+# yoke annulus (r 44.9-56.5 mm) 845.3 g + 6 rectangular teeth
+# (14.8 x 20.0 mm) 406.3 g, gross stack (the dataset gives no stacking
+# factor; 0.35 mm laminations would trim ~3-5%).
+m_core = 1.2516       # kg
+# CALIBRATED, not predicted. B_core is the lumped model's single free
+# parameter — the dataset gives no core flux density — and it is
+# back-solved so p_fe matches the measured no-load iron loss (0.4992 W)
+# at the rated point f_e = 66.65 Hz. Exact there (-0.01%), 3.5% median
+# over the full 16-point curve, +23.6% at 233 Hz.
+#
+# Provenance: the fit is reproducible through the calibration framework
+# (REQ-0819/0820) — data/creator_case_pmsm/iron_loss_noload.json is the
+# registered dataset, scripts/calibrate_creator_b_core.py runs it from
+# the unfitted estimate below, and b_core_calibration.record.json next
+# to the dataset is the record. That fit lands on 0.49750, 0.014% above
+# the value here: it targets the measured 66.667 Hz grid point, while
+# this hand back-solve targeted the curve interpolated to the model's
+# rounded W_REF (66.654 Hz). The difference is not physics.
+#
+# CREATOR therefore CANNOT validate iron_loss: this value is fit to the
+# same measurement any agreement test would check against.
+#
+# The unfitted alternative, for reference: FEM per-pole flux (188.1 uWb)
+# gives B_yoke 0.269 T / B_tooth 0.282 T, mass-and-alpha-weighted
+# 0.273 T, which predicts 0.183 W — the lump runs 2.7x light. That gap
+# (build factor, rotational loss in the yoke corners, tooth-flux
+# harmonics) is outside the documented single-B scope.
+B_core = 0.4974       # T (peak, effective)
 
 [drive]
 U_DC = 326.0          # V (max DC-link voltage)
@@ -58,9 +105,22 @@ speed_rpm = 2000
 torque_Nm = 0.10
 I_rms_A = 0.21
 V_rms_V = 135.0
-j_s = 0.0             # FEM-domain value; needs geometry parameterization
+# FEM current-sheet amplitude at rated I (0.21 A rms peak-converted),
+# from solver_params.j_s_from_phase_current: 3*N_eff*I_peak/(pi*S)
+# over the stepped slot faces. Informational — solvers take j_s per run.
+j_s = 5.069e5         # A/m^2
 
 [provenance]
 doi = "10.3217/sns1d-77m43"
 paper = "arXiv:2501.15921"
 references = ["Dhakal et al., COMPEL 44(4), 2025"]
+notes = """
+ENVELOPE CHECK (torque_speed): the catalog max speed 7050 rpm is
+exactly the 235 Hz inverter frequency limit (2*pi*235/n_p), NOT a voltage
+corner — the no-load voltage limit at U_DC = 326 V sits 11% above
+(7855 rpm). Rated (2000 rpm, 0.10 N.m), max-torque (0.15 N.m) and
+max-power (70 W) points are all inside the model envelope; characteristic
+current psi_f/L_d = 0.56 A > MAX_I_S, so the envelope still carries
+~0.146 N.m at max speed (wide CPSR). One-sided feasibility claims only
+(TestCreatorEnvelope in tests/test_torque_speed.py).
+"""

@@ -1,0 +1,53 @@
+# Du et al. 2021 CLF-RSPMSM — 10 kW reverse-salient PMSM (FEM design study)
+# 48-slot / 8-pole V-type IPM with a controllable-leakage-flux (CLF) rotor,
+# deliberately designed for reverse saliency: L_d > L_q (φ_dq = L_d/L_q = 1.08).
+# Source (open access, FEM-only — no prototype):
+#   L. Du, X. Liu, J. Fu, J. Liang, C. Huang, "Design and Optimization of
+#   Reverse Salient Permanent Magnet Synchronous Motor Based on Controllable
+#   Leakage Flux," CES Transactions on Electrical Machines and Systems,
+#   vol. 5, no. 2, pp. 163-173, June 2021. DOI 10.30941/cestems.2021.00020
+#
+# Electrical model: Table VI (CLF-RSPMSM column) — Ld = 9.8 mH, reverse
+# saliency ratio φ_dq = 1.08 (Lq derived = 9.074 mH), PM flux linkage
+# 0.245 Wb (NO-LOAD value; see notes). Table I: rated phase current 35 A,
+# 1000 rpm, 10 kW, 48/8 slots/poles. No R_s or DC bus published — [drive]
+# omitted (loader defaults are unused; rated_torque only).
+
+[motor]
+name = "Du 2021 CLF-RSPMSM"
+type = "reverse-salient PMSM (controllable leakage flux, V-type IPM)"
+
+[circuit]
+n_p = 4                # 8 poles (Table I: slots/poles 48/8)
+L_d = 0.0098           # H (Table VI: 9.8 mH); L_d > L_q by design
+L_q = 0.009074         # H, derived: Ld / φ_dq = 9.8 mH / 1.08
+psi_f = 0.245          # Wb (Table VI PM flux linkage — no-load; rises to
+                       # 0.2904 Wb at heavy load, Fig. 10a: CLF design)
+I_rated_rms = 35.0     # A rms phase (Table I; Fig. 12 uses amplitude 50 A)
+
+[rated]
+torque_Nm = 86.6       # Fig. 12(b) FEM max torque at rated amplitude 50 A,
+                       # current angle -5 deg, i_d = +4.4 A (magnetizing)
+speed_rpm = 1000
+power_kW = 10.0
+
+[provenance]
+source = "Du et al., CES Trans. Electr. Mach. Syst. 5(2):163-173, 2021"
+doi = "10.30941/cestems.2021.00020"
+url = "https://ieeexplore.ieee.org/document/9473195"
+motor_model = "CLF-RSPMSM design study (Jiangxi Univ. of Science and Technology)"
+notes = """
+FEM-only literature anchor for the reverse-salient MTPA branch — no
+prototype, so this grounds the SIGN and operating point (gamma < 0,
+magnetizing i_d), not measured torque. Paper's FEM optimum at 50 A
+amplitude: -5 deg / i_d = +4.4 A / 86.6 Nm; the linear closed form with
+Table VI params gives -8.2 deg / i_d = +7.1 A — same side, and the optimum
+is flat (the paper's angle costs 0.16% torque in the linear model).
+Variable-leakage-flux caveat: Table VI psi_f is the NO-LOAD flux linkage;
+the CLF rotor's d-axis flux rises to 0.2904 Wb under heavy load (Fig. 10a),
+so the linear model with no-load psi_f under-predicts the FEM peak ~14%,
+and with the loaded value reproduces it within 1.4% (see
+test_du2021_torque_with_load_dependent_flux). All values verified against
+the publisher PDF (IEEE stampPDF arnumber 9473195, open access).
+Eligible for: rated_torque (no R_s / thermal data published).
+"""

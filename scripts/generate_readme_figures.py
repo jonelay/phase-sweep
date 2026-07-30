@@ -1,8 +1,11 @@
-"""Generate three README figures.
+"""Generate README/docs figures.
 
 1. Hero FEM cross-section: CREATOR 4p/6s inrunner, nonlinear |B| field map
 2. Back-EMF waveform: CREATOR measured oscilloscope data vs analytical fundamental
 3. Validation chart: Zhu & Howe FEM vs analytical (solver verif.) + CREATOR vs measured (model val.)
+4. Coverage matrix: motors/ x computed models — record / runnable / missing
+   fields, from the registry and the local result store (never hand-drawn,
+   so it cannot drift)
 
 Usage:
     uv run python scripts/generate_readme_figures.py
@@ -169,9 +172,10 @@ def fig_backemf_waveform() -> Path:
 def fig_validation_chart() -> Path:
     """Two-step validation chain: solver verification (Zhu & Howe inrunner) then
     model validation (CREATOR measured back-EMF)."""
+    from phasesweep.analytical import zhu_howe_Br
     from phasesweep.configs import load_motor
-    from phasesweep.fem_field import harmonics_1sided, zhu_howe_Br
     from phasesweep.geometry import default_inrunner
+    from phasesweep.harmonics import harmonics_1sided
     from phasesweep.registry import _run_analytical_impl
     from phasesweep.sweep_types import RunConfig
 
@@ -275,17 +279,118 @@ def fig_validation_chart() -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Figure 4: Coverage matrix — motors × computed models
+# ---------------------------------------------------------------------------
+
+def fig_coverage_matrix() -> Path:
+    """Motors × computed models: current-version record in the store /
+    runnable but no record / motor lacks required fields. Generated from
+    the registry validators and the local result store."""
+    from phasesweep.configs import load_motor
+    from phasesweep.registry import MODEL_REGISTRY
+    from phasesweep.result_store import ResultStore, version_current
+
+    print("Figure 4: scanning motors/ and the result store…")
+    motors = [load_motor(p) for p in sorted((ROOT / "motors").glob("*.toml"))]
+    models = [k for k, info in MODEL_REGISTRY.items()
+              if info.source == "computed" and info.fn is not None]
+
+    rows = ResultStore(ROOT / "output").load_all()
+    current_ok = set()      # (motor_config_id, model) with a live computed record
+    # Anchors keyed by motor NAME: measured records pin the config_id at
+    # import time, which drifts as the TOML gains fields — the anchor
+    # belongs to the physical motor, not a config revision.
+    anchors: dict[str, int] = {}
+    for d in rows:
+        model = d.get("model", "")
+        if d.get("source", "computed") != "computed":
+            name = d.get("config", {}).get("motor", {}).get("name", "")
+            anchors[name] = anchors.get(name, 0) + 1
+        elif d.get("status") == "OK" and version_current(model, d.get("model_version")):
+            current_ok.add((d.get("motor_config_id", ""), model))
+
+    # 0 = missing fields, 1 = runnable no record, 2 = current record
+    grid = np.zeros((len(motors), len(models)))
+    for i, motor in enumerate(motors):
+        for j, key in enumerate(models):
+            try:
+                MODEL_REGISTRY[key].validate(motor)
+            except (ValueError, TypeError):
+                continue
+            grid[i, j] = 2 if (motor.config_id, key) in current_ok else 1
+
+    from matplotlib.colors import ListedColormap
+    from matplotlib.patches import Patch
+    STATE_COLORS = ["#f0f0f0", "#cfe3f5", BLUE]   # one hue, light -> dark
+    GLYPHS = {0: ("–", GRAY), 1: ("○", BLUE), 2: ("●", "white")}
+
+    fig, ax = plt.subplots(
+        figsize=(1.1 * len(models) + 3.5, 0.55 * len(motors) + 2.2), dpi=150)
+    ax.pcolormesh(grid[::-1], cmap=ListedColormap(STATE_COLORS),
+                  vmin=0, vmax=2, edgecolors="white", linewidth=2)
+    for i in range(len(motors)):
+        for j in range(len(models)):
+            glyph, color = GLYPHS[int(grid[i, j])]
+            ax.text(j + 0.5, len(motors) - 1 - i + 0.5, glyph,
+                    ha="center", va="center", fontsize=11, color=color)
+
+    ax.set_xticks([j + 0.5 for j in range(len(models))])
+    ax.set_xticklabels(models, rotation=35, ha="right", fontsize=9)
+    ax.set_yticks([len(motors) - 1 - i + 0.5 for i in range(len(motors))])
+    ax.set_yticklabels([m.name for m in motors], fontsize=9)
+    ax.set_aspect("equal")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(length=0)
+
+    for i, motor in enumerate(motors):
+        n = anchors.get(motor.name, 0)
+        ax.text(len(models) + 0.3, len(motors) - 1 - i + 0.5,
+                f"◆ {n}" if n else "0",
+                ha="left", va="center", fontsize=9,
+                color=GREEN if n else "#bbbbbb")
+    ax.text(len(models) + 0.3, len(motors) + 0.35, "anchors",
+            ha="left", va="bottom", fontsize=8.5, color=GRAY)
+    ax.set_xlim(0, len(models) + 1.6)
+    ax.set_ylim(0, len(motors) + 0.9)
+
+    from matplotlib.lines import Line2D
+    ax.legend(handles=[
+        Patch(facecolor=STATE_COLORS[2], label="● record (current version)"),
+        Patch(facecolor=STATE_COLORS[1], label="○ runnable, no record"),
+        Patch(facecolor=STATE_COLORS[0], label="– motor lacks required fields"),
+        Line2D([], [], marker="D", linestyle="none", color=GREEN, markersize=6,
+               label="anchors: measured/published records in store"),
+    ], loc="upper center", bbox_to_anchor=(0.5, -0.28),
+        ncol=2, fontsize=8.5, frameon=False)
+
+    ax.set_title("Model coverage — motors/ × computed models",
+                 fontsize=12, pad=24)
+    ax.text(0.5, 1.015, "registry validators + local result store",
+            transform=ax.transAxes, ha="center", va="bottom",
+            fontsize=9, color=GRAY)
+
+    fig.tight_layout()
+    path = OUT_DIR / "model_coverage_matrix.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  saved {path.relative_to(ROOT)}")
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Generate README figures")
-    parser.add_argument("--fig", type=int, choices=[1, 2, 3],
+    parser.add_argument("--fig", type=int, choices=[1, 2, 3, 4],
                         help="Generate only this figure (default: all)")
     args = parser.parse_args()
 
-    fns = {1: fig_fem_hero, 2: fig_backemf_waveform, 3: fig_validation_chart}
-    targets = [args.fig] if args.fig else [1, 2, 3]
+    fns = {1: fig_fem_hero, 2: fig_backemf_waveform, 3: fig_validation_chart,
+           4: fig_coverage_matrix}
+    targets = [args.fig] if args.fig else [1, 2, 3, 4]
     for n in targets:
         fns[n]()
 

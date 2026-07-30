@@ -32,8 +32,8 @@ from phasesweep.crossval import (
     format_diagnosis,
     format_table,
 )
-from phasesweep.fem_field import harmonics_1sided
 from phasesweep.geometry import inrunner, outrunner
+from phasesweep.harmonics import harmonics_1sided
 from phasesweep.measured import MeasuredResult
 from phasesweep.motor import Motor
 from phasesweep.parallel import execute_generic
@@ -216,6 +216,13 @@ _SENSITIVITY_LABEL: dict[str, str] = {
     "drive_sim": "τ_sim",
 }
 
+# Pseudo-track riding in the sensitivity grids: peak iron |B| (Tesla, raw)
+# per fem sweep point. Rendered as a sub-row under B₁_fem so saturation
+# curvature is visible next to its R²; excluded from linearity fits,
+# figures, and the direction-agreement summary.
+_SAT_TRACK: str = "b_iron_max"
+_SAT_THRESHOLD_T: float = 1.8
+
 
 def _sensitivity_metric(model_key: str, metrics: dict) -> float | None:
     """Extract the sensitivity metric from model results.
@@ -241,18 +248,26 @@ SENSITIVITY_PARAMS = {
     "L_stk": {"label": "Stack length", "deltas": [-0.10, -0.05, 0.0, 0.05, 0.10]},
     "B_rem": {"label": "Magnet grade (B_rem)", "deltas": [-0.10, -0.05, 0.0, 0.05, 0.10]},
     # k_w: motors without k_w are skipped. L_d/L_q not scaled (leakage not
-    # decomposed — this is a documented limitation). Back-EMF/torque
+    # decomposed — see documented limitations). Back-EMF/torque
     # sensitivity is correct; current-loop dynamics sensitivity is not.
     "k_w": {"label": "Winding factor (k_w)", "deltas": [-0.05, -0.025, 0.0, 0.025, 0.05]},
 }
 
 
-def _analytical_valid(motor: Motor) -> bool:
-    """Smooth-bore analytical model is valid when slots are absent or numerous."""
-    n = motor.geometry.n_slots
-    return n == 0 or n > 6
+def _pct_delta(value: float, ref: float) -> float:
+    """|value - ref| as % of ref; a near-zero ref means a broken run."""
+    if abs(ref) <= 1e-12:
+        raise ValueError(f"degenerate reference value {ref!r}")
+    return abs(value - ref) / abs(ref) * 100
 
 
+def _b1_comparison(ana: RunResult, fem: RunResult) -> tuple[float, float, float, float]:
+    """(b1_ana, b1_fem, delta_pct, speed_ratio) for an analytical/FEM pair."""
+    b1_ana = (ana.metrics or {}).get("fundamental", 0)
+    b1_fem = (fem.metrics or {}).get("fundamental", 0)
+    delta = _pct_delta(b1_fem, b1_ana)
+    speed = fem.elapsed_s / max(ana.elapsed_s, 1e-6)
+    return b1_ana, b1_fem, delta, speed
 
 
 def fig_sensitivity(
@@ -265,7 +280,8 @@ def fig_sensitivity(
         p for p in sens_results
         if any(
             any(v is not None and abs(v) > 1e-6 for v in curve)
-            for curve in sens_results[p].values()
+            for mk, curve in sens_results[p].items()
+            if mk != _SAT_TRACK
         )
     ]
     if not params:
@@ -293,6 +309,8 @@ def fig_sensitivity(
 
         model_curves = sens_results[param]
         for model_key, pct_changes in model_curves.items():
+            if model_key == _SAT_TRACK:
+                continue
             valid_x = [x for x, y in zip(x_vals, pct_changes) if y is not None]
             valid_y = [y for y in pct_changes if y is not None]
             if not valid_y:
@@ -337,6 +355,12 @@ def _load_backemf_waveform(
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Load and normalize CREATOR-style Back_emf.csv to B_r scale.
 
+    Fundamental-amplitude scaling only: the measured EMF is a time waveform
+    and the FEM B_r is a spatial one, so overlaying their shapes is not an
+    EMF-valid comparison (slot ripple is stator-locked, and each harmonic
+    carries its own winding factor — see backemf_validation's
+    _emf_from_rotor_harmonics for the honest construction).
+
     Returns (theta_deg, br_normalized) or None if CSV not found.
     """
     csv_path = (data_dir / "PM_synchronous_motor" / "Measurement_results"
@@ -354,10 +378,13 @@ def _load_backemf_waveform(
     # FFT to get fundamental amplitudes
     emf_amps = np.abs(np.fft.rfft(emf_uniform)) / n_pts
     emf_amps[1:] *= 2
-    emf_fund = emf_amps[n_p] if n_p < len(emf_amps) else 1.0
-
     fem_amps = harmonics_1sided(br_fem)
-    fem_fund = fem_amps[n_p] if n_p < len(fem_amps) else 1.0
+    if n_p >= len(emf_amps) or n_p >= len(fem_amps):
+        raise ValueError(
+            f"spectrum too short to resolve n_p={n_p} "
+            f"(emf len={len(emf_amps)}, fem len={len(fem_amps)})")
+    emf_fund = emf_amps[n_p]
+    fem_fund = fem_amps[n_p]
 
     if emf_fund < 1e-12:
         return None
@@ -751,6 +778,7 @@ def _run_sensitivity(
 
     t_exec = time.perf_counter()
     baseline_vals: dict[str, dict[str, float]] = {n: {} for n in motor_eligible}
+    base_sat: dict[str, float] = {}
     per_job_timing: list[tuple[str, float]] = []
 
     def _on_sens_complete(result: dict, done: int, total: int) -> None:
@@ -764,6 +792,10 @@ def _run_sensitivity(
                 val = _sensitivity_metric(mk, result["metrics"])
                 if val is not None:
                     baseline_vals[motor_name][mk] = val
+                if mk == "fem":
+                    sat = result["metrics"].get(_SAT_TRACK)
+                    if sat is not None:
+                        base_sat[motor_name] = float(sat)
             print(f"  [{done}/{total}] baseline {motor_name}:{mk} ({elapsed:.2f}s)", flush=True)
             return
         print(f"  [{done}/{total}] {tag} → {result['status']} ({elapsed:.2f}s)", flush=True)
@@ -795,6 +827,16 @@ def _run_sensitivity(
         if val is not None:
             pct = (val - base_val) / abs(base_val) * 100 if abs(base_val) > 1e-12 else 0.0
             curves[mk][di] = pct
+        if mk == "fem":
+            sat = result["metrics"].get(_SAT_TRACK)
+            if sat is not None:
+                if _SAT_TRACK not in curves:
+                    # δ=0 slot comes from the baseline run, not a perturbation
+                    curves[_SAT_TRACK] = [
+                        base_sat.get(motor_name) if d == 0.0 else None
+                        for d in SENSITIVITY_PARAMS[param]["deltas"]
+                    ]
+                curves[_SAT_TRACK][di] = float(sat)
 
     sens_by_motor: dict[str, dict[str, dict[str, list[float | None]]]] = {}
     for name, grid in motor_grids.items():
@@ -994,26 +1036,20 @@ def _render_motor_section(
     ana = next((r for r in results if r.model == "analytical"), None)
     fem = next((r for r in results if r.model == "fem"), None)
     if ana and fem and ana.status == "OK" and fem.status == "OK":
-        b1_ana = (ana.metrics or {}).get("fundamental", 0)
-        b1_fem = (fem.metrics or {}).get("fundamental", 0)
-
-        if _analytical_valid(motor):
-            ref = abs(b1_ana) if abs(b1_ana) > 1e-12 else 1.0
-            delta = abs(b1_fem - b1_ana) / ref * 100
-            speed = fem.elapsed_s / max(ana.elapsed_s, 1e-6)
-            w("#### Analytical vs FEM")
-            w("")
-            w("| Analytical B1 (T) | FEM B1 (T) | Delta | Speed ratio |")
-            w("|-------------------|------------|-------|-------------|")
-            w(f"| {b1_ana:.4f} | {b1_fem:.4f} | {delta:.1f}% | {speed:.0f}x |")
-            w("")
+        b1_ana, b1_fem, delta, speed = _b1_comparison(ana, fem)
+        w("#### Analytical vs FEM")
+        w("")
+        w("| Analytical B1 (T) | FEM B1 (T) | Delta | Speed ratio |")
+        w("|-------------------|------------|-------|-------------|")
+        w(f"| {b1_ana:.4f} | {b1_fem:.4f} | {delta:.1f}% | {speed:.0f}x |")
+        w("")
 
     # Waveform figure — generate whenever FEM has data (outside ana+fem guard)
     if fem and fem.status == "OK":
         fem_m = fem.metrics or {}
         if fig_dir and "theta_list" in fem_m:
             ana_theta = ana_br = None
-            if _analytical_valid(motor) and ana and ana.status == "OK":
+            if ana and ana.status == "OK":
                 ana_m = ana.metrics or {}
                 if "theta_list" in ana_m:
                     ana_theta = np.array(ana_m["theta_list"])
@@ -1079,8 +1115,7 @@ def _render_motor_section(
     if fem and linear_fem and fem.status == "OK" and linear_fem.status == "OK":
         b1_nl = (fem.metrics or {}).get("fundamental", 0)
         b1_lin = (linear_fem.metrics or {}).get("fundamental", 0)
-        ref = abs(b1_lin) if abs(b1_lin) > 1e-12 else 1.0
-        delta_pct = abs(b1_nl - b1_lin) / ref * 100
+        delta_pct = _pct_delta(b1_nl, b1_lin)
         w("#### Linear vs Nonlinear FEM")
         w("")
         w("| B1 linear (T) | B1 nonlinear (T) | Delta |")
@@ -1208,11 +1243,17 @@ def _render_sensitivity(
           f"A +{max_delta*100:.0f}% OD change produces a "
           f"+{bore_pct:.0f}% bore change (fixed gap + magnet thickness).")
         w("")
-    if not _analytical_valid(motor):
+    if geo.n_slots > 0:
         w("> **Note:** B₁_fem may oppose torque direction under OD perturbation: "
           "slot openings grow with bore circumference (fixed slot geometry) "
           "worsening the Carter factor, while torque still rises because "
           "ψ_f integrates over a larger bore area.")
+        w("")
+    if any(_SAT_TRACK in mc for mc in sens.values()):
+        w(f"> **Note:** B₁_fem runs nonlinear. Where the b_iron_max sub-row "
+          f"exceeds ~{_SAT_THRESHOLD_T:g} T the track is saturation-curved — "
+          f"a low linear-fit R² there reflects BH-curve physics, not solver "
+          f"noise.")
         w("")
 
     if not any(any(v is not None for v in c) for curves in sens.values() for c in curves.values()):
@@ -1220,17 +1261,13 @@ def _render_sensitivity(
         w("")
         return
 
-    # Drop B₁_analytical for motors where smooth-bore assumption is invalid
-    if not _analytical_valid(motor):
-        for param_curves in sens.values():
-            param_curves.pop("B₁_analytical", None)
-
     if fig_dir:
         fn = fig_sensitivity(name, sens, fig_dir)
         w(f"![Sensitivity — {name}](figures/{fn})")
         w("")
 
-    all_tracks = sorted(set().union(*(mc.keys() for mc in sens.values())))
+    all_tracks = sorted(
+        set().union(*(mc.keys() for mc in sens.values())) - {_SAT_TRACK})
 
     for param, model_curves in sens.items():
         pdef = SENSITIVITY_PARAMS[param]
@@ -1254,11 +1291,19 @@ def _render_sensitivity(
                 slope, intercept = np.polyfit(xs, ys, 1)
                 ss_res = np.sum((ys - (slope * xs + intercept))**2)
                 ss_tot = np.sum((ys - np.mean(ys))**2)
+                # ss_tot ~ 0 means equal responses: flat, hence exactly linear
                 r2 = 1 - ss_res / ss_tot if ss_tot > 1e-12 else 1.0
                 lin = "linear" if r2 > 0.999 else f"R²={r2:.4f}"
             else:
                 lin = "—"
             w(f"| {mk} | " + " | ".join(cells) + f" | {lin} |")
+            if mk == _SENSITIVITY_LABEL["fem"] and _SAT_TRACK in model_curves:
+                sat = model_curves[_SAT_TRACK]
+                sat_cells = [f"{v:.2f}" if v is not None else "—" for v in sat]
+                sat_vals = [v for v in sat if v is not None]
+                tag = (f"saturating (> {_SAT_THRESHOLD_T:g} T)"
+                       if sat_vals and max(sat_vals) > _SAT_THRESHOLD_T else "—")
+                w("| ↳ b_iron_max (T) | " + " | ".join(sat_cells) + f" | {tag} |")
         w("")
 
     w("**Summary — direction agreement at max perturbation:**")
@@ -1322,19 +1367,13 @@ def _render_summary_tables(
     w("| Motor | Analytical B1 (T) | FEM B1 (T) | Delta (%) | Elapsed ratio |")
     w("|-------|-------------------|------------|-----------|---------------|")
     for name, results in all_results.items():
-        if not _analytical_valid(motors[name]):
-            continue
         ana = next((r for r in results if r.model == "analytical"), None)
         fem = next((r for r in results if r.model == "fem"), None)
         if ana is None or fem is None:
             continue
         if ana.status != "OK" or fem.status != "OK":
             continue
-        b1_ana = (ana.metrics or {}).get("fundamental", 0)
-        b1_fem = (fem.metrics or {}).get("fundamental", 0)
-        ref = abs(b1_ana) if abs(b1_ana) > 1e-12 else 1.0
-        delta = abs(b1_fem - b1_ana) / ref * 100
-        speed = fem.elapsed_s / max(ana.elapsed_s, 1e-6)
+        b1_ana, b1_fem, delta, speed = _b1_comparison(ana, fem)
         w(f"| {name} | {b1_ana:.4f} | {b1_fem:.4f} | {delta:.1f}% | {speed:.0f}x slower |")
     w("")
 
@@ -1352,8 +1391,7 @@ def _render_summary_tables(
             continue
         b1_nl = (nl_fem.metrics or {}).get("fundamental", 0)
         b1_lin = (lin_fem.metrics or {}).get("fundamental", 0)
-        ref = abs(b1_lin) if abs(b1_lin) > 1e-12 else 1.0
-        delta_pct = abs(b1_nl - b1_lin) / ref * 100
+        delta_pct = _pct_delta(b1_nl, b1_lin)
         w(f"| {name} | {b1_lin:.4f} | {b1_nl:.4f} | {delta_pct:.2f}% |")
     w("")
 

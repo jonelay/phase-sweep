@@ -60,6 +60,77 @@ class TestOutrunnerConstruction:
             outrunner(r_outer=0.80, r_rotor=0.70, r_magnet=0.64, r_stator=0.50, r_inner=0.10, r_ag=0.40)
 
 
+class TestBackIronThickness:
+
+    def _base(self, **kw):
+        return outrunner(r_outer=0.80, r_rotor=0.70, r_magnet=0.64,
+                         r_stator=0.50, r_inner=0.10, **kw)
+
+    def test_default_none(self):
+        assert self._base().back_iron_thickness is None
+
+    def test_valid_split(self):
+        geo = self._base(back_iron_thickness=0.05)
+        assert geo.back_iron_thickness == 0.05
+
+    def test_zero_raises(self):
+        with pytest.raises(ValueError, match="back_iron_thickness"):
+            self._base(back_iron_thickness=0.0)
+
+    def test_exceeds_wall_raises(self):
+        # wall = r_outer - r_rotor = 0.10
+        with pytest.raises(ValueError, match="back_iron_thickness"):
+            self._base(back_iron_thickness=0.15)
+
+    def test_inrunner_raises(self):
+        # the __post_init__ guard (factory doesn't expose the kwarg)
+        from phasesweep.geometry import Geometry
+        with pytest.raises(ValueError, match="outrunner-only"):
+            Geometry(topology="inrunner", r_outer=1.0, r_stator=0.70,
+                     r_magnet=0.64, r_rotor=0.30, r_inner=0.0, r_ag=0.67,
+                     back_iron_thickness=0.05)
+
+    def test_config_id_unchanged_when_none(self):
+        # back-compat: existing run-IDs must not move
+        g_none = self._base()
+        g_explicit_none = self._base(back_iron_thickness=None)
+        assert g_none.config_id == g_explicit_none.config_id
+
+    def test_config_id_hashes_thickness(self):
+        g1 = self._base(back_iron_thickness=0.04)
+        g2 = self._base(back_iron_thickness=0.05)
+        assert g1.config_id != g2.config_id
+        assert g1.config_id != self._base().config_id
+
+    def test_from_toml(self):
+        geo = geometry_from_toml(
+            {"r_outer": 0.80, "r_rotor": 0.70, "r_magnet": 0.64,
+             "r_stator": 0.50, "r_inner": 0.10, "back_iron_thickness": 0.05},
+            "outrunner",
+        )
+        assert geo.back_iron_thickness == 0.05
+
+    def test_from_toml_inrunner_rejected_loudly(self):
+        # previously the key was silently dropped for inrunners
+        with pytest.raises(ValueError, match="outrunner-only"):
+            geometry_from_toml(
+                {"r_outer": 0.05, "r_stator": 0.03, "r_magnet": 0.025,
+                 "r_rotor": 0.02, "back_iron_thickness": 0.005},
+                "inrunner",
+            )
+
+    def test_circle_spec_splits_yoke(self):
+        from phasesweep.fem_field import _circle_spec
+        plain = [n for _, n in _circle_spec(self._base())]
+        assert plain == ["yoke", "pm", "airgap", "stator", "air"]
+        split = _circle_spec(self._base(back_iron_thickness=0.05))
+        names = [n for _, n in split]
+        assert names == ["shell", "back_iron", "pm", "airgap", "stator", "air"]
+        # split radius sits between r_rotor and r_outer
+        radii = {n: r for r, n in split}
+        assert radii["back_iron"] == pytest.approx(0.75)  # r_rotor + 0.05
+
+
 class TestConfigId:
 
     def test_determinism(self):
@@ -135,6 +206,14 @@ class TestGeometryFromToml:
         assert geo.r_magnet == pytest.approx(0.047 / 2)
         assert geo.r_rotor == pytest.approx(0.047 / 2 - 0.00435)
 
+    def test_legacy_names_outrunner_raises(self):
+        geo_dict = {
+            "stator_od": 0.113, "stator_id": 0.0478, "rotor_od": 0.047,
+            "magnet_thickness": 0.00435,
+        }
+        with pytest.raises(ValueError, match="inrunner-only"):
+            geometry_from_toml(geo_dict, "outrunner")
+
     def test_creator_toml_geometry(self):
         geo_dict = {
             "stator_od": 0.113, "stator_id": 0.0478, "rotor_od": 0.047,
@@ -173,3 +252,43 @@ class TestGeometryFromToml:
         }
         with pytest.raises(ValueError, match="r_inner > 0"):
             geometry_from_toml(geo_dict, "outrunner")
+
+
+class TestSlotInvariants:
+    """Slot-field validation: unphysical slot configs must be rejected."""
+
+    def _base(self, **kw):
+        return dict(r_outer=1.0, r_stator=0.70, r_magnet=0.64, r_rotor=0.30) | kw
+
+    def test_negative_slot_depth_raises(self):
+        with pytest.raises(ValueError, match="slot_depth"):
+            inrunner(**self._base(n_slots=9, slot_depth=-0.01))
+
+    def test_slot_punch_through_inrunner_raises(self):
+        with pytest.raises(ValueError, match="punches through"):
+            inrunner(**self._base(n_slots=9, slot_depth=0.35))
+
+    def test_slot_punch_through_outrunner_raises(self):
+        with pytest.raises(ValueError, match="punches through"):
+            outrunner(r_outer=0.80, r_rotor=0.70, r_magnet=0.64,
+                      r_stator=0.50, r_inner=0.10, n_slots=9, slot_depth=0.45)
+
+    def test_slot_width_ratio_bounds(self):
+        with pytest.raises(ValueError, match="slot_width_ratio"):
+            inrunner(**self._base(n_slots=9, slot_depth=0.1, slot_width_ratio=1.5))
+        with pytest.raises(ValueError, match="slot_width_ratio"):
+            inrunner(**self._base(n_slots=9, slot_depth=0.1, slot_width_ratio=0.0))
+
+    def test_slot_opening_exceeds_pitch_raises(self):
+        pitch = 2 * math.pi * 0.70 / 9
+        with pytest.raises(ValueError, match="slot pitch"):
+            inrunner(**self._base(n_slots=9, slot_depth=0.1,
+                                  slot_opening_width=pitch * 1.1))
+
+    def test_zero_slot_depth_with_slots_legal(self):
+        geo = inrunner(**self._base(n_slots=9, slot_depth=0.0))
+        assert geo.slot_opening_ratio == 0.0
+
+    def test_smooth_bore_ignores_slot_fields(self):
+        geo = inrunner(**self._base(n_slots=0, slot_depth=-1.0, slot_width_ratio=5.0))
+        assert geo.n_slots == 0

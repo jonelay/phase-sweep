@@ -4,32 +4,60 @@ build-backend = "hatchling.build"
 
 [project]
 name = "phasesweep"
-version = "0.2.0"
+version = "0.3.0"
 description = "PMSM simulation for stator/rotor design exploration"
 requires-python = ">=3.12"
-authors = [{name = "Jone"}]
+authors = [{name = "Jone Lay", email = "jlay.dev@pm.me"}]
 license = {text = "LGPL-2.1-only"}
 readme = "README.md"
 keywords = ["motor", "pmsm", "bldc", "fem", "simulation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU Lesser General Public License v2 (LGPLv2)",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 dependencies = [
     "numpy",
     "matplotlib",
     "motulator>=0.7.3,<0.8",  # _fix_mtpv_nan patches 0.7.x privates (_psi_s_mtpv)
     "ngsolve",
+    "scipy",  # calibration least_squares (was already transitive via motulator)
 ]
 
 [project.optional-dependencies]
 gpu = ["cupy-cuda12x"]
-mkl = ["mkl"]
-test = ["pytest", "pytest-timeout"]
-dev = ["ruff"]
+mkl = ["mkl"]  # ngsolve PARDISO/BLAS backend — never imported directly
+server = ["fastapi", "uvicorn[standard]", "structlog", "tomli-w"]
+test = ["pytest", "pytest-timeout", "httpx"]
+dev = ["ruff", "mypy"]
 
 [project.urls]
 Repository = "https://github.com/jonelay/phase-sweep"
+Issues = "https://github.com/jonelay/phase-sweep/issues"
+Changelog = "https://github.com/jonelay/phase-sweep/blob/main/CHANGELOG.md"
 
 [project.scripts]
 phasesweep-import = "phasesweep.cli_import:main"
 phasesweep-crossval = "phasesweep.cli_crossval:main"
+phasesweep-calibrate = "phasesweep.cli_calibrate:main"
+phasesweep-server = "phasesweep.server.__main__:main"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "notes/",
+    "output/",
+    "results/",
+    "docs/refs/",
+    "docs/datasheets/",
+    "data/*/captures/",
+    # Third-party DOI dataset (10.3217/sns1d-77m43) — gitignored, but
+    # hatchling does not honor the nested data/creator_case_pmsm/.gitignore,
+    # so it shipped in the sdist. Not ours to redistribute.
+    "data/creator_case_pmsm/PM_synchronous_motor.zip",
+    "data/creator_case_pmsm/PM_synchronous_motor/",
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -58,6 +86,25 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["phasesweep"]
+
+[tool.mypy]
+files = ["phasesweep"]
+python_version = "3.12"
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+module = ["ngsolve.*", "netgen.*", "motulator.*", "cupy", "scipy.*"]
+ignore_missing_imports = true
+
+# Mutation testing — mutmut is not a declared dependency:
+#   uv pip install mutmut && mutmut run "phasesweep.analytical.*"
+# The whole package is copied so imports resolve inside mutants/; restrict
+# which mutants actually run with the positional filter above.
+[tool.mutmut]
+source_paths = ["phasesweep"]
+also_copy = ["tests", "motors", "pyproject.toml", "phasesweep/defaults.toml"]
+pytest_add_cli_args_test_selection = ["tests/test_analytical.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

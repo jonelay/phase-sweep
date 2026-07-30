@@ -58,8 +58,8 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 > **α_p scaling (Zhu Eq 7a).** For the fundamental harmonic, the ratio of
 > partial-pitch to full-pitch magnetization is exactly `sin(πα_p/2)`.
 > **Analytical:** `zhu_howe_Br` applies this as `k_mp = sin(πα_p/2)` directly.
-> **FEM:** The mesh models discrete magnet arcs (Phase 3d,
-> `_cut_magnet_arcs` in `fem_field.py`) — `fem_runner` passes unscaled
+> **FEM:** The mesh models discrete magnet arcs (`_cut_magnet_arcs`
+> in `fem_field.py`) — `fem_runner` passes unscaled
 > `B_rem` together with `alpha_p`, and the geometry itself captures the
 > inter-magnet gaps. Arcs are skipped (full ring) when the gap width
 > would be < 0.5 mm, to avoid OCC boolean failures.
@@ -116,8 +116,9 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | saturation_warning | — | Boolean flag: true when saturation_ratio > 3.0 and linear model is unreliable |
 | k_T | N·m/A_peak | Torque constant = 1.5 × n_p × ψ_f (peak current convention) |
 | k_T_rms | N·m/A_rms | RMS torque constant = k_T × √2 |
+| k_T_effective | N·m/A_peak | Effective torque per ampere at MTPA = τ / I_s (includes reluctance torque; equals k_T for non-salient) |
 | MTPA | — | Maximum Torque Per Ampere (Morimoto 1994 quadratic) |
-| γ (gamma) | rad | MTPA angle from q-axis (0 for non-salient) |
+| γ (gamma) | rad | MTPA angle from q-axis (0 for non-salient; < 0 for reverse saliency, magnetizing i_d) |
 | gamma_opt_deg | deg | Optimal MTPA angle at I_rated |
 | I_s | A_peak | Stator current magnitude (peak, per motulator convention) |
 | I_rated | A_peak | Rated continuous stator current (peak; TOML may specify I_rated_rms) |
@@ -149,10 +150,6 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | tau_M | N·m | Electromagnetic torque | motulator: `tau_M` ✓ |
 | i_s_ab | A (complex) | Stator current in αβ frame (peak) | motulator: `i_s_ab` ✓ |
 | J | kg·m² | Moment of inertia | motulator: `J` on MechanicalSystem ✓ |
-
-> **W_REF bug — FIXED.** `build_sim` previously divided W_REF by
-> n_p, but W_REF is already mechanical. Fixed: `w_ref_mech = drive.W_REF`.
-> `extract_metrics` also fixed to normalize using mechanical speed directly.
 
 > **backemf_fundamental** formula in `registry.py`: `w_e = W_REF * n_p` correctly
 > converts mechanical → electrical, then `E = w_e × ψ_f`. Validated: CREATOR 47.91 V
@@ -281,9 +278,6 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | Awan 2.2-kW IPM | Inrunner (salient) | 6p | 3 | Torque curve, MTPA angle |
 | Zhu & Howe 8-pole | Both | 8p/smooth | 4 | Paper reference geometry (analytical verification) |
 
-> **CREATOR** was listed as 8p/12s in the original glossary — corrected to 4p/6s
-> per TOML (n_p=2, n_slots=6).
-
 ## Data & Result Types
 
 | Type | Purpose |
@@ -317,48 +311,3 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | field_*.png | Rasterised FEM field solution (|B| over the cross-section) |
 | sensitivity_*.png | Response change (%) vs parameter change (%) per track |
 
----
-
-## Audit Notes
-
-Issues found during verification against Zhu & Howe 2002, motulator source,
-and the codebase. Items marked ⚠ need discussion or a fix.
-
-### Confirmed correct
-
-- **Geometry radii mapping** to Zhu R_s, R_m, R_r — verified in `geometry.py` docstring and code ✓
-- **B_rem vs B_r disambiguation** — Zhu uses B_r for both remanence and radial field;
-  our B_rem avoids collision ✓
-- **motulator parameter names** — n_p, R_s, L_d, L_q, psi_f, J, w_M, tau_M, i_s_ab
-  all match motulator source exactly ✓
-- **k_T formula** — 1.5 × n_p × ψ_f with peak values, consistent with 3-phase
-  torque equation using peak space vectors ✓
-- **backemf_fundamental** — w_e × ψ_f where w_e = W_REF × n_p; validated at 1.1% ✓
-- **Picard iteration** — extends Zhu's infinite-iron assumption to finite μ_r,fe;
-  Zhu's solution is the limiting case as μ_r,fe → ∞ ✓
-
-### ~~⚠ W_REF speed reference bug (sim.py)~~ — FIXED
-
-Fixed: `w_ref_mech = drive.W_REF` (no division by n_p). Also fixed
-`extract_metrics` to normalize using mechanical speed directly.
-
-### ~~⚠ α_p not exposed~~ — FIXED
-
-`alpha_p` field added to Motor, AnalyticalParams, FemParams.
-Default 1.0 preserves all existing results. Two latent threading bugs also fixed:
-analytical runner now passes `alpha_p=params.alpha_p` to `zhu_howe_Br`;
-FEM runner originally pre-scaled `B_rem × sin(πα_p/2)` as a full-pitch-ring
-approximation — superseded in Phase 3d by discrete magnet arcs
-(`_cut_magnet_arcs`): the FEM mesh now models the inter-magnet gaps
-directly and receives unscaled B_rem.
-
-### Clarifications added
-
-- **I_rated / I_s are peak values**, not RMS. Original glossary said "A_rms" — corrected.
-- **N is turns per coil**, not per phase. N_eff = N × coils_series maps to Zhu's W.
-- **CREATOR is 4p/6s** (n_p=2), not 8p/12s as originally stated.
-- **p, q, s are NOT Zhu notation** — they're our test-code abstraction for
-  topology-agnostic radii. Zhu uses R_s, R_m, R_r directly.
-- **Zhu uses scalar potential φ**; our FEM uses vector potential A_z.
-  Both are valid for 2-D; the glossary no longer attributes the A-formulation to Zhu.
-- **Tolerance tier precedence** clarified: per-dataset > source-pair table > default.

@@ -16,11 +16,12 @@ from tests.conftest import make_motor
 
 class TestRegistryStructure:
 
-    def test_ten_entries(self):
+    def test_registered_models(self):
         assert set(MODEL_REGISTRY.keys()) == {
             "analytical", "fem", "drive_sim", "rated_torque", "stall_torque",
+            "thermal_duty", "torque_speed", "iron_loss", "demag_screen",
             "backemf_capture", "inductance_test", "resistance_test",
-            "torque_test", "airgap_flux_test",
+            "torque_test", "airgap_flux_test", "iron_loss_test",
         }
 
     def test_all_entries_are_model_info(self):
@@ -97,6 +98,18 @@ class TestAnalyticalRunner:
         assert "fundamental" in result
         assert "thd_pct" in result
 
+    def test_thd_pins_waveform_shape(self):
+        """Value pin on the analytical v4 odd-harmonic series.
+
+        Guards the n_p -> fundamental-bin wiring end to end, and is the only
+        model-level check that would see a pure scale error in compute_thd.
+        Independent of n_theta. Update on an analytical physics
+        change, alongside the version bump.
+        """
+        rc = RunConfig(motor=make_motor(), model="analytical", n_theta=360)
+        result = _run_analytical_impl(rc)
+        assert result["thd_pct"] == pytest.approx(32.27, abs=0.05)
+
     def test_fundamental_positive(self):
         rc = RunConfig(motor=make_motor(), model="analytical", n_theta=360)
         result = _run_analytical_impl(rc)
@@ -107,6 +120,19 @@ class TestAnalyticalRunner:
         result = _run_analytical_impl(rc)
         assert len(result["theta_list"]) == 180
         assert len(result["B_r_list"]) == 180
+
+    def test_n_theta_boundary_rejected(self):
+        # n_theta == 2*n_p + 1 passes the FFT-bin bound but makes the
+        # series' max_order cutoff drop the k=1 term: previously a silent
+        # all-zero waveform stored as OK
+        motor = make_motor()
+        rc = RunConfig(
+            motor=motor, model="analytical", n_theta=2 * motor.n_p + 1)
+        with pytest.raises(ValueError, match=r"2\*n_p \+ 2"):
+            _run_analytical_impl(rc)
+        ok = _run_analytical_impl(RunConfig(
+            motor=motor, model="analytical", n_theta=2 * motor.n_p + 2))
+        assert ok["fundamental"] > 0
 
     def test_backemf_fundamental_present(self):
         rc = RunConfig(motor=make_motor(), model="analytical")
@@ -141,7 +167,7 @@ class TestAnalyticalRunner:
         # psi_f → derived B_rem → flux_linkage_peak must round-trip exactly
         # on a slotted motor: the inversion and psi_f_carter use the same
         # Carter-adjusted field radii and original-bore winding formula
-        # (was −2.06% before the S110 Carter-consistent inversion)
+        # (was −2.06% before the Carter-consistent inversion)
         from phasesweep.configs import load_motor
         from tests.conftest import REPO_ROOT
         motor = load_motor(REPO_ROOT / "motors/actuator_steel_rotor.toml")
@@ -165,6 +191,40 @@ class TestAnalyticalRunner:
 # ---------------------------------------------------------------------------
 
 class TestHashFieldsIntegration:
+
+    def test_every_runconfig_field_reaches_the_hash(self):
+        # Guard against silent run-ID collisions: a RunConfig field added
+        # without a matching entry in compute_run_id's solver_params dict
+        # would silently drop out of hashing. An unregistered model skips
+        # the hash_fields filter, so every solver param must move the ID.
+        from phasesweep.sim import SimPlan
+        perturb = {
+            "maxh_fraction": 0.123,
+            "n_theta": 721,
+            "nonlinear": True,
+            "j_s": 123.0,
+            "i_fault": 0.42,
+            "sim_plan": SimPlan(
+                load_torque=1.0, load_time=0.5, t_stop=2.0,
+                speed_step_time=0.1, settle_threshold=0.05,
+                ss_window=0.2, droop_window=0.3, accel_window=(0.1, 0.5),
+                alpha_s=25.0, alpha_c=1250.0, T_s=125e-6, tau_m=0.02,
+            ),
+            "duty_profile": ((1.0, 2.0),),
+            "dataset_id": "guard",
+        }
+        solver_fields = {
+            f.name for f in dataclasses.fields(RunConfig)
+        } - {"motor", "model"}
+        assert solver_fields == set(perturb), (
+            "RunConfig fields changed: update this map AND the "
+            "solver_params dict in compute_run_id"
+        )
+        base = RunConfig(motor=make_motor(), model="unregistered-model")
+        id_base = compute_run_id(base)
+        for name, value in perturb.items():
+            rc = dataclasses.replace(base, **{name: value})
+            assert compute_run_id(rc) != id_base, f"{name} not hashed"
 
     def test_analytical_hash_ignores_fem_params(self):
         motor = make_motor()
@@ -223,7 +283,7 @@ class TestHashFieldsIntegration:
 
     def test_model_version_changes_run_id(self, monkeypatch):
         # Model-code version busts the result cache: bumping it must
-        # change the run ID with no input change (S110 convention fix)
+        # change the run ID with no input change
         rc = RunConfig(motor=make_motor(), model="analytical")
         id_before = compute_run_id(rc)
         info = MODEL_REGISTRY["analytical"]
@@ -234,9 +294,13 @@ class TestHashFieldsIntegration:
         assert compute_run_id(rc) != id_before
 
     def test_computed_models_bumped_to_v2(self):
-        # S110 square-wave convention changed outputs of every computed
-        # model (derived psi_f / B_rem); their run IDs must not collide
-        # with pre-fix cached results
+        # Square-wave convention changed outputs of every computed model
+        # (derived psi_f / B_rem); their run IDs must not collide with
+        # pre-fix cached results. Later models (thermal_duty) start at
+        # v1 — they never had pre-v2 outputs.
+        post_convention_fix = {
+            "thermal_duty", "torque_speed", "iron_loss", "demag_screen",
+        }
         for key, info in MODEL_REGISTRY.items():
-            if info.source == "computed":
+            if info.source == "computed" and key not in post_convention_fix:
                 assert info.version >= 2, f"{key} still at version {info.version}"

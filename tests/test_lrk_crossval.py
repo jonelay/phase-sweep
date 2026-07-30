@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from phasesweep.configs import load_motor
-from phasesweep.fem_field import harmonics_1sided
+from phasesweep.harmonics import harmonics_1sided
 from phasesweep.registry import MODEL_REGISTRY
 from phasesweep.sweep_types import RunConfig, RunResult
 from tests.conftest import REPO_ROOT
@@ -64,10 +64,11 @@ class TestLrkCrossValidation:
     def test_backemf_vs_worksheet_kp(self, lrk, analytical_result):
         """Back-EMF from analytical model vs worksheet K_p = 3.433e-3 Wb.
 
-        K_p is the trapezoidal back-EMF plateau per phase. The worksheet's
-        1-D magnetic circuit assumes uniform (square-wave) magnetization —
-        the same convention production adopted in S110 — so the comparison
-        is now direct: current delta is −0.2%. Tolerance 5% guards the
+        K_p is the trapezoidal back-EMF plateau per phase, while ours is
+        fundamental-based — the conventions differ, so exact agreement is
+        not expected. Square-wave magnetization plus the corrected
+        single-layer k_w = 0.966 (0.933 was the double-layer value)
+        gives a current delta of ≈ +3.3%. Tolerance 5% guards the
         Carter/winding-formula approximations.
         """
         backemf = analytical_result.metrics.get("backemf_fundamental")
@@ -91,7 +92,7 @@ class TestLrkCrossValidation:
     def test_analytical_vs_fem_fundamental(self, analytical_result, fem_result):
         """Analytical and FEM fundamental harmonics should agree within 5%.
 
-        Both solvers share the square-wave source fundamental (S110), so
+        Both solvers share the square-wave source fundamental, so
         the residual is slotting/mesh only (currently < 1%).
         """
         anal_fund = analytical_result.metrics["fundamental"]

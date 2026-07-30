@@ -9,7 +9,7 @@ How phase-sweep names things vs its three upstream references:
 **Zhu & Howe 2002** (physics), **motulator** (drive simulation), **NGSolve** (FEM).
 
 The goal is to identify where the same name means different things,
-where the same thing has different names, and where we can seek harmony.
+where the same thing has different names, and where names can be aligned.
 
 ---
 
@@ -116,11 +116,11 @@ current code uses `n_slots` (via `geometry.n_slots`) throughout.
 | Drive operating point | — | `DriveParams` frozen dataclass | U_DC, MAX_I_S, W_REF, I_LIMIT |
 | Validated solver params | — | `AnalyticalParams`, `FemParams`, `DriveSimParams` | Factories: `prepare_analytical()` etc. |
 
-**Resolved (Phase 1):** The old `MotorConfig` TypedDict, `MotorSweepConfig`
-dataclass, and `FullMotorConfig` have been replaced by the three-tier split
-(Geometry → Motor → RunConfig), aligning with motulator's Pars/Cfg
-separation. Solver param factories (`solver_params.py`) validate Motor
-fields at the solver boundary.
+The three-tier split (Geometry → Motor → RunConfig) replaces the earlier
+`MotorConfig` TypedDict, `MotorSweepConfig` dataclass, and
+`FullMotorConfig`, aligning with motulator's Pars/Cfg separation. Solver
+param factories (`solver_params.py`) validate Motor fields at the solver
+boundary.
 
 ---
 
@@ -137,9 +137,8 @@ fields at the solver boundary.
 
 motulator convention: uppercase `_M` = mechanical, lowercase `_m` = electrical.
 
-**Resolved (Phase 1):** The old `w_m` (mechanical) / `w_e` (electrical) inversion
-has been fixed. Code now uses `w_M` for mechanical and `w_m` for electrical,
-matching motulator exactly.
+Code uses `w_M` for mechanical and `w_m` for electrical, matching
+motulator exactly; earlier code inverted `w_m` and `w_e`.
 
 ---
 
@@ -199,8 +198,8 @@ prefix for GridFunctions. Our naming follows this.
 | `ResultStore` | class | JSONL persistence layer | `result_store.py` |
 | `MeasuredResult` | frozen dataclass | Imported lab/published data with comparison metadata | `measured.py` |
 
-**Resolved (Phase 1):** the original `SweepResult` was renamed `RunResult` —
-the single result type for all run types. Its `model` field (registry key)
+`RunResult` (originally `SweepResult`) is the single result type for all
+run types. Its `model` field (registry key)
 identifies the runner; legacy `run_type` values are mapped via
 `_resolve_model()` during deserialization. Two *new* types later reused the
 freed-up names for different purposes: `SlimResult` (index entry NamedTuple,
@@ -229,84 +228,23 @@ No changes needed in this domain.
 
 ## 11. `cfg_name` — resolved
 
-**Resolved (Phase 1):** `build_sim` no longer takes `cfg_name` +
-`MotorConfig`. Current signature:
+`build_sim` signature — neither `cfg_name` nor `MotorConfig` appears:
 `build_sim(params: DriveSimParams, plan: SimPlan | None = None, *, torque_ref=None)`.
 
 ---
 
-## Summary: Collision severity
+## Summary: naming collisions
 
-| Collision | Severity | Resolution |
-|---|---|---|
-| `R_s` resistance vs radius | ~~**High**~~ | **Done** — Geometry dataclass with `r_stator` etc. separates domains |
-| `_R_S` ≠ `Rs` (different radii, similar names) | ~~**High**~~ | **Done** — descriptive names replace abbreviations |
-| `w_m` mechanical vs electrical | ~~**Medium**~~ | **Done** — follows motulator: `w_M` mechanical, `w_m` electrical |
-| `config`/`cfg` for 3+ types | ~~**Medium**~~ | **Done** — three-tier split (Geometry/Motor/RunConfig) |
-| `Q` / `n_slots` dual naming | **Low** | Resolved — `Q` locals since removed; `n_slots` throughout |
-| `B_r` waveform vs `B_rem` remanence | **Low** | Already resolved by `B_rem` choice |
-| `n_p` / `npp` / `n` | **Low** | Three domains, three valid reasons |
-| ~~`SweepResult` for non-sweeps~~ | ~~**Low**~~ | **Done** — renamed to `RunResult` |
-| `p, q, s` abstract radii | **None** | Intentionally abstract, should stay |
-| NGSolve naming | **None** | Already aligned |
+| Collision | Resolution |
+|---|---|
+| `R_s` resistance vs radius | Geometry dataclass with `r_stator` etc. separates domains |
+| `_R_S` ≠ `Rs` (different radii, similar names) | Descriptive names replace abbreviations |
+| `w_m` mechanical vs electrical | Follows motulator: `w_M` mechanical, `w_m` electrical |
+| `config`/`cfg` for 3+ types | Three-tier split (Geometry/Motor/RunConfig) |
+| `Q` / `n_slots` dual naming | `Q` locals removed; `n_slots` throughout |
+| `B_r` waveform vs `B_rem` remanence | Resolved by the `B_rem` choice |
+| `n_p` / `npp` / `n` | Three domains, three valid reasons |
+| `SweepResult` for non-sweeps | Renamed to `RunResult` |
+| `p, q, s` abstract radii | Intentionally abstract, should stay |
+| NGSolve naming | Already aligned |
 
----
-
-## Action items
-
-Concrete changes to make, grouped by when they'd naturally land.
-
-### Quick fixes (current code, no spec dependency)
-
-1. ~~**`w_m` → `w_M`**~~ Done — Phase 1. `sim.py` now uses `w_M` (mechanical), `w_m` (electrical).
-
-2. ~~**`B_REM` → `B_rem`**~~ Done — Phase 1. Class constant removed/renamed.
-
-3. ~~**Remove `cfg_name`** from `build_sim` signature.~~ Done — Phase 1. `build_sim` now takes `params: DriveSimParams`.
-
-4. ~~**`SweepResult` → `RunResult`**~~. Done — Phase 1.
-
-### Lands with Geometry dataclass (spec Phase 1)
-
-5. ~~**Replace FEM constants**~~ Done — Phase 1. Geometry dataclass with `r_outer`, `r_stator`, etc.
-
-6. ~~**Pass radii to `zhu_howe_Br`**~~ Done — Phase 1. Parameterized with explicit radii.
-
-### Lands with Motor/RunConfig split (spec Phase 1)
-
-7. ~~**Split `MotorSweepConfig`**~~ Done — Phase 1. Motor + RunConfig dataclasses.
-
-8. ~~**Retire `MotorConfig` / `FullMotorConfig` TypedDicts**~~ Done — Phase 1.
-
----
-
-## Resolved questions
-
-Things the analysis surfaced that have been decided.
-
-1. **`n_slots` on Motor vs Geometry?** → **Geometry.** Slot count
-   determines the physical cross-section shape (OCC cuts, mesh regions,
-   MaterialCF keys). You can't change slot count without changing the
-   geometry. Motor accesses it via `motor.geometry.n_slots`. This is
-   unlike materials (`mu_r_fe`, `mu_r_pm`) which live on Motor because
-   they don't affect the mesh shape.
-
-2. **`Q` as local alias — comment or not?** → **No comment.** The
-   assignment `Q = config.n_slots` is self-documenting. `Q` is universally
-   understood in motor design.
-
-3. **Test variable names (`Rs`, `Rm`, `Rr`, `npp`, `M_n`).** → **No
-   action now.** Tests are reference implementations of the paper — paper
-   notation is correct there. Class docstrings already explain the context.
-   Revisit when Geometry lands: a brief note mapping test names (`Rs`) to
-   production names (`r_stator`) may help then.
-
-4. **`results` overloading.** → **Closed.** Most uses are function-local
-   with type annotations for disambiguation. The one structural issue
-   (`SweepResult` used for non-sweeps) is already covered by action item #4
-   (`SweepResult` → `RunResult`).
-
-5. **`nu` proliferation in `solve_field_fem`.** → **Not a naming issue.**
-   The five forms follow NGSolve convention correctly. The real fix is
-   extracting the Picard iteration into its own function, which is a
-   structural refactor already implied by spec goals for `solve_field_fem`.

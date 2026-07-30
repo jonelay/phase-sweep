@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>phase-sweep</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1 8 Q3 2 5 8 T9 8 T13 8 T17 8' stroke='%232a78d6' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+  <!-- theme attribute set before the stylesheet loads: no light flash -->
+  <script>document.documentElement.dataset.theme = localStorage.getItem("ps-theme") || "light";</script>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/vendor/plotly-cartesian-3.6.0.min.js"></script>
+</head>
+<body>
+  <header id="topbar">
+    <span class="brand">phase-sweep</span>
+    <div id="compare-chips" class="compare-chips" title="compare set"></div>
+    <label class="topbar-select" title="series color palette">◑<select id="palette-select" aria-label="Series color palette"></select></label>
+    <label class="topbar-select" title="|B| heatmap ramp">▧<select id="seq-select" aria-label="|B| heatmap ramp"></select></label>
+    <button id="theme-toggle" class="theme-toggle"></button>
+    <button id="export-png" class="topbar-btn" title="export visible panels as a composite PNG">⤓ PNG</button>
+  </header>
+  <div id="conn-banner" hidden>connection lost — retrying; job progress may be stale</div>
+  <div id="nameplate"></div>
+  <div id="layout">
+    <aside id="sidebar">
+      <button id="rail-toggle" title="collapse sidebar">«</button>
+      <section class="side-section">
+        <h2>Configs</h2>
+        <ul id="config-list" class="config-list"></ul>
+        <p class="config-hint">ctrl-click to compare configs — remove via topbar chips</p>
+      </section>
+      <div id="sidebar-panels"></div>
+    </aside>
+    <main id="main-area">
+      <nav id="main-tabs" role="tablist" aria-label="dashboard views"></nav>
+      <div id="tab-panes"></div>
+    </main>
+  </div>
+  <footer id="statusbar"></footer>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

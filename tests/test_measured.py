@@ -92,6 +92,13 @@ class TestValidation:
         with pytest.raises(ValueError, match="motor_name"):
             validate_measured(_measured(motor_name=""))
 
+    def test_valid_published_source(self):
+        validate_measured(_measured(source="published"))
+
+    def test_descriptive_source_rejected(self):
+        with pytest.raises(ValueError, match="source must be"):
+            validate_measured(_measured(source="published (ANSYS FEM)"))
+
 
 # ---------------------------------------------------------------------------
 # Import path
@@ -183,6 +190,58 @@ class TestCreatorFixture:
         assert data.test_type == "backemf_capture"
         assert data.quantities["backemf_fundamental"] == 47.37
         validate_measured(data)
+
+
+# ---------------------------------------------------------------------------
+# Committed import-format datasets
+# ---------------------------------------------------------------------------
+
+_EMF_CONSTANT_DATASETS = [
+    "data/etel_tmb/backemf_from_ku_0140_030_ra.json",
+    "data/etel_tmb/backemf_from_ku_0210_030_ta.json",
+    "data/etel_tmb/backemf_from_ku_0290_030_ra.json",
+    "data/etel_tmb/backemf_from_ku_0360_030_ta.json",
+    "data/etel_tmb/backemf_from_ku_0450_030_va.json",
+    "data/rexroth_ms2n/backemf_from_ke.json",
+    "data/tecnotion_qtr/backemf_from_ke.json",
+]
+
+
+class TestCommittedDatasets:
+    """Every data/ JSON with a registered measured test_type must import
+    cleanly; the datasheet EMF-constant datasets must carry the psi_f
+    derived_params tag (their TOML psi_f came from the same constants)."""
+
+    @staticmethod
+    def _import_format():
+        for path in sorted((REPO_ROOT / "data").rglob("*.json")):
+            raw = json.loads(path.read_text())
+            if raw.get("test_type") in MODEL_REGISTRY:
+                yield path, MeasuredResult.from_dict(raw)
+
+    def test_all_import_format_datasets_validate(self):
+        found = set()
+        for path, data in self._import_format():
+            validate_measured(data)
+            found.add(str(path.relative_to(REPO_ROOT)))
+        expected = set(_EMF_CONSTANT_DATASETS) | {
+            "data/actuator_steel_rotor/backemf_measured.json"}
+        assert expected <= found
+
+    @pytest.mark.parametrize("rel", _EMF_CONSTANT_DATASETS)
+    def test_emf_constant_datasets_tagged(self, rel):
+        raw = json.loads((REPO_ROOT / rel).read_text())
+        data = MeasuredResult.from_dict(raw)
+        assert data.derived_params == ("psi_f",)
+        assert data.source == "published"
+
+    def test_actuator_dataset_untagged(self):
+        """B_rem in the actuator TOML is the nominal grade value — fitting
+        it against the sweep is the flagship calibration, not an echo."""
+        raw = json.loads((
+            REPO_ROOT / "data/actuator_steel_rotor/backemf_measured.json"
+        ).read_text())
+        assert MeasuredResult.from_dict(raw).derived_params == ()
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +415,9 @@ class TestDataFixtures:
         data = MeasuredResult.from_dict(raw)
         validate_measured(data)
         assert data.source == "published"
-        assert "B_ag_peak" in data.curve_compare
+        assert "B_ag_fundamental" in data.key_mapping
+        assert data.key_mapping["B_ag_fundamental"].computed_key == "fundamental"
+        assert data.quantities["B_ag_fundamental"] == pytest.approx(0.9625)
         assert "backemf_peak" in data.key_mapping
 
     def test_awan_torque_rated(self):

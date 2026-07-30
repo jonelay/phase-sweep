@@ -14,6 +14,7 @@ PMSM simulation for stator/rotor design exploration. Built on
 - **Slotted stator analysis** — OCC boolean geometry for exact arc-bounded slots, armature reaction decomposition, smooth-vs-slotted comparison
 - **Parameter sweeps** — explore the flux-linkage (psi_f) vs saliency-ratio (L_q/L_d) design space with crash-safe JSONL result storage
 - **Sensitivity analysis** — perturbation sweeps over geometry and material parameters (OD, gap, L_stk, B_rem) with parallel execution
+- **Thermal-duty screening** — copper-loss S1 budget check over a torque-time duty profile, with R_s derated to winding temperature; a deliberately optimistic screen (no AC/iron/magnet losses, ideal MTPA reads ~8% under nameplate current), so a failing verdict is decisive and a passing one is not; the cycle-average verdict also assumes the duty period is short against the winding thermal time constant — for long segments check the peak-loss metrics instead
 - **Cross-validation CLI** — import measured data and compare against computed results across multiple motors
 - **GPU-accelerated harmonic decomposition** — CuPy FFT on CUDA (optional, falls back to NumPy)
 
@@ -27,7 +28,7 @@ reference configurations and within 2% across the other tested inrunner and
 outrunner configurations (test-enforced bounds), confirming that the code
 solves the magnetostatic equations correctly.
 
-### Model validation (CREATOR benchmark)
+### Back-EMF and torque validation (CREATOR benchmark)
 
 Cross-checked against the [CREATOR](https://doi.org/10.3217/sns1d-77m43)
 open-benchmark PMSM (70 W, 4-pole, 6-slot, sintered ferrite — Dhakal et
@@ -41,7 +42,15 @@ al., COMPEL 2025):
 
 ![CREATOR back-EMF — measured waveform vs analytical fundamental](docs/images/backemf_waveform.png)
 
-The analytical model captures the back-EMF fundamental to within 1.1%.
+CREATOR is specified by its published circuit parameters, so its flux
+linkage ψ_f is taken directly from the benchmark. These figures therefore
+validate the back-EMF and torque pipeline — electrical-speed conversion,
+`E = ω_e·ψ_f`, and the MTPA torque solve — against an independent
+measured-plus-published reference; they do **not** test the field solver's
+own prediction of ψ_f. (Push CREATOR's geometry through the field solver
+and ψ_f comes out ~7% high, in line with the ~6–7% over-prediction the 2D
+field model shows on the other geometry-driven benchmarks.)
+
 The trapezoidal measured waveform reflects the near-rectangular ferrite
 magnets — consistent with the square-wave magnetization convention both
 solvers use; the analytical comparison is fundamental-only because the
@@ -58,8 +67,10 @@ cd phase-sweep
 python -m venv .venv
 .venv/bin/pip install -e ".[test]"
 
-# Optional: GPU support (requires CUDA 12.x)
-.venv/bin/pip install -e ".[gpu]"
+# Optional extras
+.venv/bin/pip install -e ".[gpu]"   # GPU harmonics (requires CUDA 12.x)
+.venv/bin/pip install -e ".[dev]"   # ruff linting
+.venv/bin/pip install -e ".[mkl]"   # Intel MKL BLAS backend for NumPy
 
 # Run tests
 .venv/bin/python -m pytest tests/
@@ -67,6 +78,8 @@ python -m venv .venv
 # CLI entry points
 phasesweep-import --help
 phasesweep-crossval --output-dir output --plot
+phasesweep-calibrate motor.toml --data measured.json \
+    --params B_rem --quantities backemf_fundamental
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
@@ -93,6 +106,10 @@ The TOML format (sections, fields, units, defaults) is documented in
 
 ## Project structure
 
+[`docs/architecture.md`](docs/architecture.md) has the data-flow spine,
+the three-tier hashing that gives every result its identity, and the
+current model-coverage matrix.
+
 ```
 phasesweep/
 ├── motor.py          # Motor frozen dataclass (composes Geometry + electrical/winding/material)
@@ -117,7 +134,7 @@ phasesweep/
 ├── sim_runner.py     # Subprocess runner for motulator (60s timeout)
 └── fem_runner.py     # Subprocess runner for NGSolve (300s timeout)
 scripts/              # Validation report, sensitivity analysis
-tests/                # pytest (617 tests)
+tests/                # pytest suite
 data/                 # Reference data (CREATOR, Belkhadir, Awan, Deylami) + own lab measurements
 motors/               # Motor parameter files (TOML)
 ```

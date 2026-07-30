@@ -1,6 +1,8 @@
 """Slotted FEM validation — Deylami 8p/12s outrunner.
 
 Compares smooth-bore vs slotted FEM against published ANSYS Maxwell results.
+The published results are saturating, so the comparison run is nonlinear;
+linear runs are kept for the internal smooth-vs-slotted contrast.
 Generates cross-section figures, field maps, waveform overlays, and STEP files.
 
 Published validation targets (Deylami et al., 2024):
@@ -24,12 +26,11 @@ from matplotlib.patches import Wedge
 
 from phasesweep.configs import load_motor
 from phasesweep.fem_field import (
-    compute_thd,
     geometry_to_step,
-    harmonics_1sided,
     rasterise_cross_section,
     solve_field_fem,
 )
+from phasesweep.harmonics import compute_thd, harmonics_1sided
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "output" / "slot_validation"
@@ -40,7 +41,7 @@ B_AG_AVG_PUB = 0.31
 B_AG_PEAK_PUB = 0.49
 
 
-def run_fem(motor, slotted: bool, label: str):
+def run_fem(motor, slotted: bool, label: str, nonlinear: bool = False):
     """Run FEM and return (theta, B_r, mesh, gfu, metrics_dict)."""
     geo = motor.geometry
     n_p = motor.n_p
@@ -52,21 +53,23 @@ def run_fem(motor, slotted: bool, label: str):
         mu_r_pm=motor.mu_r_pm, mu_r_fe=motor.mu_r_fe,
         maxh_fraction=0.03, n_theta=720,
         n_slots=n_slots, return_full=True,
+        nonlinear=nonlinear,
         alpha_p=motor.alpha_p,
     )
 
     amps = harmonics_1sided(B_r)
-    fund_idx = min(n_p, len(amps) - 1)
+    if n_p >= len(amps):
+        raise ValueError(f"spectrum too short to resolve n_p={n_p} (len={len(amps)})")
     metrics = {
         "peak_Br": float(np.max(np.abs(B_r))),
         "avg_Br": float(np.mean(np.abs(B_r))),
-        "fundamental": float(amps[fund_idx]),
-        "thd_pct": compute_thd(amps, fund_idx),
+        "fundamental": float(amps[n_p]),
+        "thd_pct": compute_thd(amps, n_p),
     }
     if n_slots > 0:
         sh_idx = n_slots - n_p
         if 0 < sh_idx < len(amps):
-            metrics["sh_pct"] = float(amps[sh_idx] / max(amps[fund_idx], 1e-12) * 100)
+            metrics["sh_pct"] = float(amps[sh_idx] / max(amps[n_p], 1e-12) * 100)
 
     print(f"\n{label}:")
     for k, v in metrics.items():
@@ -191,7 +194,9 @@ def fig_field_map(mesh, gfu, geo, label: str, filename: str):
     print(f"  Saved {out}")
 
 
-def fig_waveform_comparison(theta_sm, Br_sm, theta_sl, Br_sl):
+def fig_waveform_comparison(theta_sm, Br_sm, theta_sl, Br_sl,
+                            theta_nl: np.ndarray | None = None,
+                            Br_nl: np.ndarray | None = None):
     """Overlay smooth-bore vs slotted B_r waveforms."""
     fig, axes = plt.subplots(2, 1, figsize=(10, 8), gridspec_kw={"height_ratios": [3, 1]})
 
@@ -199,9 +204,13 @@ def fig_waveform_comparison(theta_sm, Br_sm, theta_sl, Br_sl):
     deg_sl = np.degrees(theta_sl)
 
     ax = axes[0]
-    ax.plot(deg_sm, Br_sm, "b-", lw=1.2, label="Smooth-bore FEM", alpha=0.8)
-    ax.plot(deg_sl, Br_sl, "r-", lw=1.2, label="Slotted FEM", alpha=0.8)
-    ax.axhline(B_AG_PEAK_PUB, color="green", ls="--", lw=0.8, label=f"Published peak = {B_AG_PEAK_PUB} T")
+    ax.plot(deg_sm, Br_sm, "b-", lw=1.2, label="Smooth-bore FEM (linear)", alpha=0.8)
+    ax.plot(deg_sl, Br_sl, "r-", lw=1.2, label="Slotted FEM (linear)", alpha=0.8)
+    if Br_nl is not None:
+        ax.plot(np.degrees(theta_nl), Br_nl, "-", color="darkorange", lw=1.2,
+                label="Slotted FEM (nonlinear)", alpha=0.8)
+    ax.axhline(B_AG_PEAK_PUB, color="green", ls="--", lw=0.8,
+               label=f"Published peak = {B_AG_PEAK_PUB} T (saturating ANSYS)")
     ax.axhline(-B_AG_PEAK_PUB, color="green", ls="--", lw=0.8)
     ax.set_xlabel("θ (deg)")
     ax.set_ylabel("B_r (T)")
@@ -262,15 +271,22 @@ def export_step_files(motor):
     print(f"  STEP (slotted): {p_slotted}")
 
 
-def write_summary(m_smooth, m_slotted):
+def write_summary(m_smooth: dict[str, float], m_slotted: dict[str, float],
+                  m_slotted_nl: dict[str, float]):
     """Write a text summary comparing results to published values."""
     lines = [
         "# Deylami 8p/12s Slotted FEM Validation",
         "",
         "## Comparison: smooth-bore vs slotted vs published",
         "",
-        f"{'Metric':<20s}  {'Smooth':>10s}  {'Slotted':>10s}  {'Published':>10s}  {'Δ slotted':>10s}",
-        f"{'-'*20}  {'-'*10}  {'-'*10}  {'-'*10}  {'-'*10}",
+        "Published values are saturating ANSYS Maxwell results, so Δ is computed",
+        "against the nonlinear slotted run; the linear columns are the internal",
+        "smooth-vs-slotted contrast. The published averaging convention is",
+        "unrecorded — avg_Br here is mean(|B_r(θ)|) over the full circumference",
+        "at r_ag, so treat the avg row as indicative only.",
+        "",
+        f"{'Metric':<20s}  {'Smooth lin':>10s}  {'Slot lin':>10s}  {'Slot NL':>10s}  {'Published':>10s}  {'Δ NL':>10s}",
+        f"{'-'*20}  {'-'*10}  {'-'*10}  {'-'*10}  {'-'*10}  {'-'*10}",
     ]
 
     rows = [
@@ -282,15 +298,18 @@ def write_summary(m_smooth, m_slotted):
     for label, key, pub in rows:
         vs = m_smooth.get(key, float("nan"))
         vl = m_slotted.get(key, float("nan"))
+        vn = m_slotted_nl.get(key, float("nan"))
         pub_str = f"{pub:.4f}" if pub is not None else "—"
         if pub is not None and pub > 0:
-            delta = f"{(vl - pub) / pub * 100:+.1f}%"
+            delta = f"{(vn - pub) / pub * 100:+.1f}%"
         else:
             delta = "—"
-        lines.append(f"{label:<20s}  {vs:>10.4f}  {vl:>10.4f}  {pub_str:>10s}  {delta:>10s}")
+        lines.append(f"{label:<20s}  {vs:>10.4f}  {vl:>10.4f}  {vn:>10.4f}  {pub_str:>10s}  {delta:>10s}")
 
-    if "sh_pct" in m_slotted:
-        lines.append(f"{'Slot harmonic (%)':<20s}  {'—':>10s}  {m_slotted['sh_pct']:>10.1f}  {'—':>10s}  {'—':>10s}")
+    if "sh_pct" in m_slotted_nl:
+        lines.append(f"{'Slot harmonic (%)':<20s}  {'—':>10s}  "
+                     f"{m_slotted.get('sh_pct', float('nan')):>10.1f}  "
+                     f"{m_slotted_nl['sh_pct']:>10.1f}  {'—':>10s}  {'—':>10s}")
 
     lines.extend(["", "## Output files", ""])
     for f in sorted(OUT_DIR.iterdir()):
@@ -323,7 +342,9 @@ def main():
     theta_sm, Br_sm, mesh_sm, gfu_sm, amps_sm, m_smooth = run_fem(
         motor, slotted=False, label="Smooth-bore FEM")
     theta_sl, Br_sl, mesh_sl, gfu_sl, amps_sl, m_slotted = run_fem(
-        motor, slotted=True, label="Slotted FEM")
+        motor, slotted=True, label="Slotted FEM (linear)")
+    theta_nl, Br_nl, _, _, _, m_slotted_nl = run_fem(
+        motor, slotted=True, label="Slotted FEM (nonlinear)", nonlinear=True)
 
     # Field maps
     print("\n--- Field maps ---")
@@ -332,7 +353,8 @@ def main():
 
     # Waveform comparison
     print("\n--- Waveform comparison ---")
-    fig_waveform_comparison(theta_sm, Br_sm, theta_sl, Br_sl)
+    fig_waveform_comparison(theta_sm, Br_sm, theta_sl, Br_sl,
+                            theta_nl=theta_nl, Br_nl=Br_nl)
 
     # Harmonics
     print("\n--- Harmonics ---")
@@ -343,7 +365,7 @@ def main():
     export_step_files(motor)
 
     # Summary
-    write_summary(m_smooth, m_slotted)
+    write_summary(m_smooth, m_slotted, m_slotted_nl)
 
 
 if __name__ == "__main__":

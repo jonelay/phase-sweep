@@ -1,7 +1,7 @@
 """Rated torque and MTPA characteristic curve computation.
 
-Implements Morimoto (1994) MTPA quadratic for salient machines,
-with k_T * I_rated fallback for non-salient / reverse-salient.
+Implements Morimoto (1994) MTPA quadratic for salient machines (both
+saliency signs), with k_T * I_rated fallback for non-salient.
 """
 
 from __future__ import annotations
@@ -13,12 +13,23 @@ if TYPE_CHECKING:
     from phasesweep.sweep_types import RunConfig
 
 
+def magnet_torque_constant(n_p: int, psi_f: float) -> float:
+    """Three-phase magnet torque constant k_T = 1.5 · n_p · ψ_f (N·m/A_peak)."""
+    return 1.5 * n_p * psi_f
+
+
 def mtpa_gamma(psi_f: float, L_d: float, L_q: float, I_s: float) -> float:
-    """MTPA angle in radians from q-axis. 0 = all current on q-axis."""
+    """MTPA angle in radians from q-axis. 0 = all current on q-axis.
+
+    The + root of the Morimoto quadratic is the global optimum for both
+    saliency signs: L_q > L_d gives gamma > 0 (demagnetizing i_d < 0),
+    L_d > L_q gives gamma < 0 (magnetizing i_d > 0, positive reluctance
+    torque).
+    """
     if I_s <= 0:
         return 0.0
     dL = L_q - L_d
-    if dL <= 0:
+    if dL == 0:
         return 0.0
     sin_g = (-psi_f + sqrt(psi_f**2 + 8 * dL**2 * I_s**2)) / (4 * dL * I_s)
     sin_g = max(-1.0, min(1.0, sin_g))
@@ -77,23 +88,20 @@ def _mtpa_result(
 ) -> dict[str, Any]:
     """Shared MTPA computation at a given current magnitude.
 
-    Returns tau, k_T, gamma_opt_deg, and curve data.
+    Returns tau, k_T, k_T_effective (= tau / I_s, folds in reluctance
+    torque), gamma_opt_deg (< 0 for reverse saliency, magnetizing i_d),
+    and curve data.
     """
-    k_T = 1.5 * n_p * psi_f
+    k_T = magnet_torque_constant(n_p, psi_f)
 
-    use_simple_kt = (
-        L_d is None or L_q is None
-        or L_q <= L_d
-    )
-
-    if use_simple_kt:
+    if L_d is None or L_q is None or L_q == L_d:
         tau = k_T * I_s
         gamma_opt = 0.0
         Ld = L_d if L_d is not None else 0.0
         Lq = L_q if L_q is not None else 0.0
     else:
-        Ld = L_d  # type: ignore[assignment]
-        Lq = L_q  # type: ignore[assignment]
+        Ld = L_d
+        Lq = L_q
         g = mtpa_gamma(psi_f, Ld, Lq, I_s)
         tau = mtpa_torque(n_p, psi_f, Ld, Lq, I_s, g)
         gamma_opt = degrees(g)
@@ -101,6 +109,7 @@ def _mtpa_result(
     result: dict[str, Any] = {
         "tau": tau,
         "k_T": k_T,
+        "k_T_effective": tau / I_s,
         "gamma_opt_deg": gamma_opt,
     }
 
@@ -121,6 +130,7 @@ def run_rated_torque(config: RunConfig) -> dict[str, Any]:
         "tau_mtpa": r["tau"],
         "k_T": r["k_T"],
         "k_T_rms": r["k_T"] * sqrt(2),
+        "k_T_effective": r["k_T_effective"],
         "gamma_opt_deg": r["gamma_opt_deg"],
         **{k: r[k] for k in _CURVE_KEYS if k in r},
     }
@@ -149,6 +159,7 @@ def run_stall_torque(config: RunConfig) -> dict[str, Any]:
         "tau_stall": r["tau"],
         "I_stall": p.I_stall,
         "k_T": r["k_T"],
+        "k_T_effective": r["k_T_effective"],
         "gamma_opt_deg": r["gamma_opt_deg"],
         "saturation_ratio": saturation_ratio,
         "saturation_warning": saturation_warning,

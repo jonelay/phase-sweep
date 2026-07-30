@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -31,6 +32,11 @@ class Geometry:
       slot_width_ratio   — slot body width / slot pitch (dimensionless)
       slot_opening_width — slot throat width at the bore (m);
                            slot_opening_ratio is derived from it
+
+    Rotor back-iron (outrunner only):
+      back_iron_thickness — radial thickness of the magnetic back-iron ring
+                            (m); splits the yoke into iron ring + non-magnetic
+                            shell. None = whole wall is solid iron (legacy).
     """
 
     topology: Literal["inrunner", "outrunner"]
@@ -46,6 +52,11 @@ class Geometry:
     slot_depth: float = 0.0
     slot_width_ratio: float = 0.6
     slot_opening_width: float = 0.0
+
+    # Outrunner only: split the rotor yoke [r_rotor, r_outer] into a magnetic
+    # back-iron ring of this radial thickness (iron) plus a non-magnetic shell
+    # (mu_r=1) out to r_outer. None = the whole wall is solid iron (legacy).
+    back_iron_thickness: float | None = None
 
     def __post_init__(self) -> None:
         if self.topology == "inrunner":
@@ -81,6 +92,51 @@ class Geometry:
         else:
             raise ValueError(f"Unknown topology: {self.topology!r}")
 
+        if self.back_iron_thickness is not None:
+            if self.topology != "outrunner":
+                raise ValueError(
+                    "back_iron_thickness is outrunner-only "
+                    f"(topology={self.topology!r})"
+                )
+            wall = self.r_outer - self.r_rotor
+            if not (0 < self.back_iron_thickness < wall):
+                raise ValueError(
+                    f"back_iron_thickness={self.back_iron_thickness} must be in "
+                    f"(0, {wall:.6g}) m (r_outer - r_rotor); use None for a "
+                    "fully solid yoke"
+                )
+
+        if self.n_slots > 0:
+            if self.slot_depth < 0:
+                raise ValueError(f"slot_depth={self.slot_depth} must be >= 0")
+            if self.slot_depth > 0:
+                # Slots extend from the bore into the stator annulus:
+                # inrunner [r_stator, r_stator + depth], outrunner
+                # [r_stator - depth, r_stator].
+                if self.topology == "inrunner":
+                    yoke = self.r_outer - (self.r_stator + self.slot_depth)
+                else:
+                    yoke = (self.r_stator - self.slot_depth) - self.r_inner
+                if yoke <= 0:
+                    raise ValueError(
+                        f"slot_depth={self.slot_depth} punches through the "
+                        f"stator annulus (remaining yoke {yoke:.6g} m)"
+                    )
+            if not (0 < self.slot_width_ratio < 1):
+                raise ValueError(
+                    f"slot_width_ratio={self.slot_width_ratio} must be in (0, 1)"
+                )
+            if self.slot_opening_width < 0:
+                raise ValueError(
+                    f"slot_opening_width={self.slot_opening_width} must be >= 0"
+                )
+            slot_pitch = 2 * math.pi * self.r_stator / self.n_slots
+            if self.slot_opening_width >= slot_pitch:
+                raise ValueError(
+                    f"slot_opening_width={self.slot_opening_width} exceeds "
+                    f"slot pitch {slot_pitch:.6g} m at the bore"
+                )
+
     @property
     def slot_opening_ratio(self) -> float:
         """Slot opening over slot pitch at the bore. Derived from
@@ -97,6 +153,9 @@ class Geometry:
             f"{self.r_ag:.6f}_{self.n_slots}_{self.slot_depth:.6f}_"
             f"{self.slot_width_ratio:.6f}_{self.slot_opening_width:.6f}"
         )
+        # Append only when set so existing run-IDs / cache keys are unchanged.
+        if self.back_iron_thickness is not None:
+            key += f"_bi{self.back_iron_thickness:.6f}"
         return hashlib.md5(key.encode()).hexdigest()[:12]
 
 
@@ -139,6 +198,7 @@ def outrunner(
     slot_depth: float = 0.0,
     slot_width_ratio: float = 0.6,
     slot_opening_width: float = 0.0,
+    back_iron_thickness: float | None = None,
 ) -> Geometry:
     """Build an outrunner Geometry (stator inside rotating magnet ring).
     All lengths in meters; r_ag defaults to the airgap midpoint
@@ -151,6 +211,7 @@ def outrunner(
         r_rotor=r_rotor, r_inner=r_inner, r_ag=r_ag,
         n_slots=n_slots, slot_depth=slot_depth, slot_width_ratio=slot_width_ratio,
         slot_opening_width=slot_opening_width,
+        back_iron_thickness=back_iron_thickness,
     )
 
 
@@ -160,7 +221,7 @@ def default_inrunner() -> Geometry:
     )
 
 
-def geometry_from_toml(geo: dict[str, Any], topology: str = "inrunner") -> Geometry:
+def geometry_from_toml(geo: dict[str, Any], topology: Literal["inrunner", "outrunner"] = "inrunner") -> Geometry:
     """Build Geometry from a TOML [geometry] section.
 
     Supports spec names (r_outer, r_stator, ...) and legacy TOML names
@@ -173,6 +234,14 @@ def geometry_from_toml(geo: dict[str, Any], topology: str = "inrunner") -> Geome
         r_rotor = geo["r_rotor"]
         r_inner = geo.get("r_inner", 0.0)
     elif "stator_od" in geo:
+        # legacy OD/ID names encode the inrunner layout (stator outside,
+        # magnet ring on the rotor OD) — meaningless for an outrunner
+        if topology != "inrunner":
+            raise ValueError(
+                "legacy geometry names (stator_od/stator_id/rotor_od) are "
+                "inrunner-only; use r_outer/r_stator/r_magnet/r_rotor for "
+                f"topology={topology!r}"
+            )
         r_outer = geo["stator_od"] / 2
         r_stator = geo["stator_id"] / 2
         r_magnet = geo["rotor_od"] / 2
@@ -191,15 +260,24 @@ def geometry_from_toml(geo: dict[str, Any], topology: str = "inrunner") -> Geome
         slot_pitch = 2 * math.pi * r_stator / n_slots
         slot_opening_width = geo["slot_opening_ratio"] * slot_pitch
 
-    if topology == "inrunner":
-        factory = inrunner
-    elif topology == "outrunner":
-        factory = outrunner
-    else:
-        raise ValueError(f"Unknown topology {topology!r} (expected 'inrunner' or 'outrunner')")
-    return factory(
+    kwargs = dict(
         r_outer=r_outer, r_stator=r_stator, r_magnet=r_magnet,
         r_rotor=r_rotor, r_inner=r_inner, r_ag=r_ag,
         n_slots=n_slots, slot_depth=slot_depth, slot_width_ratio=slot_width_ratio,
         slot_opening_width=slot_opening_width,
     )
+    factory: Callable[..., Geometry]
+    if topology == "inrunner":
+        if "back_iron_thickness" in geo:
+            raise ValueError(
+                "back_iron_thickness is outrunner-only (ring/shell yoke "
+                "split); remove it from this inrunner [geometry] section"
+            )
+        factory = inrunner
+    elif topology == "outrunner":
+        factory = outrunner
+        if "back_iron_thickness" in geo:
+            kwargs["back_iron_thickness"] = geo["back_iron_thickness"]
+    else:
+        raise ValueError(f"Unknown topology {topology!r} (expected 'inrunner' or 'outrunner')")
+    return factory(**kwargs)

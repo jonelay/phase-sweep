@@ -1,0 +1,105 @@
+# UW/ORNL 6-kW 36-slot/30-pole FSCW SPM (El-Refaie/Jahns prototype)
+# First MEASURED torque-speed envelope anchor, and the first to exercise
+# the field-weakening branch of torque_speed: the report's Table 7
+# publishes four verification points (800/2000/3000/4000 rpm) with
+# measured phase voltage, measured d/q currents, and measured shaft
+# torque — deep field weakening to 5x base speed at pinned voltage.
+# Source (open-access ORNL report reproducing the UW/El-Refaie-Jahns
+# IEEE TIA 2005/2006 verification data as its Tables 2-7):
+#   J. M. Bailey, J. W. McKeever, "Fractional-Slot Surface Mounted PM
+#   Motors with Concentrated Windings for HEV Traction Drives",
+#   ORNL/TM-2005/183, Oct 2005. https://www.osti.gov/servlets/purl/885979
+#   Peer-reviewed companions: El-Refaie & Jahns, IEEE Trans. Ind. Appl.
+#   41(3):790-800 (2005); El-Refaie et al., IEEE TIA 42(2) (2006).
+#
+# Machine (report Tables 2-5): 36 slots / 30 poles (n_p = 15),
+# surface-mounted BONDED NdFeB (Br 0.55 T @ 100 C, mu_r 1.22 — low-Br,
+# eddy-suppressing), single-layer concentrated winding, slot leakage
+# ~4x the air-gap self inductance. RMS PM flux linkage psi_m =
+# 34.8 mWb-RMS (an RMS-flux-linkage convention — trap: our peak
+# psi_f = sqrt(2)*34.8e-3 = 0.049215 Wb). Rated 43 Arms.
+#
+# UNIT/BOOKKEEPING FLAGS (all in the report itself):
+# - "Resistance 0.063 mOhm" is a units typo for 0.063 OHM per phase
+#   (63 mOhm; consistent with the Table 7 efficiencies of 86-92%).
+# - TWO inductance values circulate: Table 4 (UW) total self inductance
+#   1.03 mH; the ORNL SPEED model 1.3 mH. The verification analysis
+#   itself used ~1.3 mH: the analytical Table 7 field-weakening
+#   trajectory pins i_d ~ -26.5 Arms = -psi_m/L with L = 1.3 mH (the
+#   Table 5 "characteristic current 33.8 Arms" = psi_m/1.03 mH is the
+#   design-table value). The measured 2000 rpm point sits at i_d =
+#   -26.9 Arms — the physical synchronous inductance is ~1.3 mH, which
+#   this anchor uses. With 1.03 mH the model over-predicts the measured
+#   FW envelope by +35..48%; with 1.3 mH by +15..18% (the loss gap).
+# - Report back-emf 41.87 Vrms/phase @ 800 rpm vs psi_m-implied 43.7
+#   (+4.4% internal scatter, not used in any derivation here).
+# - No DC bus is stated anywhere: the voltage limit is published AS
+#   phase voltage (analytical rows pin 87.7 Vrms above the corner;
+#   measured rows reach 89-91 Vrms). [drive] U_DC is the REVERSE-
+#   ENGINEERED equivalent sqrt(6)*87.7 = 214.81 V so that
+#   U_max = U_DC/sqrt(3) equals the design phase-peak limit; tests use
+#   each measured row's own voltage.
+#
+# Cross-checks:
+#   I_ch: psi_m/L(1.03 mH) = 33.8 Arms = Table 5 exactly (confirms the
+#         psi_m reading); psi_m/L(1.3 mH) = 26.8 = the analytical and
+#         measured i_d plateau (confirms the anchor L).
+#   Corner: model MTPA torque at 43 Arms = 67.3 Nm vs 64 measured
+#         (+5.2% — electromagnetic optimum vs shaft torque).
+
+[motor]
+name = "UW/ORNL 6-kW FSCW SPM prototype"
+type = "surface-magnet PMSM (36s/30p fractional-slot concentrated winding)"
+
+[circuit]
+n_p = 15               # 30 poles (report Table 2)
+R_s = 0.063            # Ohm per-phase (report "0.063 mOhm" units typo)
+L_d = 0.0013           # H per-phase — ORNL SPEED value; see header flags
+L_q = 0.0013           # = L_d (surface magnets)
+psi_f = 0.049215       # Wb, peak per-phase = sqrt(2) * 34.8 mWb-RMS (Table 5)
+I_rated_rms = 43.0     # A rms rated current (Table 5)
+
+[drive]
+U_DC = 214.81          # V, reverse-engineered from the 87.7 Vrms phase limit
+MAX_I_S = 60.811       # A peak = sqrt(2) * 43 (rated = test current limit)
+W_REF = 83.776         # rad/s = 2*pi*800/60 (design corner speed)
+
+[rated]
+torque_Nm = 64.0       # measured shaft torque at the 800 rpm corner (Table 7)
+speed_rpm = 800        # design corner (6 kW point)
+
+[provenance]
+source = "ORNL/TM-2005/183 (Bailey & McKeever, Oct 2005), Tables 2-7, reproducing El-Refaie/Jahns UW verification data"
+url = "https://www.osti.gov/servlets/purl/885979"
+motor_model = "UW 6-kW 36-slot/30-pole FSCW SPM laboratory prototype"
+duty = "verification test points at rated current 43 Arms; measured phase voltage per point"
+# Table 7 EXPERIMENTAL rows (the anchor data): rpm | Iq | Id [Arms] |
+# Vphase [Vrms] | Tout [Nm]
+#    800 | 43.0 |   0.0 | 81.0 | 64.0
+#   2000 | 24.8 | -26.9 | 89.0 | 29.0
+#   3000 | 18.4 | -14.6 | 91.0 | 19.4
+#   4000 | 16.6 | -14.9 | 91.0 | 14.7
+# Analytical rows pin 87.7 Vrms above the corner; Tout 60/30.5/20.4/15.3.
+notes = """
+First measured-envelope anchor and the only one exercising the
+field-weakening solver branch (every other envelope anchor tests the
+voltage corner). Claims: (1) corner MTPA torque +5.2% above measured
+shaft torque (pinned — electromagnetic vs shaft); (2) FW envelope
+torque at each measured (V, speed) one-sided above measured by a
++15..18% band (pinned per point — the model is the lossless optimum at
+the same voltage and current; measured shaft torque includes iron/
+friction/harmonic losses, substantial in a 30-pole bonded-magnet
+machine at 1-2 kHz electrical); (3) deep-FW current placement is an
+AGREEMENT anchor: model boundary i_d = -psi/L = -26.8 Arms vs measured
+-26.9 at 2000 rpm (<1%); (4) the report's CPSR = 6 design goal is
+reproduced: at 4800 rpm and the 87.7 Vrms design voltage the model
+envelope still delivers 13.7 Nm = 6.9 kW > the 6-kW rating.
+Measured i_d at 3000/4000 rpm (-14.6/-14.9) departs from the optimal
+trajectory (-26.5) — the paper's controller backed off current above
+2000 rpm (total I drops to ~23 Arms); those rows anchor torque
+feasibility only, not current placement.
+Deliberately NOT in _NAMEPLATE_ANCHORS (laboratory prototype, no S1
+nameplate) and NOT a thermal anchor (no thermal data).
+Eligible for: rated_torque, stall_torque (bound), torque_speed
+(measured envelope: corner + FW one-sided + i_d agreement + CPSR).
+"""

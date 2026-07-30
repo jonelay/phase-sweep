@@ -1,0 +1,53 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<mxfile host="app.diagrams.net">
+  <diagram name="provenance-tiers" id="pt1">
+    <mxGraphModel grid="1" gridSize="10" page="1" pageWidth="1250" pageHeight="680">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="tier3" value="&lt;span style=&quot;font-size:13px&quot;&gt;&lt;b&gt;tier 3 &amp;mdash; run_id = compute_run_id(rc) = md5(&amp;hellip;)[:12]&lt;/b&gt;&lt;/span&gt;&lt;br&gt;+ model key + solver params &lt;i&gt;filtered by ModelInfo.hash_fields&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#e65100;fontSize=11;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="80" width="620" height="360" as="geometry" />
+        </mxCell>
+        <mxCell id="tier2" value="&lt;span style=&quot;font-size:13px&quot;&gt;&lt;b&gt;tier 2 &amp;mdash; Motor.config_id&lt;/b&gt;&lt;/span&gt;&lt;br&gt;+ n_p + populated optionals + materials&lt;br&gt;&lt;font color=&quot;#616161&quot;&gt;&lt;i&gt;excludes name and drive; None fields don&amp;rsquo;t contribute&lt;/i&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e3f2fd;strokeColor=#37474f;fontSize=11;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="90" y="180" width="380" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="tier1" value="&lt;span style=&quot;font-size:13px&quot;&gt;&lt;b&gt;tier 1 &amp;mdash; Geometry.config_id&lt;/b&gt;&lt;/span&gt;&lt;br&gt;all geometry fields" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eceff1;strokeColor=#78909c;fontSize=11;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="130" y="300" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="drivenote" value="&lt;i&gt;drive params: excluded from&lt;br&gt;tier 2, hashed here when the&lt;br&gt;model&amp;rsquo;s hash_fields&lt;br&gt;include them&lt;/i&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#5d4037;" vertex="1" parent="1">
+          <mxGeometry x="490" y="220" width="150" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="version" value="&lt;span style=&quot;font-size:13px&quot;&gt;&lt;b&gt;ModelInfo.version&lt;/b&gt;&lt;/span&gt;&lt;br&gt;hashed as model_v=N&lt;br&gt;&lt;i&gt;only when &amp;gt; 1&lt;/i&gt; &amp;mdash; bump on&lt;br&gt;output-changing physics fix" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e1;strokeColor=#f57f17;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="780" y="89" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="dataset" value="&lt;span style=&quot;font-size:13px&quot;&gt;&lt;b&gt;dataset_id&lt;/b&gt;&lt;/span&gt;&lt;br&gt;unconditional when set &amp;mdash;&lt;br&gt;repeat captures of one test&lt;br&gt;must not collide" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#2e7d32;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="780" y="197" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="store" value="&lt;span style=&quot;font-size:13px&quot;&gt;&lt;b&gt;ResultStore&lt;/b&gt;&lt;/span&gt;&lt;br&gt;run_id keys the&lt;br&gt;record + index" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#e65100;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="780" y="316" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="ev" value="" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#f57f17;fontSize=10;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.15;entryDx=0;entryDy=0;" edge="1" parent="1" source="version" target="tier3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ed" value="" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#2e7d32;fontSize=10;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.45;entryDx=0;entryDy=0;" edge="1" parent="1" source="dataset" target="tier3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="es" value="" style="edgeStyle=orthogonalEdgeStyle;orthogonal=1;html=1;strokeWidth=2;labelBackgroundColor=#ffffff;strokeColor=#e65100;fontSize=10;exitX=1;exitY=0.78;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="tier3" target="store">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" value="&lt;b&gt;three staleness mechanisms &amp;mdash; different failure modes, separately gated&lt;/b&gt;" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="480" width="970" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="st1" value="&lt;span style=&quot;font-size:13px&quot;&gt;&lt;b&gt;version stamp vs registry&lt;/b&gt;&lt;/span&gt;&lt;br&gt;populate_cache --purge-only&lt;br&gt;&lt;font color=&quot;#616161&quot;&gt;&lt;i&gt;superseded physics&lt;/i&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#9e9e9e;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="520" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="st2" value="&lt;span style=&quot;font-size:13px&quot;&gt;&lt;b&gt;recompute &amp;amp; compare&lt;/b&gt;&lt;/span&gt;&lt;br&gt;populate_cache --verify&lt;br&gt;--require-model&lt;br&gt;&lt;font color=&quot;#616161&quot;&gt;&lt;i&gt;code drift without a bump&lt;/i&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#9e9e9e;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="375" y="520" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="st3" value="&lt;span style=&quot;font-size:13px&quot;&gt;&lt;b&gt;outside the hash&lt;/b&gt;&lt;/span&gt;&lt;br&gt;reference_br .npz &amp;middot; mesh_vN cache prefix&lt;br&gt;&lt;font color=&quot;#616161&quot;&gt;&lt;i&gt;manual recapture / prefix bump&lt;/i&gt;&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#9e9e9e;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="710" y="520" width="300" height="90" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

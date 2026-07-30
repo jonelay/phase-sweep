@@ -18,7 +18,7 @@ I_rated_rms = 3.3           # A — estimated from worksheet design point (4 A_r
 [winding]
 n_slots = 12
 N = 15                      # turns per coil (single tooth)
-k_w = 0.933                 # 12s/14p concentrated winding factor
+k_w = 0.966                 # single-layer (SPS) 12s/14p: kp = sin(105deg), kd = 1
 coils_series = 2            # 2 coils per phase in series (SPS: 6 of 12 teeth wound)
 
 [geometry]

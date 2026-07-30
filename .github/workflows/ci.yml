@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --extra test --extra dev --extra server
+      - name: Lint
+        run: uv run ruff check phasesweep/ scripts/ tests/
+      - name: Type check
+        run: uv run mypy
+      - name: Test (fast tier)
+        # STRICT_SKIP fails the run on any skip whose reason is not in the
+        # conftest allowlist — an optional dependency dropping out of the CI
+        # environment must not read as a green suite.
+        run: uv run pytest -m "not slow" -q -rs
+        env:
+          PHASESWEEP_STRICT_SKIP: "1"

@@ -33,6 +33,14 @@ class TestSweepAxis:
         with pytest.raises(ValueError, match="positive"):
             SweepAxis("r_outer", -0.01, 0.06, 3)
 
+    def test_rejects_unknown_field(self):
+        with pytest.raises(ValueError, match="unknown sweep field 'r_magnet'"):
+            SweepAxis("r_magnet", 0.04, 0.06, 3)
+
+    def test_rejects_unknown_strategy(self):
+        with pytest.raises(ValueError, match="unknown sweep strategy"):
+            SweepAxis("r_outer", 0.04, 0.06, 3, strategy="linear")
+
 
 # ---------------------------------------------------------------------------
 # Proportional scaling
@@ -99,6 +107,28 @@ class TestLstkSweep:
             assert pt.geometry == base
         assert points[0].L_stk == pytest.approx(0.05)
         assert points[-1].L_stk == pytest.approx(0.15)
+
+
+class TestBackIronSweep:
+
+    def _base(self):
+        from phasesweep.geometry import outrunner
+        return outrunner(r_outer=0.80, r_rotor=0.70, r_magnet=0.64,
+                         r_stator=0.50, r_inner=0.10)
+
+    def test_sweep_sets_thickness(self):
+        axis = SweepAxis("back_iron_thickness", 0.02, 0.08, 4)
+        points = generate_grid(self._base(), [axis])
+        assert len(points) == 4
+        assert points[0].geometry.back_iron_thickness == pytest.approx(0.02)
+        assert points[-1].geometry.back_iron_thickness == pytest.approx(0.08)
+
+    def test_out_of_range_skipped(self):
+        # wall = 0.10; values >= wall raise in Geometry and are dropped
+        axis = SweepAxis("back_iron_thickness", 0.04, 0.16, 4)
+        points = generate_grid(self._base(), [axis])
+        assert 0 < len(points) < 4
+        assert all(p.geometry.back_iron_thickness < 0.10 for p in points)
 
 
 # ---------------------------------------------------------------------------

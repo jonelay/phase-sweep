@@ -8,24 +8,42 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import product
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from phasesweep.motor import Motor
 
 import numpy as np
 
 from phasesweep.geometry import Geometry
 
+_AXIS_FIELDS = ("r_outer", "L_stk", "r_ag", "back_iron_thickness")
+_STRATEGIES = ("proportional", "fixed_gap")
+
 
 @dataclass(frozen=True)
 class SweepAxis:
-    field: Literal["r_outer", "L_stk", "r_ag"]
+    field: Literal["r_outer", "L_stk", "r_ag", "back_iron_thickness"]
     start: float
     stop: float
     steps: int
     strategy: Literal["proportional", "fixed_gap"] = "proportional"
 
     def __post_init__(self) -> None:
+        # Literal types aren't runtime-checked; without this an unknown
+        # field fails per-combo inside generate_grid and surfaces as the
+        # misleading "sweep grid is empty"
+        if self.field not in _AXIS_FIELDS:
+            raise ValueError(
+                f"unknown sweep field {self.field!r}; "
+                f"allowed: {', '.join(_AXIS_FIELDS)}")
+        if self.strategy not in _STRATEGIES:
+            raise ValueError(
+                f"unknown sweep strategy {self.strategy!r}; "
+                f"allowed: {', '.join(_STRATEGIES)}")
         if self.steps < 2:
             raise ValueError(f"steps must be >= 2, got {self.steps}")
         if self.start <= 0 or self.stop <= 0:
@@ -56,6 +74,13 @@ def _scale_proportional(geo: Geometry, factor: float) -> Geometry:
 
 
 def _set_airgap(geo: Geometry, new_gap: float) -> Geometry:
+    """Set the mechanical airgap, splitting the delta between bore and
+    magnet face (r_rotor fixed) — moving the magnet face also changes
+    magnet thickness, so the resulting sweep derivative mixes gap and
+    magnet-thickness effects. Deliberate design choice: keeps the OD and
+    rotor envelope fixed. perturbation.py moves the stator bore only
+    (magnet untouched) for a pure-gap derivative.
+    """
     if geo.topology == "inrunner":
         old_gap = geo.r_stator - geo.r_magnet
         delta = new_gap - old_gap
@@ -107,6 +132,11 @@ def apply_axis(
 
     if axis.field == "r_ag":
         return _set_airgap(geo, value), base_L_stk
+
+    if axis.field == "back_iron_thickness":
+        # Absolute radial thickness; out-of-range values raise in
+        # Geometry.__post_init__ and are skipped by generate_grid.
+        return dataclasses.replace(geo, back_iron_thickness=value), base_L_stk
 
     raise ValueError(f"unknown sweep field: {axis.field}")
 
@@ -186,13 +216,13 @@ class SweepResult:
 
 
 def run_sweep(
-    base_motor: Any,
+    base_motor: Motor,
     points: list[SweepPoint],
     model_keys: list[str],
     *,
     workers: int = 1,
     cache_dir: str | None = None,
-    on_complete: Any | None = None,
+    on_complete: Callable[[dict[str, Any], int, int], None] | None = None,
 ) -> list[SweepResult]:
     """Run models across sweep points, optionally in parallel.
 

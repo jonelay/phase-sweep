@@ -11,12 +11,11 @@ topic. Where a result is already implemented, the relevant function is noted.
 **Zhu, Z. Q., Howe, D., & Chan, C. C. (2002).** "Improved Analytical Model
 for Predicting the Magnetic Field Distribution in Brushless Permanent-Magnet
 Machines." *IEEE Trans. Magn.*, 38(1), pp. 229–238.
-Audited markdown: `docs/refs/zhu_howe_chan_2002_improved_model.md`
 
 Builds on the 1993 four-part series (same first two authors) with improved
 treatment of both internal (inrunner) and external (outrunner) rotor
 topologies. Our `zhu_howe_Br()` implements the 2002 model: open-circuit,
-PM-only field with sinusoidal radial magnetization and infinite iron
+PM-only field with square-wave radial magnetization and infinite iron
 permeability at boundary surfaces. Solves the 2×2 interface-matching system
 numerically. FEM agrees within 1% on fundamental amplitude for the Zhu & Howe
 reference configurations and within 2% for the other tested configurations
@@ -36,8 +35,7 @@ All paywalled on IEEE Xplore; no free PDFs found.
 Part III (slotting) is the primary reference for the Carter factor
 correction. Eqs 15–17 define k_c using the
 effective airgap g' = g + h_m/μ_r and the modified stator radius R_se.
-Also the natural reference for validating cogging torque if it is
-implemented (currently unimplemented).
+Also the natural reference for the cogging-torque sweep.
 
 ---
 
@@ -108,7 +106,7 @@ Product data sheet, 2020. Available from Cleveland-Cliffs (formerly AK Steel).
 PDF: https://e-magnetica.pl/database-em/01_Soft/Electrical_steels/AKSteel_2020/NO-DI-MAX-M-15_M-19_M-22_M-27_M-36_M-43_M-47_2020.pdf
 
 Tabulated B-H data for silicon steel at 60 Hz, 0–2.2 T range. Used for
-the polynomial ν(B²) fit in nonlinear FEM (Spec 07 §3). Approximately 20 measurement points
+the polynomial ν(B²) fit in nonlinear FEM. Approximately 20 measurement points
 available in the public datasheet. Multi-grade PDF — M-19 section starts
 alongside M-15, M-22, M-27, M-36, M-43, M-47.
 
@@ -177,9 +175,9 @@ https://doi.org/10.1109/TMAG.1984.1063232
 Paywalled on IEEE Xplore; no free PDF confirmed.
 
 Canonical reference for Maxwell stress tensor torque computation in FEM via
-contour integral on a circular air-gap path. Not implemented in phasesweep —
-torque comes from the MTPA circuit model (rated_torque.py), not from FEM
-field integration. Kept as the reference for a future FEM torque path:
+contour integral on a circular air-gap path — the formulation behind
+`maxwell_stress_torque`; the circuit models
+(rated_torque.py) remain the primary torque path:
 ```
 τ = (L_stk · R_AG² / μ₀) · ∫₀²π B_r(θ) · B_θ(θ) dθ
 ```
@@ -193,12 +191,16 @@ ISBN 978-0-19-964584-7.
 
 ## Torque and MTPA
 
-### Awan (2018) — optimal torque control of saturated synchronous motors
-**Awan, H. A. A., Song, Z., Saarakkala, S. E., & Hinkkanen, M. (2018).**
-"Optimal torque control of saturated synchronous motors: Plug-and-play method."
-*IEEE Transactions on Industry Applications*, 54(6), 6110–6120.
-https://doi.org/10.1109/TIA.2018.2862410
-Free PDF: Semantic Scholar (open access).
+### Awan (2019) — control methods for PM synchronous reluctance motor drives
+**Awan, H. A. A. (2019).** "Control Methods for Permanent-Magnet Synchronous
+Reluctance Motor Drives." Doctoral dissertation, Aalto University School of
+Electrical Engineering (defended 15 November 2019).
+
+Every equation and section number below is the **dissertation's**. The
+underlying journal paper — Awan, Song, Saarakkala & Hinkkanen (2018),
+"Optimal torque control of saturated synchronous motors: Plug-and-play
+method," *IEEE TIA* 54(6), 6110–6120, https://doi.org/10.1109/TIA.2018.2862410
+— is Publication VI of the thesis and numbers its equations differently.
 
 Torque equation (eq. 2.14, peak-valued space vectors):
 ```
@@ -209,7 +211,7 @@ With linear magnetics (eq. 2.7–2.8: ψ = L·i + ψ_f):
 T = (3p/2) · [ψ_f · i_q + (L_d − L_q) · i_d · i_q]
 ```
 This is the form implemented in motulator (`1.5 * n_p * Im(i_s * conj(psi_s))`).
-MTPA computation for saturated machines via look-up tables (§5.1–5.3).
+MTPA computation for saturated machines via look-up tables (§5.3).
 For unsaturated (constant L_d, L_q), MTPA reduces to a closed-form quadratic
 (classical result from Morimoto 1994).
 
@@ -240,7 +242,9 @@ with solution:
 sin(γ) = [−ψ_f + √(ψ_f² + 8·(L_q − L_d)²·I_s²)] / [4·(L_q − L_d)·I_s]
 i_d = −I_s·sin(γ),  i_q = I_s·cos(γ)
 ```
-For SPM (L_d = L_q): γ = 0, i_d = 0, i_q = I_s. Cited by Awan (2018) §5.1.2.
+For SPM (L_d = L_q): γ = 0, i_d = 0, i_q = I_s. The constant-parameter MTPA
+locus is the baseline Awan (2019) §5.1 contrasts its look-up-table method
+against (Fig. 5.1 dashed loci).
 
 **What we use:** closed-form MTPA for rated torque and stall torque of
 salient machines with constant (unsaturated) inductances. Known limitation: at high stall currents,

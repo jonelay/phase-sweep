@@ -1,0 +1,120 @@
+# Bosch Rexroth MS2N04-D0BHN — synchronous servomotor (10-pole)
+# Sixth voltage-corner envelope anchor (REQ-0814), and the only one whose
+# manual STATES the corner mechanism in prose rather than leaving it to be
+# inferred from multi-voltage scaling: section 6.3 "Rated speed is
+# determined by the DC bus voltage UZK1. The voltage limit or the point of
+# optimal performance are relevant variables to specify the rated speed."
+# The corner is also a PRECISION datum: the sheet prints nN = 2040 rpm
+# (non-round) against the winding code's nominal 2000 rpm +/- 250 (section
+# 4.4, code BH), with every torque/constant quantity toleranced +/- 5%
+# (section 6.4) — the sharpest single-voltage corner in the registry.
+# Source (single manufacturer manual):
+#   Bosch Rexroth, "MS2N Synchronous Servomotors — Project Planning
+#   Manual", R911347583, Edition 07 (2021-07), MS2N04 technical data,
+#   table "MS2N04-D0BHN" (p. 80, latest amendment 2017-05-05); conventions
+#   in sections 6.2 (DC bus curves), 6.3 (rated data), 6.4 (tolerances),
+#   6.5 (temperature influence), 4.4 (winding code).
+#   https://www.boschrexroth.com/documents/12605/33006371/R911347583_07.pdf/43fe3dca-0606-f4b7-03ab-b0e63944cbe3
+#   (boschrexroth.com blocks non-browser fetches with a geo-redirect page;
+#   content verified against a distributor-hosted verbatim copy of the
+#   Ed.07 PDF — Bosch Rexroth AG document metadata intact.)
+#
+# Manual conventions: UZK1 = "uncontrolled" rectified 3 x AC 400 V (ctrlX
+# DRIVE, Table 20); UZK2 = controlled 3 x AC 400...480 V (IndraDrive). The
+# rated point sits on the UZK1 voltage-limit line (Fig. 19); the UZK2
+# envelope exists only as curves (Fig. 41/42), so the second voltage is
+# not numerically testable. NO numeric DC bus value is printed: the corner
+# reconstruction documents BOTH rectifier conventions for an uncontrolled
+# 6-pulse infeed — U_DC = 1.35*U_LL = 540 V (loaded average, Rexroth's
+# conventional bus figure, primary below) and U_DC = sqrt(2)*U_LL =
+# 565.7 V (no-load peak, the Beckhoff-anchor convention) — and the tests
+# pin the corner margin under each.
+#
+# Parameter conventions: KE = 159.1 V/1000 min^-1 at 20 C — line-line rms
+# (Rexroth convention; confirmed by the Km closure below). R12 = 15.8 ohm
+# and L12_min = 77.27 mH are terminal-to-terminal -> per-phase / 2. The
+# "_min" suffix marks the manual's minimum winding inductance (position /
+# saturation minimum) — the only L printed; documented caveat. Km =
+# 2.62 Nm/A (20 C, Nm per A rms); all rating rows (M0/I0, MN/IN) are HOT
+# quantities at 60 K / 100 K winding overtemperature.
+#
+# psi_f is DERIVED from KE (magnet-only, EMF route, cold — repo
+# convention):
+#   psi_f = sqrt(2) * [159.1 / (1000*2*pi/60)] / (sqrt(3) * n_p)
+#         = sqrt(2) * 1.519288 / (sqrt(3) * 5) = 0.248100 Wb
+# Datasheet cross-checks:
+#   Km: model k_T = 1.5*n_p*psi_f*sqrt(2) = 2.6315 Nm/Arms vs printed
+#       Km 2.62 (-0.44%) — KE and Km are mutually consistent cold, which
+#       pins the line-line-rms reading of KE.
+#   PN = MN*wN: 3.75 * 2040 rpm = 801 W vs printed 0.8 kW (+0.1%).
+#   MN/IN = 2.301 Nm/Arms vs cold Km 2.62 (-12.2%) — the hot(100 K)/cold
+#       rating gap (reversible magnet loss + saturation), same family as
+#       Kollmorgen (-5.7%) and Beckhoff (-14.4%).
+#   Mmax 20 C = 19.7 Nm vs Km*Imax = 25.4 (linear bound +29% — deep
+#       saturation at 5x standstill current, consistent with the stall
+#       blind spot documented for ETEL).
+
+[motor]
+name = "Rexroth MS2N04-D0BHN servo motor"
+type = "surface-magnet PMSM (synchronous servo)"
+
+[circuit]
+n_p = 5                # 10 poles (manual "Number of pole pairs: 5")
+R_s = 7.9              # Ohm per-phase at 20 C (manual R12 15.8 ohm ph-ph)
+L_d = 0.038635         # H per-phase (manual L12_min 77.27 mH ph-ph; minimum value, see header)
+L_q = 0.038635         # = L_d (single catalog L)
+psi_f = 0.248100       # Wb, peak per-phase — derived from KE (see header)
+I_rated_rms = 1.63     # A rms — printed rated current IN 100K
+
+[drive]
+U_DC = 540.0           # V = 1.35 * 400 (uncontrolled 6-pulse average, UZK1; see header)
+MAX_I_S = 13.7179      # A peak = sqrt(2) * 9.7 A_rms (manual Imax(rms))
+W_REF = 213.6283       # rad/s = 2*pi*2040/60 (rated speed nN 100K)
+
+[rated]
+torque_Nm = 3.75       # manual MN 100K (S1 at rated speed, 100 K rise)
+speed_rpm = 2040       # manual nN 100K (precision datum; winding code BH nominal 2000 +/- 250)
+
+[provenance]
+source = "Bosch Rexroth MS2N Project Planning Manual R911347583 Ed.07 (2021-07), MS2N04 technical data, table MS2N04-D0BHN; conventions sections 6.2-6.5, 4.4"
+url = "https://www.boschrexroth.com/documents/12605/33006371/R911347583_07.pdf/43fe3dca-0606-f4b7-03ab-b0e63944cbe3"
+motor_model = "Bosch Rexroth MS2N04-D0BHN (MS2N series, low-inertia design)"
+duty = "S1 continuous at MN/nN, 100 K winding overtemperature, UZK1 uncontrolled 3 x AC 400 V infeed"
+# Rating rows (hot; tolerances +/- 5% on torques and constants, section 6.4):
+standstill_torque_60K_Nm = 3.85   # M0 60K, I0 60K = 1.61 A
+standstill_torque_100K_Nm = 4.65  # M0 100K, I0 100K = 1.96 A
+max_torque_cold_Nm = 19.7         # Mmax 20 C
+max_torque_100K_Nm = 18.1         # Mmax 100K
+max_current_Arms = 9.7            # Imax(rms)
+max_speed_electrical_rpm = 4000   # nmax el (drive frequency limit class)
+max_speed_mechanical_rpm = 6000   # nmax mech
+Km_cold_Nm_per_Arms = 2.62        # torque constant at 20 C
+KE_Vll_rms_per_krpm = 159.1       # voltage constant at 20 C
+tth_winding_s = 44.0              # thermal time constant of winding
+tth_motor_min = 18.5              # thermal time constant of motor
+notes = """
+Sixth voltage-corner envelope anchor (Kollmorgen AKM44H, ABB BSM50N-233,
+Tecnotion QTR-A-105-25-N, Beckhoff AM8051-E, UW/ORNL FSCW precede it) —
+one numeric corner at one bus, but with the corner mechanism STATED by
+the manual (section 6.3: rated speed is determined by the DC bus voltage
+UZK1) and printed as precision data (non-round 2040 rpm vs the winding
+code's 2000 +/- 250 nominal; +/- 5% tolerance class). Model corner at the
+printed IN sits +4.6% above nN under U_DC = 1.35*U_LL = 540 V and +9.9%
+under sqrt(2)*U_LL = 565.7 V (both pinned) — voltage utilization at the
+printed corner 0.958 / 0.915, the tightest catalog-vendor corner in the
+registry (approaching ETEL, the only agreement-class vendor). Ceiling
+discriminator: the no-load limit at UZK1 (2400 / 2514 rpm) sits BELOW
+nmax el = 4000 rpm — on the uncontrolled bus the motor cannot reach its
+own electrical ceiling even unloaded, so neither printed ceiling can be
+what sets nN. The UZK2 (controlled 400...480 V) envelope is published as
+curves only (Fig. 41/42) and is not numerically anchored.
+[thermal] deliberately UNSET (comparability rule — the manual prints
+thermal time constants but no thermal resistance; recorded above).
+Deliberately NOT in _NAMEPLATE_ANCHORS: MN/IN are 100 K hot ratings
+(MN/IN = 2.301 vs cold Km 2.62, -12.2%) — a nameplate comparison would
+fold the hot/cold flux gap into the 0.92 band's clean cold-parameter
+pattern.
+Eligible for: rated_torque, stall_torque (bound), torque_speed
+(precision corner, one-sided + pinned under both documented rectifier
+conventions), thermal_duty (rated_current path).
+"""

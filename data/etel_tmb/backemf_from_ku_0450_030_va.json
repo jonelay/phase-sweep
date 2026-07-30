@@ -1,0 +1,21 @@
+{
+  "motor_name": "ETEL TMB+0450-030 VA torque motor",
+  "test_type": "backemf_capture",
+  "conditions": {
+    "speed_rpm": 82.1,
+    "temperature_C": 20.0,
+    "load_torque_Nm": 0.0,
+    "date": "2019-01-07",
+    "instrument": "manufacturer datasheet (voltage constant Ku)",
+    "notes": "Open-circuit back-EMF fundamental at rated speed nn = 82.1 rpm, expressed from the datasheet voltage constant Ku = 23.7 V line-line rms per mech rad/s (terminal-to-terminal): E_ph_pk = sqrt(2)/sqrt(3) * Ku * omega_mech."
+  },
+  "quantities": {
+    "backemf_fundamental": 166.36
+  },
+  "waveforms": {},
+  "uncertainty": {},
+  "source_file": "ETEL TMB+0450-030 datasheet 07.01.2019 (Y2gH-FABw-GRIA-QCEC), winding VA",
+  "source": "published",
+  "derived_params": ["psi_f"],
+  "provenance_note": "Unit conversion of the datasheet constant, NOT an independent measurement: the motor TOML psi_f = 0.439795 Wb is DERIVED from this same Ku (psi_f = sqrt(2)*Ku/(sqrt(3)*n_p)), so backemf_fundamental here equals psi_f*n_p*omega by construction. derived_params arms the calibration circularity guard (REQ-0819): fitting psi_f (or interderivable B_rem) against this dataset is an echo, not a calibration, and is refused."
+}

@@ -1,0 +1,60 @@
+# Magnetic BLQ-40 IPM — Magnetic S.r.l. BLQ-series brushless servomotor
+# 6-pole interior PM synchronous servomotor, SmCo magnets (Hitachi H-18B)
+# Source: Caruso, Di Tommaso, Miceli, Nevoloso, Spataro, Viola (2016),
+#   "Characterization of interior permanent magnet synchronous motors for
+#   loss model algorithm identification," 21st IMEKO TC4 Int. Symposium,
+#   Budapest, Sept 2016, pp. 37-41, Table 1. University of Palermo.
+#   https://www.imeko.org/publications/tc4-2016/IMEKO-TC4-2016-08.pdf
+#
+# A peer-reviewed characterization of a commercial industrial servomotor.
+# The paper publishes the nominal constant-parameter model (the paper's point
+# is that Ld/Lq/psi vary with saturation; Table 1 holds the nominal/average
+# values) plus the nameplate. NO geometry, winding, or thermal resistance.
+
+[motor]
+name = "Magnetic BLQ-40 IPM"
+type = "IPM"
+
+[circuit]
+n_p = 3                # six-pole machine (Table 1: "Number of pole pairs 3")
+R_s = 2.20             # Ohm, per-phase (Table 1: "Average stator resistance R")
+L_d = 0.0075           # H (Table 1: "Direct-axis inductance Ld 7.50 mH")
+L_q = 0.011            # H (Table 1: "Quadrature-axis inductance Lq 11.00 mH")
+psi_f = 0.084          # Wb, peak amplitude (Table 1: "PMs flux PSI_PM 0.084 Wb";
+                       # confirmed peak by the paper's 3/2 power-invariant torque
+                       # eqn: 1.5*3*0.084*sqrt(2)*3.6 = 1.92 Nm vs 1.8 Nm rated)
+I_rated_rms = 3.6      # A rms (Table 1: "Current 3.6 A"; star winding -> per-phase)
+# J = 0.001 kg.m2, F = 0.001 N.m.s published (Table 1) but not needed here
+# geometry, winding, materials, r_th not published
+
+[drive]
+U_DC = 186.7           # V, sqrt(2)*132 V rated voltage (Table 1) — nominal bus
+MAX_I_S = 5.091        # A, sqrt(2)*3.6 A_rms (rated peak current)
+W_REF = 418.879        # rad/s, 2*pi*4000/60 (rated mechanical speed)
+
+[rated]
+speed_rpm = 4000       # Table 1
+torque_Nm = 1.8        # Table 1
+voltage_V = 132        # Table 1
+power_kW = 0.754       # derived: 1.8 Nm * 2*pi*4000/60 = 754 W (not printed)
+
+[provenance]
+source = "Caruso et al. (2016), IMEKO TC4-2016, Table 1"
+url = "https://www.imeko.org/publications/tc4-2016/IMEKO-TC4-2016-08.pdf"
+institution = "University of Palermo, Dept. of Energy/Information Eng."
+motor_model = "Magnetic S.r.l. BLQ-40 (SmCo, Hitachi H-18B magnets)"
+duty = "S1 continuous (IEC 34-1), family-level per Magnetic BLQ catalog"
+notes = """
+Constant-parameter (nominal) values from Table 1 of a peer-reviewed
+characterization. Conventions resolved: R_s per-phase, psi_f peak amplitude,
+rated current rms (star) — verified self-consistent via the paper's torque
+equation. S1 continuous duty is established at the BLQ product-family level
+(Magnetic Srl BLQ catalog, IEC 34-1, class F, dT=105 K, T_amb,max=40 C,
+thermal trip 135+-5 C); the specific BLQ-40 designation is an older row not in
+the current catalog, so the duty class is family-level, not row-specific.
+No r_th in K/W is published (only a thermal time constant), so this motor does
+NOT enable the thermal_resistance budget path — it is a rated_current anchor.
+Eligible for: rated_torque, thermal_duty (electrical params + nameplate).
+Not eligible for: analytical, FEM (no geometry), drive_sim (no J... J=0.001
+published but inertia alone insufficient).
+"""

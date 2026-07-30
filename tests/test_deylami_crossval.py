@@ -13,7 +13,7 @@ import pytest
 
 from phasesweep.configs import load_motor
 from phasesweep.crossval import compare_results
-from phasesweep.fem_field import harmonics_1sided
+from phasesweep.harmonics import harmonics_1sided
 from phasesweep.measured import import_measured
 from phasesweep.registry import MODEL_REGISTRY
 from phasesweep.sweep_types import RunConfig, RunResult
@@ -64,7 +64,7 @@ class TestDeylamiCrossValidation:
 
     def test_analytical_fundamental_range(self, analytical_result):
         """Analytical B₁ for ferrite outrunner with α_p=0.95 (square-wave
-        convention, S110: currently ≈ 0.45 T)."""
+        convention: currently ≈ 0.45 T)."""
         fund = analytical_result.metrics["fundamental"]
         assert 0.35 < fund < 0.55, f"analytical fundamental {fund:.3f} outside [0.35, 0.55] T"
 
@@ -85,10 +85,32 @@ class TestDeylamiCrossValidation:
             f"(published={row.val_a:.3f}, FEM={row.val_b:.3f})"
         )
 
+    def test_analytical_peak_vs_published(self, published_result, analytical_result):
+        """Analytical waveform peak vs the published ANSYS 0.49 T.
+
+        The odd-harmonic series gives the analytical model a true waveform
+        peak (0.365 T here, BELOW its own 0.452 T fundamental — the
+        square-wave flat-top sits under the Gibbs-overshooting
+        fundamental), so the row that used to be skipped is a real
+        comparison now. It reads −25.5%: same direction as FEM's −16%
+        (midgap harmonic attenuation rounds the flat-top; ANSYS reports
+        nearer the magnet surface), deeper because the smooth-stator
+        Carter-corrected field lacks the slotted FEM's local peaking.
+        Pinned so drift is visible; direction is physics, magnitude is an
+        observation."""
+        rows = compare_results(published_result, analytical_result)
+        assert [r for r in rows if r.comparison_type == "skipped"] == []
+        curve_rows = [r for r in rows if r.comparison_type == "curve"]
+        assert len(curve_rows) == 1
+        row = curve_rows[0]
+        assert row.quantity == "B_ag_peak"
+        assert row.val_b < row.val_a  # model peak below published (direction)
+        assert row.rel_pct == pytest.approx(25.5, abs=1.0)  # unsigned delta
+
     @pytest.mark.timeout(30)
     def test_analytical_vs_fem_agreement(self, analytical_result, fem_result):
         """Analytical and FEM fundamentals within 5% (shared source
-        convention, S110; currently < 1%)."""
+        convention; currently < 1%)."""
         anal_fund = analytical_result.metrics["fundamental"]
         B_r = np.array(fem_result.metrics["B_r_list"])
         fem_amps = harmonics_1sided(B_r)

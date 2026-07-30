@@ -15,7 +15,7 @@
     "waveforms": {},
     "uncertainty": {},
     "source_file": "DOI 10.36227/techrxiv.171439839.97768997/v1, Fig. 6",
-    "source": "published (ANSYS FEM)",
+    "source": "published",
     "tolerances": {
         "B_ag_peak": 25.0
     },
