@@ -1,0 +1,20 @@
+This directory contains data from third-party sources with the following
+attributions:
+
+pyleecan_geometry.json
+----------------------
+From the Pyleecan project (https://github.com/Eomys/pyleecan).
+Licensed under the Apache License, Version 2.0.
+See https://github.com/Eomys/pyleecan/blob/master/LICENSE for the full
+license text.
+
+ORNL technical reports
+----------------------
+Motor geometry, winding, and performance data are transcribed from the
+following Oak Ridge National Laboratory reports, which are works of the
+US Government and in the public domain:
+
+  ORNL/TM-2004/137 (OSTI 885676)
+  ORNL/TM-2004/185 rev. 2007 (OSTI 921782)
+  ORNL/TM-2004/247 (OSTI 890029)
+  ORNL/TM-2004/217

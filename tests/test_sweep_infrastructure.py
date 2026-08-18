@@ -12,7 +12,7 @@ import json
 import pytest
 
 from phasesweep.sweep_types import RunConfig, RunResult, compute_run_id
-from tests.conftest import make_motor
+from tests.conftest import make_motor, requires_fem, requires_sim
 
 
 def _make_rc(model="fem", **kw):
@@ -45,8 +45,9 @@ class TestRunConfig:
         rc2 = RunConfig.from_dict(d_json)
         assert rc2.motor.config_id == rc1.motor.config_id
 
+    @requires_sim
     def test_sim_plan_roundtrip(self):
-        from phasesweep.sim import plan_sim
+        from phasesweep.simulation.sim import plan_sim
         from phasesweep.solver_params import prepare_drive_sim
         plan = plan_sim(prepare_drive_sim(make_motor()))
         rc1 = RunConfig(motor=make_motor(), model="drive_sim", sim_plan=plan)
@@ -152,9 +153,10 @@ class TestComputeRunId:
         rc = _make_rc()
         assert len(compute_run_id(rc)) == 12
 
+    @requires_sim
     def test_model_aware_filtering(self):
         """FEM model ignores sim_plan fields in hash."""
-        from phasesweep.sim import SimPlan
+        from phasesweep.simulation.sim import SimPlan
         plan1 = SimPlan(
             load_torque=3.0, load_time=0.5, t_stop=1.0, speed_step_time=0.05,
             settle_threshold=0.05, ss_window=0.1, droop_window=0.1,
@@ -493,12 +495,13 @@ class TestModelVersionStamp:
 # sim_runner subprocess
 # ---------------------------------------------------------------------------
 
+@requires_sim
 class TestSimRunner:
 
     @pytest.mark.timeout(30)
     def test_returns_status_not_hang(self):
-        from phasesweep.sim import plan_sim
-        from phasesweep.sim_runner import run_sim_safe
+        from phasesweep.simulation.sim import plan_sim
+        from phasesweep.simulation.sim_runner import run_sim_safe
         from phasesweep.solver_params import prepare_drive_sim
         motor = make_motor()
         plan = plan_sim(prepare_drive_sim(motor))
@@ -509,8 +512,8 @@ class TestSimRunner:
 
     @pytest.mark.timeout(60)
     def test_successful_run_returns_metrics(self):
-        from phasesweep.sim import plan_sim
-        from phasesweep.sim_runner import run_sim_safe
+        from phasesweep.simulation.sim import plan_sim
+        from phasesweep.simulation.sim_runner import run_sim_safe
         from phasesweep.solver_params import prepare_drive_sim
         motor = make_motor()
         plan = plan_sim(prepare_drive_sim(motor))
@@ -522,7 +525,7 @@ class TestSimRunner:
 
     @pytest.mark.timeout(30)
     def test_missing_sim_plan_raises(self):
-        from phasesweep.sim_runner import run_sim_safe
+        from phasesweep.simulation.sim_runner import run_sim_safe
         rc = _make_rc(model="drive_sim")
         result = run_sim_safe(rc, timeout_s=15)
         assert result.status == "ERROR"
@@ -533,11 +536,12 @@ class TestSimRunner:
 # fem_runner subprocess
 # ---------------------------------------------------------------------------
 
+@requires_fem
 class TestFemRunner:
 
     @pytest.mark.timeout(60)
     def test_returns_status_not_hang(self):
-        from phasesweep.fem_runner import run_fem_safe
+        from phasesweep.solvers.fem_runner import run_fem_safe
         rc = _make_rc(model="fem", n_theta=60, maxh_fraction=0.08)
         result = run_fem_safe(rc, timeout_s=30)
         assert result.status in ("OK", "TIMEOUT", "ERROR")
@@ -545,7 +549,7 @@ class TestFemRunner:
 
     @pytest.mark.timeout(60)
     def test_ok_result_has_fem_metrics(self):
-        from phasesweep.fem_runner import run_fem_safe
+        from phasesweep.solvers.fem_runner import run_fem_safe
         rc = _make_rc(model="fem", n_theta=60, maxh_fraction=0.08)
         result = run_fem_safe(rc, timeout_s=30)
         assert result.status == "OK", f"Expected OK, got {result.status}: {result.error_msg}"
@@ -556,7 +560,7 @@ class TestFemRunner:
 
     @pytest.mark.timeout(120)
     def test_alpha_p_reduces_fem_fundamental(self):
-        from phasesweep.fem_runner import _run_fem_impl
+        from phasesweep.solvers.fem_runner import _run_fem_impl
         m_full = make_motor(B_rem=1.2, psi_f=None, alpha_p=1.0)
         m_part = make_motor(B_rem=1.2, psi_f=None, alpha_p=0.75)
         rc_full = RunConfig(motor=m_full, model="fem", n_theta=60, maxh_fraction=0.08)

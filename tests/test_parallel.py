@@ -5,9 +5,9 @@ from __future__ import annotations
 import time
 from unittest.mock import patch
 
-from phasesweep.geometry import default_inrunner
-from phasesweep.motor import Motor
-from phasesweep.parallel import _run_worker, execute_generic, execute_parallel
+from phasesweep.geo_parallel import _run_worker, execute_generic, execute_parallel
+from phasesweep.machines.geometry import default_inrunner
+from phasesweep.machines.motor import Motor
 
 
 def _sleepy_worker(job: dict) -> dict:
@@ -125,7 +125,7 @@ class TestExecuteParallel:
     def test_disk_cache_init_called(self):
         motor = _analytical_motor()
         jobs = [_make_job(motor)]
-        with patch("phasesweep.parallel._worker_init") as mock_init:
+        with patch("phasesweep.geo_parallel._worker_init") as mock_init:
             # Sequential path must honor cache_dir like the pool path does
             execute_parallel(jobs, workers=1, cache_dir="/tmp/test_cache")
             mock_init.assert_called_once_with("/tmp/test_cache")
@@ -162,7 +162,7 @@ class TestExecuteParallel:
 
     def test_straggler_becomes_timeout(self, monkeypatch):
         """A worker outliving the pool timeout yields TIMEOUT, not a hang."""
-        import phasesweep.parallel as par
+        import phasesweep.geo_parallel as par
         monkeypatch.setattr(par, "_FUTURE_TIMEOUT_S", 1)
         jobs = [{"tag": "slow", "sleep_s": 30, "point_idx": 3}]
         t0 = time.monotonic()

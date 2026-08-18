@@ -1,0 +1,34 @@
+{
+  "motor_name": "JMT 1806 2400KV",
+  "test_type": "backemf_speed_sweep",
+  "conditions": {
+    "date": "2026-06-08",
+    "drive": "passive 1:1 backdrive, open-circuit DUT",
+    "probing": "phase-to-Y, 3 single-ended scope channels, common chassis ground",
+    "notes": "Labels are commanded RPS of the backdriver; true mechanical RPS recovered from f_elec/n_p (n_p=7). Backdriver slips on the heavier files (65/70/80/100); the Ke fit uses recovered mech RPS so slip does not bias it. 20 RPS excluded from harmonic stats (low SNR)."
+  },
+  "quantities": {
+    "Ke_pk": 2.3102e-3,
+    "psi_f": 330.0e-6,
+    "Kt": 3.465e-3,
+    "kv": 2386.5,
+    "n_p": 7
+  },
+  "speed_sweep": [
+    {"label_rps": 20,  "mech_rps": 20.072, "f_elec_Hz": 140.51, "slip_pct":  0.4, "V_pk_LN_V": 0.2831, "Ke_mV_per_rads": 2.2444, "THD_pct": 6.16},
+    {"label_rps": 30,  "mech_rps": 30.167, "f_elec_Hz": 211.17, "slip_pct":  0.6, "V_pk_LN_V": 0.4373, "Ke_mV_per_rads": 2.3070, "THD_pct": 4.24},
+    {"label_rps": 40,  "mech_rps": 39.978, "f_elec_Hz": 279.84, "slip_pct": -0.1, "V_pk_LN_V": 0.5821, "Ke_mV_per_rads": 2.3175, "THD_pct": 2.56},
+    {"label_rps": 65,  "mech_rps": 62.713, "f_elec_Hz": 438.99, "slip_pct": -3.5, "V_pk_LN_V": 0.9108, "Ke_mV_per_rads": 2.3113, "THD_pct": 2.96},
+    {"label_rps": 70,  "mech_rps": 63.536, "f_elec_Hz": 444.75, "slip_pct": -9.2, "V_pk_LN_V": 0.9228, "Ke_mV_per_rads": 2.3117, "THD_pct": 3.17},
+    {"label_rps": 80,  "mech_rps": 76.247, "f_elec_Hz": 533.73, "slip_pct": -4.7, "V_pk_LN_V": 1.1071, "Ke_mV_per_rads": 2.3110, "THD_pct": 2.88},
+    {"label_rps": 90,  "mech_rps": 89.284, "f_elec_Hz": 624.99, "slip_pct": -0.8, "V_pk_LN_V": 1.2961, "Ke_mV_per_rads": 2.3104, "THD_pct": 3.37},
+    {"label_rps": 100, "mech_rps": 97.016, "f_elec_Hz": 679.11, "slip_pct": -3.0, "V_pk_LN_V": 1.4082, "Ke_mV_per_rads": 2.3102, "THD_pct": 3.08}
+  ],
+  "fit": {
+    "method": "linear_fit_through_origin",
+    "basis": "peak phase-to-neutral vs mechanical omega",
+    "R_squared": 0.999936
+  },
+  "source_file": "data/jmt_1806/captures/*.CSV",
+  "analysis": "scripts/analyze_jmt_1806.py"
+}

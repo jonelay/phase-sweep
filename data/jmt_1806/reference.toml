@@ -1,0 +1,67 @@
+# JMT 1806 2400KV — measured 2026-06-08 (back-EMF speed sweep).
+# Quadcopter-class outrunner, 18 mm stator, 12N14P.
+
+[motor]
+name = "JMT 1806 2400KV"
+type = "SPMSM"
+topology = "outrunner"
+
+[circuit]
+n_p = 7
+
+[winding]
+n_slots = 12
+connection = "wye"                  # inferred (single-ended scope on 3 wires; phase-to-Y reads directly)
+layers = 2                          # assumed for 12N14P
+turns_per_tooth = 22                # hand-counted from teardown 2026-06-17 (N ~ 20-24, multi-layer); see README
+
+[stator]
+od_mm = 18.0
+stack_mm = 6.0                      # assumed (catalog 1806 convention)
+
+[rotor]
+poles = 14
+
+[electrical]
+# Measured from back-EMF speed sweep, 20-100 RPS (8 captures).
+psi_f_uWb = 330.0                   # phase, peak-amplitude basis
+Ke_mV_per_rad_s = 2.310              # phase-to-Y, peak
+Kt_mNm_per_A = 3.465                 # FOC convention: 1.5 * pp * psi_f
+kv = 2387                            # vendor convention 60/(2pi*Ke_LL_pk), matches catalog 2400 within 0.5%
+R_LL_mOhm = 180                      # line-to-line, LCR 1kHz (only freq avail); all 3 pairs equal within ~2-4 mOhm (balanced)
+R_s_phase_mOhm = 90                  # phase = R_LL/2 (wye), measured 2026-06-15 (same 1kHz convention)
+
+# Catalog values (for cross-reference)
+kv_catalog = 2400
+I_max_catalog = 6.5                  # A, 2-3S
+P_max_catalog = 70                   # W
+V_range_catalog_S = "2-3S"
+weight_g_catalog = 16.0
+
+[provenance]
+source = "JMT 1806 2400KV, bench back-EMF speed sweep"
+confidence = "measured"
+date = "2026-06-08"
+captures = "data/jmt_1806/captures/"
+analysis = "scripts/analyze_jmt_1806.py"
+catalog_url_amazon = "https://www.amazon.com/JMT-Multi-Rotor-2400KV-Brushless-Quadcopter/dp/B08NPCFZ1Z"
+catalog_url_qwinout = "https://qwinout.com/products/jmt-mini-multi-rotor-1806-2400kv-cw-ccw-brushless-motor"
+notes = """8-point back-EMF sweep labeled 20/30/40/65/70/80/90/100 RPS,
+motor spun passively 1:1 by an external backdriver (open-circuit DUT). Pole pairs
+n_p=7 fall directly out of f_elec/RPS on the 4 non-slipping files (20/30/40/90).
+Backdriver slip on the heavier files does not corrupt the Ke fit -- the analysis
+uses measured f_elec to recover true mechanical RPS. Linear fit R^2 = 0.99994 over
+20-100 RPS, THD 2.6-3.4 % (6.2 % at 20 RPS due to low SNR on ~280 mV peak).
+
+Probing convention: three single-ended scope channels on the three phase wires,
+all probe grounds tied together at the scope chassis. The motor's Y-point was
+inaccessible -- no physical connection. Still effectively phase-to-Y because the
+motor was open-circuit: V_Y - V_chassis is a slow DC drift with no fundamental
+content, so each channel's fundamental amplitude = per-phase BEMF amplitude.
+Catalog KV match (derived 2387 vs vendor 2400, within 0.5%) is the independent
+confirmation. Channel amplitudes ARE the phase-to-neutral peak BEMF.
+
+Cluster placement: ~330 uWb psi_f is within 2% of the KDE 1806XF-2350 estimate
+(336 uWb, Kt-anchored). The JMT and KDE motors share a winding class on the same
+18x6 stator -- the JMT is the budget catalog point in that cluster. Catalog Rm is
+not published."""

@@ -1,0 +1,119 @@
+{
+  "_comment": "Staleness and attachment test vectors — docs/result-store-contract.md",
+  "staleness": {
+    "_fields": "source, model, stamped_version, live_version → expect",
+    "cases": [
+      {
+        "label": "computed, stamp matches live → serves",
+        "source": "computed", "model": "fem", "stamped_version": 5, "live_version": 5,
+        "expect": "serve"
+      },
+      {
+        "label": "computed, stamp behind live → stale",
+        "source": "computed", "model": "fem", "stamped_version": 4, "live_version": 5,
+        "expect": "stale"
+      },
+      {
+        "label": "computed, stamp ahead of live → stale",
+        "source": "computed", "model": "fem", "stamped_version": 6, "live_version": 5,
+        "expect": "stale"
+      },
+      {
+        "label": "computed, stamp missing (null) → stale",
+        "source": "computed", "model": "fem", "stamped_version": null, "live_version": 5,
+        "expect": "stale"
+      },
+      {
+        "label": "computed, stamp is v1, live is v1 → serves",
+        "source": "computed", "model": "analytical", "stamped_version": 1, "live_version": 1,
+        "expect": "serve"
+      },
+      {
+        "label": "measured, stamp matches → serves (exempt)",
+        "source": "measured", "model": "fem", "stamped_version": 5, "live_version": 5,
+        "expect": "serve"
+      },
+      {
+        "label": "measured, stamp mismatches → serves (exempt)",
+        "source": "measured", "model": "fem", "stamped_version": 3, "live_version": 5,
+        "expect": "serve"
+      },
+      {
+        "label": "measured, stamp missing → serves (exempt)",
+        "source": "measured", "model": "fem", "stamped_version": null, "live_version": 5,
+        "expect": "serve"
+      },
+      {
+        "label": "published, stamp mismatches → serves (exempt)",
+        "source": "published", "model": "fem", "stamped_version": 2, "live_version": 5,
+        "expect": "serve"
+      },
+      {
+        "label": "published, stamp missing → serves (exempt)",
+        "source": "published", "model": "fem", "stamped_version": null, "live_version": 5,
+        "expect": "serve"
+      },
+      {
+        "label": "computed, unknown model key → stale",
+        "source": "computed", "model": "nonexistent", "stamped_version": 1, "live_version": null,
+        "expect": "stale"
+      },
+      {
+        "label": "source missing from record (defaults to computed), stamp mismatch → stale",
+        "source": null, "model": "fem", "stamped_version": 4, "live_version": 5,
+        "expect": "stale"
+      }
+    ]
+  },
+  "attachment": {
+    "_fields": "source, record_config_id, record_name, target_config_id, target_name → expect",
+    "cases": [
+      {
+        "label": "computed, config_id matches → attached",
+        "source": "computed", "record_config_id": "abc123", "record_name": "motor_A",
+        "target_config_id": "abc123", "target_name": "motor_A",
+        "expect": "attached"
+      },
+      {
+        "label": "computed, config_id differs, name matches → detached",
+        "source": "computed", "record_config_id": "abc123", "record_name": "motor_A",
+        "target_config_id": "def456", "target_name": "motor_A",
+        "expect": "detached"
+      },
+      {
+        "label": "computed, both differ → detached",
+        "source": "computed", "record_config_id": "abc123", "record_name": "motor_A",
+        "target_config_id": "def456", "target_name": "motor_B",
+        "expect": "detached"
+      },
+      {
+        "label": "measured, config_id matches → attached",
+        "source": "measured", "record_config_id": "abc123", "record_name": "motor_A",
+        "target_config_id": "abc123", "target_name": "motor_A",
+        "expect": "attached"
+      },
+      {
+        "label": "measured, config_id differs, name matches → attached (hardware identity)",
+        "source": "measured", "record_config_id": "abc123", "record_name": "motor_A",
+        "target_config_id": "def456", "target_name": "motor_A",
+        "expect": "attached"
+      },
+      {
+        "label": "measured, config_id differs, name differs → detached",
+        "source": "measured", "record_config_id": "abc123", "record_name": "motor_A",
+        "target_config_id": "def456", "target_name": "motor_B",
+        "expect": "detached"
+      },
+      {
+        "label": "published, config_id differs, name matches → attached (hardware identity)",
+        "source": "published", "record_config_id": "abc123", "record_name": "motor_A",
+        "target_config_id": "def456", "target_name": "motor_A",
+        "expect": "attached"
+      }
+    ]
+  },
+  "partial_staleness_conformance": {
+    "_comment": "Optional extension — per-channel staleness for stores where source is a channel property. Contributed cases welcome.",
+    "cases": []
+  }
+}

@@ -2,7 +2,7 @@
 // pairs x quantities from GET /api/validation/{motor}. Green <= tol,
 // yellow 1-2x tol, red > 2x tol (thresholds via the
 // server's ComparisonRow). Clicking a cell jumps the model comparison
-// panel to that quantity. The diagnosis line is the
+// panel to that quantity. The diagnosis line follows the standard
 // diagnostic pattern.
 
 let appRef = null;
@@ -17,7 +17,7 @@ let detailEl = null;
 let summary = null;
 let refreshTok = 0;
 
-// tone thresholds (tolerances) — stated in the UI, not just code
+// tone thresholds — stated in the UI, not just code
 const LEGEND = [
   ["pass", "≤ tol"], ["warn", "≤ 2× tol"], ["fail", "> 2× tol"], ["skip", "skipped"],
 ];

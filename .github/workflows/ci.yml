@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: uv sync --extra test --extra dev --extra server
+        run: uv sync --extra all --extra test --extra dev
       - name: Lint
         run: uv run ruff check phasesweep/ scripts/ tests/
       - name: Type check
@@ -26,3 +26,20 @@ jobs:
         run: uv run pytest -m "not slow" -q -rs
         env:
           PHASESWEEP_STRICT_SKIP: "1"
+
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install core + test deps only
+        run: uv sync --extra test
+      - name: Smoke-test lean import
+        run: uv run python -c "import phasesweep"
+      - name: Test (core lane)
+        run: uv run pytest -m "not slow" -q -rs
+        env:
+          PHASESWEEP_STRICT_SKIP: "1"
+          PHASESWEEP_CORE_LANE: "1"

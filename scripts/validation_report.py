@@ -24,25 +24,25 @@ import matplotlib.pyplot as plt
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from phasesweep.configs import load_motor
-from phasesweep.crossval import (
+from phasesweep.geo_parallel import execute_generic
+from phasesweep.machines.configs import load_motor
+from phasesweep.machines.geometry import inrunner, outrunner
+from phasesweep.machines.motor import Motor
+from phasesweep.machines.perturbation import perturb_motor as _perturb_motor
+from phasesweep.registry import MODEL_REGISTRY
+from phasesweep.simulation.sim import plan_sim
+from phasesweep.solver_params import prepare_drive_sim
+from phasesweep.solvers.harmonics import harmonics_1sided
+from phasesweep.sweep_types import RunConfig, RunResult
+from phasesweep.validation.crossval import (
     ComparisonRow,
     compare_results,
     diagnose_detailed,
     format_diagnosis,
     format_table,
 )
-from phasesweep.geometry import inrunner, outrunner
-from phasesweep.harmonics import harmonics_1sided
-from phasesweep.measured import MeasuredResult
-from phasesweep.motor import Motor
-from phasesweep.parallel import execute_generic
-from phasesweep.perturbation import perturb_motor as _perturb_motor
-from phasesweep.plots import plot_geometry
-from phasesweep.registry import MODEL_REGISTRY
-from phasesweep.sim import plan_sim
-from phasesweep.solver_params import prepare_drive_sim
-from phasesweep.sweep_types import RunConfig, RunResult
+from phasesweep.validation.measured import MeasuredResult
+from phasesweep.vis.plots import plot_geometry
 
 # ---------------------------------------------------------------------------
 # Motor catalogue and data mapping
@@ -50,8 +50,7 @@ from phasesweep.sweep_types import RunConfig, RunResult
 
 # Maps motor name → (TOML path relative to ROOT, data dir relative to ROOT)
 MOTOR_DATA_MAP: dict[str, tuple[str | None, str | None]] = {
-    "Actuator Steel Rotor": ("motors/actuator_steel_rotor.toml", "data/actuator_steel_rotor"),
-    "Actuator Aluminum Rotor": ("motors/actuator_aluminum_rotor.toml", "data/actuator_aluminum_rotor"),
+    "14 mm Outrunner (Steel)": ("motors/outrunner_14mm_steel.toml", "data/outrunner_14mm_steel"),
     "CREATOR Case PMSM": ("motors/creator_case_pmsm.toml", "data/creator_case_pmsm"),
     "Belkhadir 22p/24s ER-PMSM": ("motors/belkhadir_outrunner.toml", "data/belkhadir_outrunner"),
     "Deylami 8p/12s Cooling Fan": ("motors/deylami_fan.toml", "data/deylami_fan"),
@@ -501,10 +500,10 @@ def _field_map_worker(job: dict) -> dict:
         import matplotlib.pyplot as _plt
         import numpy as _np
 
-        from phasesweep.fem_field import rasterise_cross_section as _raster
-        from phasesweep.fem_field import solve_field_fem as _solve
-        from phasesweep.motor import Motor as _Motor
+        from phasesweep.machines.motor import Motor as _Motor
         from phasesweep.solver_params import prepare_fem as _prepare_fem
+        from phasesweep.solvers.fem_field import rasterise_cross_section as _raster
+        from phasesweep.solvers.fem_field import solve_field_fem as _solve
 
         motor = _Motor.from_dict(job["motor_dict"])
         params = _prepare_fem(motor)
@@ -697,7 +696,7 @@ def _run_sensitivity(
     """Build and execute sensitivity sweep jobs. Returns labelled grids per motor."""
     import dataclasses as dc
 
-    from phasesweep.parallel import execute_parallel
+    from phasesweep.geo_parallel import execute_parallel
 
     t_phase = time.perf_counter()
 
@@ -871,6 +870,7 @@ def _compute_all(
     workers: int,
     cache_dir: str | None,
     timing_log: list[tuple[str, float]],
+    skip_sensitivity: bool = False,
 ) -> tuple[
     dict[str, list[RunResult]],        # all_results
     dict[str, RunResult],              # linear_fem_results
@@ -960,9 +960,12 @@ def _compute_all(
                 timing_log.append((f"  field:{fr['tag']}", fr.get("elapsed_s", 0)))
 
     # --- Sensitivity analysis (parallel) ---
-    sens_by_motor = _run_sensitivity(
-        motors, all_results, workers, cache_dir, timing_log,
-    )
+    if skip_sensitivity:
+        sens_by_motor = {}
+    else:
+        sens_by_motor = _run_sensitivity(
+            motors, all_results, workers, cache_dir, timing_log,
+        )
 
     return all_results, linear_fem_results, all_measured, field_map_filenames, sens_by_motor
 
@@ -1457,7 +1460,7 @@ def _render_summary_tables(
 # Main report orchestrator
 # ---------------------------------------------------------------------------
 
-def generate_report(fig_dir: Path | None = None, workers: int = 1) -> str:
+def generate_report(fig_dir: Path | None = None, workers: int = 1, skip_sensitivity: bool = False) -> str:
     lines: list[str] = []
     w = lines.append
     timing_log: list[tuple[str, float]] = []
@@ -1469,7 +1472,7 @@ def generate_report(fig_dir: Path | None = None, workers: int = 1) -> str:
         _cache_path = fig_dir.parent / ".mesh_cache"
         _cache_path.mkdir(parents=True, exist_ok=True)
         cache_dir = str(_cache_path)
-        from phasesweep.fem_field import set_disk_cache_dir
+        from phasesweep.solvers.fem_field import set_disk_cache_dir
         set_disk_cache_dir(cache_dir)
 
     now = datetime.now()
@@ -1485,6 +1488,7 @@ def generate_report(fig_dir: Path | None = None, workers: int = 1) -> str:
     (all_results, linear_fem_results, all_measured,
      field_map_filenames, sens_by_motor) = _compute_all(
         motors, fig_dir, workers, cache_dir, timing_log,
+        skip_sensitivity=skip_sensitivity,
     )
 
     # ===== RENDER =====
@@ -1597,12 +1601,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase-sweep validation report")
     parser.add_argument("--workers", type=int, default=1,
                         help="parallel workers for sensitivity sweep (default: 1 = serial)")
+    parser.add_argument("--no-sensitivity", action="store_true",
+                        help="skip sensitivity sweep (much faster)")
     args = parser.parse_args()
 
     out_dir = ROOT / "output" / "validation_report"
     fig_dir = out_dir / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
-    report = generate_report(fig_dir=fig_dir, workers=args.workers)
+    report = generate_report(fig_dir=fig_dir, workers=args.workers,
+                             skip_sensitivity=args.no_sensitivity)
     out_path = out_dir / "report.md"
     out_path.write_text(report)
     print(f"Report written to {out_path}")

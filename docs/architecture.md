@@ -23,8 +23,8 @@ carrying `motor_config_id`, `model`, and `source`; the crossval
 comparison surface is derived from `produces` intersections rather than
 hardcoded, and deltas are computed on request, never stored.
 
-The figure is a full-width landscape (3.2:1) — its labels fall below
-legibility at README inline width, which is why it lives here.
+The figure is a full-width landscape (3.2:1); labels are legible at
+docs-page width but not at README inline width.
 
 ## Provenance and run identity
 
@@ -41,11 +41,14 @@ collide.
 
 Two staleness mechanisms sit outside the hash and need explicit
 handling: version-stale records are purged by comparing the stamp
-against the registry (`populate_cache.py --purge-only`), and records
+against the registry (`scripts/populate_cache.py --purge-only`), and records
 written by changed code that never got a version bump are only caught
-by recomputing (`populate_cache.py --verify`). Reference `.npz`
+by recomputing (`scripts/populate_cache.py --verify`). Reference `.npz`
 captures and the mesh-cache prefix are outside the hash entirely and
-are recaptured or prefix-bumped by hand.
+are recaptured or prefix-bumped by hand. See
+[result-store-contract.md](result-store-contract.md) for the
+portable specification of these rules, including test vectors for
+downstream consumers.
 
 ## Model coverage
 

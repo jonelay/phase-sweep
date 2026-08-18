@@ -28,9 +28,8 @@ from typing import Any, cast
 
 import structlog
 
-from phasesweep.geo_sweep import SweepAxis, generate_grid
-from phasesweep.motor import Motor
-from phasesweep.parallel import execute_parallel
+from phasesweep.geo_parallel import SweepAxis, execute_parallel, generate_grid
+from phasesweep.machines.motor import Motor
 from phasesweep.registry import MODEL_REGISTRY, ModelInfo
 from phasesweep.result_store import ResultStore
 from phasesweep.server.protocol import JobStatus, ServerMsg
@@ -38,14 +37,20 @@ from phasesweep.sweep_types import RunConfig, RunResult, Status, compute_run_id
 
 log = structlog.get_logger()
 
-# RunConfig fields settable directly through job params; sim_plan and
-# duty_profile need structured conversion and are handled separately.
-_SCALAR_CONFIG_KEYS = frozenset({"maxh_fraction", "n_theta", "nonlinear", "j_s", "i_fault"})
-_CONFIG_PARAM_KEYS = _SCALAR_CONFIG_KEYS | {"sim_plan", "duty_profile"}
+# RunConfig fields settable directly through job params; sim_plan,
+# duty_profile, and load_mech need structured conversion.
+_SCALAR_CONFIG_KEYS = frozenset({
+    "maxh_fraction", "n_theta", "nonlinear", "j_s", "i_fault",
+    "rotation", "cogging_points",
+})
+_CONFIG_PARAM_KEYS = _SCALAR_CONFIG_KEYS | {"sim_plan", "duty_profile", "load_mech"}
 
 # hash_fields that imply a per-run param the caller must supply for the
 # model to be runnable; gates the default model set for `validate` jobs.
-_PARAM_GATED_FIELDS = frozenset({"sim_plan", "duty_profile", "i_fault"})
+_PARAM_GATED_FIELDS = frozenset({
+    "sim_plan", "duty_profile", "i_fault", "load_mech",
+    "rotation", "cogging_points",
+})
 
 _TERMINAL: frozenset[JobStatus] = frozenset({"completed", "failed", "cancelled"})
 
@@ -55,11 +60,26 @@ def _auto_derive_params(
 ) -> None:
     """Fill in missing param-gated fields from motor physics."""
     if model_key == "drive_sim" and params.get("sim_plan") is None:
-        from phasesweep.sim import plan_sim
+        from phasesweep.simulation.sim import plan_sim
         from phasesweep.solver_params import prepare_drive_sim
         params["sim_plan"] = plan_sim(prepare_drive_sim(motor)).to_dict()
+    if model_key == "drive_sim_two_mass":
+        if params.get("load_mech") is None:
+            raise ValueError(
+                "drive_sim_two_mass requires params.load_mech"
+            )
+        if params.get("sim_plan") is None:
+            from phasesweep.simulation.sim import plan_two_mass_sim
+            from phasesweep.solver_params import TwoMassLoad, prepare_drive_sim
+            try:
+                load = TwoMassLoad.from_dict(params["load_mech"])
+            except (KeyError, TypeError, ValueError) as e:
+                raise ValueError(f"bad load_mech: {e}") from e
+            params["sim_plan"] = plan_two_mass_sim(
+                prepare_drive_sim(motor), load,
+            ).to_dict()
     if model_key == "thermal_duty" and params.get("duty_profile") is None:
-        from phasesweep.rated_torque import magnet_torque_constant
+        from phasesweep.models.rated_torque import magnet_torque_constant
         from phasesweep.solver_params import _resolve_psi_f
         if motor.I_rated is None:
             # fail at submit (400) like demag_screen, not at runtime —
@@ -117,12 +137,18 @@ def _build_config_kw(params: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError) as e:
             raise ValueError(f"bad duty_profile: {e}") from e
     if params.get("sim_plan") is not None:
-        from phasesweep.sim import SimPlan
+        from phasesweep.simulation.sim import SimPlan
         try:
             kw["sim_plan"] = SimPlan.from_dict(params["sim_plan"])
         except (KeyError, TypeError, ValueError) as e:
-            # a bare KeyError here would masquerade as an unknown-motor 404
+            # bare KeyError would masquerade as an unknown-motor 404
             raise ValueError(f"bad sim_plan: {e}") from e
+    if params.get("load_mech") is not None:
+        from phasesweep.solver_params import TwoMassLoad
+        try:
+            kw["load_mech"] = TwoMassLoad.from_dict(params["load_mech"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(f"bad load_mech: {e}") from e
     return kw
 
 
@@ -140,7 +166,29 @@ def _config_kw_of(rc: RunConfig) -> dict[str, Any]:
         kw["sim_plan"] = rc.sim_plan
     if rc.duty_profile is not None:
         kw["duty_profile"] = rc.duty_profile
+    if rc.load_mech is not None:
+        kw["load_mech"] = rc.load_mech
+    if rc.rotation != 0.0:
+        kw["rotation"] = rc.rotation
+    if rc.cogging_points != 12:
+        kw["cogging_points"] = rc.cogging_points
     return kw
+
+
+def _kw_for_model(base_kw: dict[str, Any], model_key: str) -> dict[str, Any]:
+    """Drop param-gated keys that don't belong to *model_key*'s hash_fields."""
+    info = MODEL_REGISTRY[model_key]
+    drop = {k for k in _PARAM_GATED_FIELDS if k not in info.hash_fields}
+    return {k: v for k, v in base_kw.items() if k not in drop}
+
+
+def _check_cogging_j_s(model_key: str, params: dict[str, Any]) -> None:
+    """Reject j_s != 0 at submit time for cogging_torque."""
+    if model_key == "cogging_torque" and params.get("j_s", 0.0) != 0.0:
+        raise ValueError(
+            "cogging_torque requires j_s=0 (locked-rotor ripple "
+            "under load is out of scope)"
+        )
 
 
 def _computed_info(model_key: str) -> ModelInfo:
@@ -336,8 +384,15 @@ class JobManager:
 
         info = _computed_info(job_type)
         self._check_params(params, allowed_extra=frozenset())
+        foreign = {k for k in _PARAM_GATED_FIELDS
+                   if k not in info.hash_fields and params.get(k) is not None}
+        if foreign:
+            raise ValueError(
+                f"{sorted(foreign)} not accepted by model {job_type!r}"
+            )
         if info.validate is not None:
             info.validate(motor)
+        _check_cogging_j_s(job_type, params)
         _auto_derive_params(params, job_type, motor)
         config = RunConfig(motor=motor, model=job_type, **_build_config_kw(params))
         return [SubTask(run_id=compute_run_id(config), config=config, model=job_type)]
@@ -352,7 +407,7 @@ class JobManager:
             info = _computed_info(mk)
             if info.validate is not None:
                 info.validate(motor)
-
+            _check_cogging_j_s(mk, params)
         raw_axes = params.get("axes")
         if not raw_axes:
             raise ValueError("sweep requires params.axes (list of "
@@ -374,8 +429,8 @@ class JobManager:
             if pt.L_stk is not None:
                 m = dataclasses.replace(m, L_stk=pt.L_stk)
             for mk in model_keys:
-                kw = dict(base_kw)
-                if mk == "fem":
+                kw = _kw_for_model(base_kw, mk)
+                if mk in ("fem", "cogging_torque"):
                     kw.setdefault("nonlinear", True)  # mirrors geo_sweep.run_sweep
                 config = RunConfig(motor=m, model=mk, **kw)
                 subtasks.append(SubTask(
@@ -393,10 +448,10 @@ class JobManager:
                 info = _computed_info(mk)
                 if info.validate is not None:
                     info.validate(motor)
+                _check_cogging_j_s(mk, params)
         else:
             # Default: every fast computed model that is runnable as-is —
-            # param-gated models (sim_plan/duty_profile/i_fault) join only
-            # when the caller supplies the param.
+            # param-gated models join only when the caller supplies the param.
             models = []
             for key, info in MODEL_REGISTRY.items():
                 if info.source != "computed" or info.fn is None or info.cost == "slow":
@@ -419,7 +474,8 @@ class JobManager:
         base_kw = _build_config_kw(params)
         subtasks = []
         for mk in models:
-            config = RunConfig(motor=motor, model=mk, **base_kw)
+            kw = _kw_for_model(base_kw, mk)
+            config = RunConfig(motor=motor, model=mk, **kw)
             subtasks.append(SubTask(
                 run_id=compute_run_id(config), config=config, model=mk))
         return subtasks
@@ -511,7 +567,14 @@ class JobManager:
                          progress=f"{job.completed_count}/{job.total}",
                          elapsed_s=round(st.elapsed_s, 3))
 
-            timeout_s = max(1, math.ceil(len(pending) / self.workers)) * self.subtask_timeout_s
+            # Cogging runs N FEM solves per subtask; scale the budget.
+            max_multiplier = max(
+                (st.config.cogging_points if st.model == "cogging_torque" else 1
+                 for st in pending),
+                default=1,
+            )
+            effective_subtask_s = self.subtask_timeout_s * max_multiplier
+            timeout_s = max(1, math.ceil(len(pending) / self.workers)) * effective_subtask_s
             # Dedicated daemon thread, not asyncio.to_thread: the default
             # executor's non-daemon threads are joined at loop shutdown, so
             # a draining job would block Ctrl-C until its sub-task finished.
@@ -590,7 +653,7 @@ class JobManager:
         with model↔model self-pairs and doubled columns — deduped to
         latest-per-(model, source, dataset_id) here at the endpoint; the
         CLI compare_all keeps its every-pair semantics."""
-        from phasesweep.crossval import compare_all, diagnose
+        from phasesweep.validation.crossval import compare_all, diagnose
 
         motor = self.motors[motor_name]
         results = _dedupe_for_matrix(self.store.load_results(motor=motor))

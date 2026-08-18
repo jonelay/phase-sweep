@@ -1,0 +1,28 @@
+{
+    "motor_name": "Toyota Prius 2004 IPM",
+    "test_type": "torque_test",
+    "conditions": {
+        "speed_rpm": 0,
+        "temperature_C": 25.0,
+        "load_torque_Nm": 0.0,
+        "date": "2004-01-01",
+        "instrument": "published"
+    },
+    "quantities": {
+        "tau_rated": 340.0
+    },
+    "waveforms": {},
+    "uncertainty": {},
+    "source_file": "ORNL/TM-2004/185 rev. 2007 (OSTI 921782), p. 7",
+    "source": "published",
+    "tolerances": {
+        "tau_rated": 20.0
+    },
+    "bound_compare": {
+        "tau_rated": {
+            "computed_key": "tau_stall",
+            "relation": "gte",
+            "semantic_note": "Computed MTPA at MAX_I_S (250 A peak) should reach or exceed the ORNL dynamometer measurement (340 Nm at 250 A DC locked-rotor). The linear model over-predicts by ~166% at this current (constant L_q at 3.55 mH vs saturated ~2.5 mH), so the bound passes by a wide margin — the over-prediction is a documented saturation limitation, not a validation success. ORNL quote: 'A current amplitude of 250A produces about 340 Nm'."
+        }
+    }
+}

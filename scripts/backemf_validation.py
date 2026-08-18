@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Back-EMF validation: analytical vs FEM vs measured for the actuator steel rotor.
+"""Back-EMF validation: analytical vs FEM vs measured for the 14 mm outrunner (steel).
 
 Produces output/back_emf_validation/report.md with comparison tables,
 sensitivity sweeps, and B_r waveform plots.
 
-The raw steel-rotor oscilloscope captures under data/actuator_steel_rotor/
+The raw steel-rotor oscilloscope captures under data/outrunner_14mm_steel/
 are not distributed in the public repository; sections that need them are
 skipped when the files are absent.
 """
@@ -26,17 +26,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from phasesweep.analytical import (
-    _derive_B_rem,
-    carter_adjusted_radii,
-    end_effect_factor,
-    end_effect_factor_pole_pitch,
-    zhu_howe_Br,
-)
-from phasesweep.configs import load_motor
-from phasesweep.fem_field import sample_Br, solve_field_fem
-from phasesweep.harmonics import compute_thd, harmonics_1sided
-from phasesweep.motor import Motor
+from phasesweep.machines.configs import load_motor
+from phasesweep.machines.motor import Motor
 from phasesweep.solver_params import (
     derive_psi_f_smooth,
     n_eff,
@@ -46,12 +37,21 @@ from phasesweep.solver_params import (
     psi_f_carter,
     winding_transfer,
 )
+from phasesweep.solvers.analytical import (
+    _derive_B_rem,
+    carter_adjusted_radii,
+    end_effect_factor,
+    end_effect_factor_pole_pitch,
+    zhu_howe_Br,
+)
+from phasesweep.solvers.fem_field import sample_Br, solve_field_fem
+from phasesweep.solvers.harmonics import compute_thd, harmonics_1sided
 
 # ── Constants ──────────────────────────────────────────────────────────
-TOML = ROOT / "motors" / "actuator_steel_rotor.toml"
+TOML = ROOT / "motors" / "outrunner_14mm_steel.toml"
 OUT = ROOT / "output" / "back_emf_validation"
-CAPTURES_DIR = ROOT / "data" / "actuator_steel_rotor" / "captures"
-SWEEP_JSON = ROOT / "data" / "actuator_steel_rotor" / "backemf_speed_sweep.json"
+CAPTURES_DIR = ROOT / "data" / "outrunner_14mm_steel" / "captures"
+SWEEP_JSON = ROOT / "data" / "outrunner_14mm_steel" / "backemf_speed_sweep.json"
 
 # Test conditions (80 rps reference point)
 RPS_REF = 79.86     # actual rps at the 80 rps command point
@@ -744,7 +744,7 @@ def run_calibrated_drive_sim(motor, psi_f_calibrated):
     """Run drive sim with calibrated psi_f vs uncalibrated. Gracefully handles crash."""
     from dataclasses import replace
 
-    from phasesweep.sim import build_sim, extract_metrics, plan_sim
+    from phasesweep.simulation.sim import build_sim, extract_metrics, plan_sim
 
     results = {}
 
@@ -1333,7 +1333,7 @@ def plot_drive_sim_transient(motor, psi_f_calibrated, out_dir):
     """3-panel transient plot: speed, torque, current vs time for calibrated drive sim."""
     from dataclasses import replace
 
-    from phasesweep.sim import build_sim, plan_sim
+    from phasesweep.simulation.sim import build_sim, plan_sim
 
     motor_cal = replace(motor, psi_f=psi_f_calibrated)
     params = prepare_drive_sim(motor_cal)
@@ -2498,7 +2498,7 @@ def generate_report(
         w("![Drive sim transient](drive_sim_transient.png)")
         w()
 
-    w("Note: actuator J = 4.73e-7 kg·m² produces a fast mechanical time constant. "
+    w("Note: 14 mm outrunner J = 4.73e-7 kg·m² produces a fast mechanical time constant. "
       "Controller tuning is adapted automatically via `plan_sim()`.")
     w()
 
@@ -2745,7 +2745,7 @@ def main(argv: list[str] | None = None) -> None:
     import pickle
 
     parser = argparse.ArgumentParser(
-        description="Back-EMF validation: models vs measured (steel actuator)")
+        description="Back-EMF validation: models vs measured (14 mm outrunner, steel)")
     parser.add_argument("--report-only", action="store_true",
                         help="regenerate report.md from the saved results bundle "
                              "(no solves, no figures) — for prose iteration")

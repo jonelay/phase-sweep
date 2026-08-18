@@ -3,7 +3,7 @@
 Terms, symbols, and abbreviations appearing in the phase-sweep validation
 report (`scripts/validation_report.py`) and supporting modules.
 
-See also: `docs/naming-crossref.md` for naming collisions across domains.
+See also: [naming-crossref.md](naming-crossref.md) for naming collisions across domains.
 
 ---
 
@@ -12,7 +12,7 @@ See also: `docs/naming-crossref.md` for naming collisions across domains.
 **Peak vs RMS:** All current and flux linkage values in the code follow
 motulator's peak-value convention. TOML files may specify `I_rated_rms`
 which is converted to peak via `I_rated = I_rated_rms × √2` at load time
-(`configs.py:72–76`). Torque formulas use the 3/2 factor that pairs with
+(`machines/configs.py`). Torque formulas use the 3/2 factor that pairs with
 peak values: `τ = 1.5 × n_p × (ψ_f × i_q + (L_d − L_q) × i_d × i_q)`.
 
 **Units:** All geometry values are in SI (meters), not millimeters or
@@ -59,7 +59,7 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 > partial-pitch to full-pitch magnetization is exactly `sin(πα_p/2)`.
 > **Analytical:** `zhu_howe_Br` applies this as `k_mp = sin(πα_p/2)` directly.
 > **FEM:** The mesh models discrete magnet arcs (`_cut_magnet_arcs`
-> in `fem_field.py`) — `fem_runner` passes unscaled
+> in `solvers/fem_field.py`) — `fem_runner` passes unscaled
 > `B_rem` together with `alpha_p`, and the geometry itself captures the
 > inter-magnet gaps. Arcs are skipped (full ring) when the gap width
 > would be < 0.5 mm, to avoid OCC boolean failures.
@@ -129,10 +129,8 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | L_q | H | q-axis inductance |
 | saliency | — | L_q/L_d ratio; >1 = salient (IPM), ~1 = non-salient |
 
-> **Peak convention:** motulator states "Peak-valued complex space vectors are used"
-> (`_machine.py` header). Motor.I_rated is peak; `configs.py` converts
-> I_rated_rms → peak via ×√2. The 1.5 factor in k_T pairs with peak values.
-> See also: motulator `i_s_max` on CurrentVectorControllerCfg = peak amps.
+> **Peak convention:** see Conventions section above. motulator's
+> `i_s_max` on CurrentVectorControllerCfg is also peak amps.
 
 ## Drive Simulation
 
@@ -274,7 +272,7 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | Name | Topology | Poles/Slots | n_p | Key validation |
 |------|----------|-------------|-----|----------------|
 | CREATOR Case PMSM | Inrunner | 4p/6s | 2 | Back-EMF: 47.91 V computed vs 47.37 V measured (1.1%) |
-| Belkhadir 22p/24s ER-PMSM | Outrunner | 22p/24s | 11 | Air-gap B₁ ≈ 0.806 T (analytical) / 0.818 T (FEM) |
+| Belkhadir 22p/24s ER-PMSM | Outrunner | 22p/24s | 11 | Air-gap B₁ ≈ 1.026 T (analytical) / 1.020 T (FEM) |
 | Awan 2.2-kW IPM | Inrunner (salient) | 6p | 3 | Torque curve, MTPA angle |
 | Zhu & Howe 8-pole | Both | 8p/smooth | 4 | Paper reference geometry (analytical verification) |
 
@@ -293,7 +291,7 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 
 | # | Section | What it shows |
 |---|---------|---------------|
-| 1 | Overview | Reference motor catalogue + model eligibility matrix |
+| 1 | Overview | Reference motor catalog + model eligibility matrix |
 | 2 | Per-Motor Analysis | Per motor: model outputs, analytical vs FEM, linear vs nonlinear FEM, cross-validation, sensitivity analysis |
 | 3 | Cross-Motor Summary Tables | Air-gap B₁, linear vs nonlinear FEM, rated torque, stall torque, drive simulation |
 | 4 | Infrastructure | Registry/run statistics |
@@ -308,6 +306,6 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | mtpa_gamma_*.png | MTPA angle γ vs stator current I_s with measured points |
 | deviation_*.png | Computed/published ratio per quantity with tolerance bands |
 | geometry_*.png | Motor cross-section sketch from Geometry |
-| field_*.png | Rasterised FEM field solution (|B| over the cross-section) |
+| field_*.png | Rasterized FEM field solution (|B| over the cross-section) |
 | sensitivity_*.png | Response change (%) vs parameter change (%) per track |
 

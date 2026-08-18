@@ -42,9 +42,9 @@ GRAY   = "#888888"
 
 def fig_fem_hero() -> Path:
     """CREATOR 4p/6s inrunner, nonlinear |B| field map."""
-    from phasesweep.configs import load_motor
-    from phasesweep.fem_field import rasterise_cross_section, solve_field_fem
+    from phasesweep.machines.configs import load_motor
     from phasesweep.solver_params import prepare_fem
+    from phasesweep.solvers.fem_field import rasterise_cross_section, solve_field_fem
 
     motor = load_motor(ROOT / "motors" / "creator_case_pmsm.toml")
     params = prepare_fem(motor)
@@ -99,7 +99,7 @@ def fig_fem_hero() -> Path:
 
 def fig_backemf_waveform() -> Path:
     """CREATOR back-EMF at 2000 RPM: measured oscilloscope data vs analytical fundamental."""
-    from phasesweep.configs import load_motor
+    from phasesweep.machines.configs import load_motor
     from phasesweep.registry import _run_analytical_impl
     from phasesweep.sweep_types import RunConfig
 
@@ -172,11 +172,11 @@ def fig_backemf_waveform() -> Path:
 def fig_validation_chart() -> Path:
     """Two-step validation chain: solver verification (Zhu & Howe inrunner) then
     model validation (CREATOR measured back-EMF)."""
-    from phasesweep.analytical import zhu_howe_Br
-    from phasesweep.configs import load_motor
-    from phasesweep.geometry import default_inrunner
-    from phasesweep.harmonics import harmonics_1sided
+    from phasesweep.machines.configs import load_motor
+    from phasesweep.machines.geometry import default_inrunner
     from phasesweep.registry import _run_analytical_impl
+    from phasesweep.solvers.analytical import zhu_howe_Br
+    from phasesweep.solvers.harmonics import harmonics_1sided
     from phasesweep.sweep_types import RunConfig
 
     # --- Row 1: solver verification — Zhu & Howe 4-pole inrunner, α_p = 1 ---
@@ -286,7 +286,7 @@ def fig_coverage_matrix() -> Path:
     """Motors × computed models: current-version record in the store /
     runnable but no record / motor lacks required fields. Generated from
     the registry validators and the local result store."""
-    from phasesweep.configs import load_motor
+    from phasesweep.machines.configs import load_motor
     from phasesweep.registry import MODEL_REGISTRY
     from phasesweep.result_store import ResultStore, version_current
 

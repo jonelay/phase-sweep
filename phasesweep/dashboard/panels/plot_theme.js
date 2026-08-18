@@ -9,8 +9,8 @@
 // but is otherwise theme-invariant — light/dark never re-hue a slot.
 
 // Categorical palettes for the SERIES slots. All CVD-safe. Tol's sets are
-// 7 colors; the getter cycles them to fill the 8-slot config cap — an 8th
-// config repeats slot 0's hue (distinguished by chip label).
+// 7 colors; the getter cycles them to fill the 8-slot config cap — an
+// 8th config repeats slot 0's hue (distinguished by chip label).
 // Okabe-Ito is the 8-color Wong set with its pure black swapped for grey so
 // slot 8 stays legible on the dark theme; strong hues front-loaded.
 // Slot order is contrast-aware: slot 0 (the default single-config colour)
@@ -48,7 +48,7 @@ export const CATEGORICAL_PALETTES = {
   },
 };
 export const DEFAULT_PALETTE = "okabe_ito";
-const SLOTS = 8; // compare-set config cap
+const SLOTS = 8; // = compare-set config cap
 
 // SERIES is a LIVE 8-slot array — applyPalette mutates it in place so every
 // panel's SERIES[slot] read picks up new hues on its next retheme(), and

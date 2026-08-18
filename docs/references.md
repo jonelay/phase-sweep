@@ -21,7 +21,7 @@ numerically. FEM agrees within 1% on fundamental amplitude for the Zhu & Howe
 reference configurations and within 2% for the other tested configurations
 (test-enforced bounds).
 
-### Zhu & Howe (1993) — foundational series
+### Zhu & Howe (1993) — original four-part series
 Four-part series, all in *IEEE Transactions on Magnetics*, 29(1), Jan. 1993.
 All paywalled on IEEE Xplore; no free PDFs found.
 
@@ -69,10 +69,8 @@ Applications*, 38(5), 1259–1265.
 https://doi.org/10.1109/TIA.2002.802989
 Paywalled on IEEE Xplore; no free PDF found.
 
-General reference for cogging torque reduction (slot/pole combination, magnet
-shaping, skew). Cited as a starting point for IPM barrier geometry, though
-this paper focuses on SPM cogging rather than IPM saliency — a more targeted
-IPM barrier reference should be substituted when implementing that feature.
+Reference for cogging torque reduction techniques (slot/pole combination,
+magnet shaping, skew). Focuses on SPM cogging rather than IPM saliency.
 
 ---
 
@@ -153,7 +151,7 @@ Silvester, P. P., & Ferrari, R. L. (1996). *Finite Elements for Electrical
 Engineers.* 3rd ed. Cambridge University Press. Chapter 7 (nonlinear problems).
 
 The B-H curve used is a generic soft magnetic steel composite (not
-grade-specific). See `_BH_B` / `_BH_H` in `fem_field.py`. For grade-specific
+grade-specific). See `_BH_B` / `_BH_H` in `solvers/fem_field.py`. For grade-specific
 data, see the M19 datasheet entry above (Iron Loss section).
 
 ### NGSolve documentation
@@ -164,7 +162,7 @@ A-formulation (vector potential), 2D magnetostatic:
 ```
 −∇·(ν ∇A_z) = J_z + (∇×(ν M))_z
 ```
-Weak form used in `solve_field_fem()`. See `fem_field.py` module docstring
+Weak form used in `solve_field_fem()`. See `solvers/fem_field.py` module docstring
 for the specific source term derivation.
 
 ### Maxwell stress tensor torque
@@ -196,11 +194,9 @@ ISBN 978-0-19-964584-7.
 Reluctance Motor Drives." Doctoral dissertation, Aalto University School of
 Electrical Engineering (defended 15 November 2019).
 
-Every equation and section number below is the **dissertation's**. The
-underlying journal paper — Awan, Song, Saarakkala & Hinkkanen (2018),
-"Optimal torque control of saturated synchronous motors: Plug-and-play
-method," *IEEE TIA* 54(6), 6110–6120, https://doi.org/10.1109/TIA.2018.2862410
-— is Publication VI of the thesis and numbers its equations differently.
+Equation and section numbers below refer to the 2019 dissertation, not the
+2018 journal paper (Awan et al., *IEEE TIA* 54(6), 6110–6120,
+https://doi.org/10.1109/TIA.2018.2862410).
 
 Torque equation (eq. 2.14, peak-valued space vectors):
 ```
@@ -222,7 +218,7 @@ motulator.
 **Motor data (Table 6.2):** 2.2-kW 6-pole IPM (ABB M2BJ 100L 6 B3) used as
 rated torque validation case: n_p=3, L_d=36 mH, L_q=51 mH, ψ_f=0.545 Wb,
 R_s=3.6 Ω, I_rated=4.3 A_rms (6.08 A peak), rated torque 14 Nm at 1500 rpm.
-TOML: `data/awan_ipm/awan_2p2kw_ipm.toml`. Tests: `tests/test_rated_torque.py`.
+TOML: `data/awan_ipm/awan_2p2kw_ipm.toml`. Tests: `tests/models/test_rated_torque.py`.
 
 ### Morimoto et al. (1994) — MTPA for IPM drives
 **Morimoto, S., Sanada, M., & Takeda, Y. (1994).** "Wide-speed operation of
@@ -231,7 +227,7 @@ regulator." *IEEE Transactions on Industry Applications*, 30(4), 920–926.
 https://doi.org/10.1109/28.297908
 Paywalled on IEEE Xplore; no free PDF found.
 
-Foundational reference for MTPA current angle optimization in IPM drives.
+Original reference for the closed-form MTPA quadratic used in IPM drives.
 The unsaturated MTPA condition (dT/dγ = 0 at constant |I_s|) yields a
 quadratic in sin(γ):
 ```
@@ -258,7 +254,7 @@ saturation reduces L_d/L_q and ψ_f — linear model overpredicts torque.
 **Hinkkanen, M., et al.** motulator: Motor Drive Simulator. Version 0.7.3.
 https://github.com/Aalto-Electric-Drives/motulator (MIT License)
 
-Used for time-domain drive simulation. Classes used (`sim.py`):
+Used for time-domain drive simulation. Classes used (`simulation/sim.py`):
 - Model: `SynchronousMachine`, `SynchronousMachinePars`, `Drive`,
   `MechanicalSystem`, `VoltageSourceConverter`, `Simulation`, `Step`
 - Control: `CurrentVectorController(Cfg)`, `SpeedController`,

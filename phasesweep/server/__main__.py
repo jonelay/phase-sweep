@@ -25,7 +25,13 @@ def main() -> None:
                         help="JSON log output (default: colored console)")
     args = parser.parse_args()
 
-    import uvicorn
+    try:
+        import uvicorn
+    except ImportError:
+        raise ImportError(
+            "phasesweep-server requires the server extra: "
+            "pip install phasesweep[server]"
+        ) from None
 
     from phasesweep.server.app import ServerSettings, create_app
 

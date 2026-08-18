@@ -794,20 +794,29 @@ wheels = [
 
 [[package]]
 name = "phasesweep"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
-    { name = "matplotlib" },
-    { name = "motulator" },
-    { name = "ngsolve" },
     { name = "numpy" },
     { name = "scipy" },
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "fastapi" },
+    { name = "matplotlib" },
+    { name = "motulator" },
+    { name = "ngsolve" },
+    { name = "structlog" },
+    { name = "tomli-w" },
+    { name = "uvicorn", extra = ["standard"] },
+]
 dev = [
     { name = "mypy" },
     { name = "ruff" },
+]
+fem = [
+    { name = "ngsolve" },
 ]
 gpu = [
     { name = "cupy-cuda12x" },
@@ -821,10 +830,16 @@ server = [
     { name = "tomli-w" },
     { name = "uvicorn", extra = ["standard"] },
 ]
+sim = [
+    { name = "motulator" },
+]
 test = [
     { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+]
+viz = [
+    { name = "matplotlib" },
 ]
 
 [package.metadata]
@@ -832,12 +847,13 @@ requires-dist = [
     { name = "cupy-cuda12x", marker = "extra == 'gpu'" },
     { name = "fastapi", marker = "extra == 'server'" },
     { name = "httpx", marker = "extra == 'test'" },
-    { name = "matplotlib" },
+    { name = "matplotlib", marker = "extra == 'viz'" },
     { name = "mkl", marker = "extra == 'mkl'" },
-    { name = "motulator", specifier = ">=0.7.3,<0.8" },
+    { name = "motulator", marker = "extra == 'sim'", specifier = ">=0.7.3,<0.8" },
     { name = "mypy", marker = "extra == 'dev'" },
-    { name = "ngsolve" },
+    { name = "ngsolve", marker = "extra == 'fem'" },
     { name = "numpy" },
+    { name = "phasesweep", extras = ["fem", "sim", "viz", "server"], marker = "extra == 'all'" },
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pytest-timeout", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'dev'" },
@@ -846,7 +862,7 @@ requires-dist = [
     { name = "tomli-w", marker = "extra == 'server'" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'" },
 ]
-provides-extras = ["gpu", "mkl", "server", "test", "dev"]
+provides-extras = ["fem", "sim", "viz", "server", "all", "gpu", "mkl", "test", "dev"]
 
 [[package]]
 name = "pillow"

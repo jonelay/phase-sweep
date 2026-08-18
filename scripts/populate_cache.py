@@ -214,7 +214,7 @@ def _default_duty_profile(motor: Any) -> tuple[tuple[float, float], ...]:
     The rated_torque model must validate first, so I_rated and psi_f are
     guaranteed present.
     """
-    from phasesweep.rated_torque import magnet_torque_constant
+    from phasesweep.models.rated_torque import magnet_torque_constant
     from phasesweep.solver_params import prepare_rated_torque
     p = prepare_rated_torque(motor)
     k_t = magnet_torque_constant(motor.n_p, p.psi_f)
@@ -300,7 +300,7 @@ def main() -> None:
         return
 
     # --- discover motors ---
-    from phasesweep.configs import load_motor
+    from phasesweep.machines.configs import load_motor
     from phasesweep.registry import MODEL_REGISTRY
     from phasesweep.result_store import compute_run_id
     from phasesweep.sweep_types import RunConfig
@@ -355,8 +355,8 @@ def main() -> None:
         return
 
     # --- execute ---
-    from phasesweep.motor import Motor
-    from phasesweep.parallel import execute_parallel
+    from phasesweep.geo_parallel import execute_parallel
+    from phasesweep.machines.motor import Motor
     from phasesweep.result_store import ResultStore
 
     store = ResultStore(args.output_dir)

@@ -1,6 +1,6 @@
 """Decompose line-to-line impedance measurements into per-phase R_s and L_d.
 
-Actuator outrunner: 12p9s, 3-phase wye, 4 wires (Red, Green, Blue + Brown neutral).
+14 mm outrunner: 12p9s, 3-phase wye, 4 wires (Red, Green, Blue + Brown neutral).
 Measurements: LCR meter at 1 kHz, 6 wire pairs.
 """
 

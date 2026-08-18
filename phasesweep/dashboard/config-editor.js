@@ -85,7 +85,7 @@ let rawConfig = null; // parsed TOML of the loaded config, section layout intact
 let formEl, saveNameEl, saveMsgEl, modelListEl, axesEl, runMsgEl;
 const modelMeta = {}; // keyed by model key, holds needs_params from /api/models
 
-// -- parameter form --------------------------------------------
+// -- parameter form --------------------------------------------------------------
 
 // trims binary-float noise from scaled values (0.0301*1000 -> "30.1")
 const fmt = (v) => String(Number(v.toPrecision(12)));
@@ -252,7 +252,7 @@ async function load(name) {
   renderForm();
 }
 
-// -- model selector + sweep builder --------------------------------------------
+// -- model selector + sweep builder -----------------------------------------------
 
 function checkedModels() {
   return [...modelListEl.querySelectorAll("input:checked")].map((i) => i.value);
@@ -381,7 +381,7 @@ function runSweep() {
   runJob({ motor, model: "sweep", params: { axes, model_keys: models } });
 }
 
-// -- panel contract ----------------------------------------------
+// -- panel contract -----------------------------------------------------------
 
 export default {
   name: "config_editor",

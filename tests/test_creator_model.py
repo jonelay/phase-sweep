@@ -13,12 +13,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from phasesweep.configs import load_motor
-from phasesweep.fem_field import solve_field_fem
-from phasesweep.harmonics import harmonics_1sided
-from phasesweep.rated_torque import magnet_torque_constant, mtpa_torque
+from phasesweep.machines.configs import load_motor
+from phasesweep.models.rated_torque import magnet_torque_constant, mtpa_torque
 from phasesweep.solver_params import prepare_fem
-from tests.conftest import CREATOR_DATASET_SKIP
+from phasesweep.solvers.fem_field import solve_field_fem
+from phasesweep.solvers.harmonics import harmonics_1sided
+from tests.conftest import CREATOR_DATASET_SKIP, requires_fem
 
 MOTOR_TOML = Path(__file__).parent.parent / "motors" / "creator_case_pmsm.toml"
 DATA_DIR = Path(__file__).parent.parent / "data" / "creator_case_pmsm"
@@ -45,12 +45,10 @@ def cogging_csv():
 
 @pytest.fixture(scope="module")
 def iron_loss_csv():
+    from tests.conftest import CREATOR_CSV_SKIP
     path = DATA_DIR / "iron_losses_measured.csv"
-    if not path.is_file():
-        pytest.skip(
-            "CREATOR-derived CSVs not found — run "
-            "python scripts/fetch_creator_dataset.py"
-        )
+    if not path.exists():
+        pytest.skip(CREATOR_CSV_SKIP)
     return np.genfromtxt(path, delimiter=",", skip_header=1)
 
 
@@ -107,6 +105,7 @@ def creator_torque_fem(creator):
     return mesh, gfu_mag, gfu_arm, Br_mag, i_peak
 
 
+@requires_fem
 @pytest.mark.timeout(600)
 def test_fem_torque_constant_crosscheck(creator, creator_torque_fem):
     """FEM mean torque at rated current vs the circuit tier, two ways.
@@ -125,11 +124,11 @@ def test_fem_torque_constant_crosscheck(creator, creator_torque_fem):
     square wave), freezing one position of the classic concentrated-
     winding torque ripple into the snapshot (~ −25% at this position).
     """
-    from phasesweep.fem_field import (
+    from phasesweep.solver_params import winding_transfer
+    from phasesweep.solvers.fem_field import (
         maxwell_interaction_torque_order,
         maxwell_stress_torque,
     )
-    from phasesweep.solver_params import winding_transfer
 
     mesh, gfu_mag, gfu_arm, Br_mag, i_peak = creator_torque_fem
     n_p = creator.n_p
@@ -157,30 +156,29 @@ def test_fem_torque_constant_crosscheck(creator, creator_torque_fem):
     assert abs(tau_cogging) < 0.05 * tau_mean
 
 
-def _solve_cogging_torque(creator, phi):
-    """Magnet-only slotted solve with the rotor at mechanical angle phi;
-    Maxwell-stress torque on the rotor (production mesh settings, same as
-    creator_torque_fem)."""
-    from phasesweep.fem_field import maxwell_stress_torque
-
-    params = prepare_fem(creator)
-    geo = params.geometry
-    _, _, mesh, gfu = solve_field_fem(
-        geo=geo, n_p=params.n_p, B_rem=params.B_rem,
-        mu_r_pm=params.mu_r_pm, mu_r_fe=params.mu_r_fe,
-        n_theta=360, maxh_fraction=0.03 / geo.r_outer,
-        n_slots=geo.n_slots, j_s=0.0, alpha_p=params.alpha_p,
-        rotation=float(phi), return_full=True,
-    )
-    return maxwell_stress_torque(mesh, gfu, geo.r_ag, L_stk=creator.L_stk)
-
-
-# Cogging fundamental: lcm(n_slots, 2*n_p) = lcm(6, 4) = 12 periods/rev.
+_COGGING_N_PTS = 12
 _COGGING_PERIOD = 2 * math.pi / 12
 
 
-@pytest.mark.timeout(600)
-def test_cogging_equilibria_at_aligned_positions(creator):
+@pytest.fixture(scope="module")
+def creator_cogging(creator):
+    """Cogging sweep via _run_cogging_impl (Arkkio torque, production mesh)."""
+    from phasesweep.solvers.cogging import _run_cogging_impl
+    from phasesweep.sweep_types import RunConfig
+
+    params = prepare_fem(creator)
+    geo = params.geometry
+    rc = RunConfig(
+        motor=creator, model="cogging_torque",
+        maxh_fraction=0.03 / geo.r_outer,
+        n_theta=360, cogging_points=_COGGING_N_PTS,
+    )
+    return _run_cogging_impl(rc)
+
+
+@requires_fem
+@pytest.mark.timeout(900)
+def test_cogging_equilibria_at_aligned_positions(creator_cogging):
     """Cogging torque vanishes at the reflection-symmetric rotor positions.
 
     Pole axes sit at k*pi/n_p and slot axes at 2*pi*k/n_slots, so rotation 0
@@ -189,24 +187,26 @@ def test_cogging_equilibria_at_aligned_positions(creator):
     position plus the 30 deg periodicity forces a second zero at the half
     period. The quarter-period torque provides the scale: the residuals at
     the equilibria are the mesh-to-mesh noise floor of the swept-rotor
-    Maxwell integral (~0.3% of peak at these settings).
+    Arkkio integral (~0.3% of peak at these settings).
     """
-    tau_0 = _solve_cogging_torque(creator, 0.0)
-    tau_quarter = _solve_cogging_torque(creator, _COGGING_PERIOD / 4)
-    tau_half = _solve_cogging_torque(creator, _COGGING_PERIOD / 2)
+    tau = np.array(creator_cogging["tau_cogging_list"])
+    tau_0 = tau[0]
+    tau_quarter = tau[_COGGING_N_PTS // 4]
+    tau_half = tau[_COGGING_N_PTS // 2]
     assert abs(tau_quarter) > 20 * abs(tau_0), (
-        f"tau(0) = {tau_0*1e3:.3f} mN·m not << quarter-period "
-        f"{tau_quarter*1e3:.3f} mN·m"
+        f"tau(0) = {tau_0*1e3:.3f} mN·m/m not << quarter-period "
+        f"{tau_quarter*1e3:.3f} mN·m/m"
     )
     assert abs(tau_quarter) > 20 * abs(tau_half), (
-        f"tau(T/2) = {tau_half*1e3:.3f} mN·m not << quarter-period "
-        f"{tau_quarter*1e3:.3f} mN·m"
+        f"tau(T/2) = {tau_half*1e3:.3f} mN·m/m not << quarter-period "
+        f"{tau_quarter*1e3:.3f} mN·m/m"
     )
 
 
+@requires_fem
 @needs_dataset
 @pytest.mark.timeout(900)
-def test_cogging_waveform_vs_measured(creator, cogging_csv):
+def test_cogging_waveform_vs_measured(creator_cogging, cogging_csv, creator):
     """12-position rotor sweep vs the measured cogging waveform.
 
     The peak-to-peak envelope is the calibrated claim: FEM currently lands
@@ -218,17 +218,16 @@ def test_cogging_waveform_vs_measured(creator, cogging_csv):
     test documents. Bands assert both the envelope agreement and the
     known direction of the split.
     """
-    n_pts = 12
-    phis = _COGGING_PERIOD * np.arange(n_pts) / n_pts
-    tau = np.array([_solve_cogging_torque(creator, p) for p in phis])
+    tau_per_m = np.array(creator_cogging["tau_cogging_list"])
+    L = creator.L_stk
+    tau = tau_per_m * L
 
+    n_pts = _COGGING_N_PTS
     c = np.fft.rfft(tau) / n_pts
-    fem_amps = 2 * np.abs(c[1 : n_pts // 2])  # orders 12..60 per rev
+    fem_amps = 2 * np.abs(c[1 : n_pts // 2])
     fem_dominant_order = 12 * (int(np.argmax(fem_amps)) + 1)
     assert fem_dominant_order == 12
 
-    # Dense reconstruction for the p-p envelope (12 samples resolve the
-    # series; grid min/max alone would under-read the peaks)
     dense = np.fft.irfft(np.fft.rfft(tau), 512) * (512 / n_pts)
     fem_pp = dense.max() - dense.min()
 
@@ -335,6 +334,7 @@ def test_iron_loss_steinmetz_fit(iron_loss_csv):
     assert r_squared > 0.99, f"R²={r_squared:.4f} < 0.99"
 
 
+@requires_fem
 def test_fem_fundamental_range(creator):
     """FEM B₁ fundamental should be in 0.27–0.34 T for this geometry.
 
@@ -357,6 +357,7 @@ def test_fem_fundamental_range(creator):
     assert 0.27 < fund < 0.34, f"FEM fundamental {fund:.4f} outside [0.27, 0.34] T"
 
 
+@requires_fem
 def test_slotted_vs_smooth_bore_harmonics(creator, creator_slotted_fem):
     """Slotting introduces harmonics at Q ± n_p = 4 and 8."""
     n_p = creator.n_p
@@ -392,6 +393,7 @@ def test_slotted_vs_smooth_bore_harmonics(creator, creator_slotted_fem):
     assert h_slotted[n_p] == pytest.approx(h_smooth[n_p], rel=0.15)
 
 
+@requires_fem
 @needs_dataset
 def test_back_emf_waveform_shape(back_emf_csv, creator_slotted_fem):
     """Measured and FEM both show significant peaking (peak/fund > 1.25).
@@ -428,6 +430,7 @@ def test_back_emf_waveform_shape(back_emf_csv, creator_slotted_fem):
     )
 
 
+@requires_fem
 @needs_dataset
 def test_back_emf_harmonic_spectrum(back_emf_csv, creator_slotted_fem):
     """FEM now captures the 5th electrical harmonic (trapezoidal signature).
@@ -498,6 +501,7 @@ def test_back_emf_fundamental_vs_psi_f(back_emf_csv, creator):
     )
 
 
+@requires_fem
 @needs_dataset
 def test_back_emf_normalized_peak_ratio(back_emf_csv, creator_slotted_fem):
     """After fundamental-matched normalization, measured peak within 2× of FEM.

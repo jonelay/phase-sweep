@@ -2,8 +2,8 @@
 
 import pytest
 
-from phasesweep.geometry import default_inrunner, inrunner, outrunner
-from phasesweep.motor import DriveParams
+from phasesweep.machines.geometry import default_inrunner, inrunner, outrunner
+from phasesweep.machines.motor import DriveParams
 from phasesweep.solver_params import (
     AnalyticalParams,
     DriveSimParams,
@@ -280,14 +280,14 @@ def _slotted_geo(**overrides):
 class TestJsPhaseCurrentMapping:
 
     def test_moment_untapered_closed_form(self):
-        from phasesweep.fem_field import slot_source_moment
+        from phasesweep.solvers.fem_field import slot_source_moment
         geo = _slotted_geo()  # slot_width_ratio default 0.6, no opening taper
         expected = 0.6 * (0.75**2 - 0.70**2) / 2
         assert slot_source_moment(geo) == pytest.approx(expected, rel=1e-12)
 
     def test_moment_tapered_sums_opening_and_body(self):
         from phasesweep.defaults import SLOT_OPENING_FRACTION
-        from phasesweep.fem_field import slot_source_moment
+        from phasesweep.solvers.fem_field import slot_source_moment
         geo = _slotted_geo(slot_opening_width=0.055)  # opening ratio ~0.15
         w_open = geo.slot_opening_ratio
         r_step = 0.70 + SLOT_OPENING_FRACTION * 0.05
@@ -296,7 +296,7 @@ class TestJsPhaseCurrentMapping:
         assert slot_source_moment(geo) == pytest.approx(expected, rel=1e-12)
 
     def test_moment_outrunner_slots_go_inward(self):
-        from phasesweep.fem_field import slot_source_moment
+        from phasesweep.solvers.fem_field import slot_source_moment
         geo = outrunner(r_outer=0.10, r_rotor=0.08, r_magnet=0.06,
                         r_stator=0.04, r_inner=0.02, n_slots=6,
                         slot_depth=0.005)
@@ -304,7 +304,7 @@ class TestJsPhaseCurrentMapping:
         assert slot_source_moment(geo) == pytest.approx(expected, rel=1e-12)
 
     def test_moment_no_slot_faces_raises(self):
-        from phasesweep.fem_field import slot_source_moment
+        from phasesweep.solvers.fem_field import slot_source_moment
         with pytest.raises(ValueError, match="slot faces"):
             slot_source_moment(default_inrunner())  # n_slots = 0
         with pytest.raises(ValueError, match="slot faces"):
@@ -314,7 +314,7 @@ class TestJsPhaseCurrentMapping:
         # When 2*n_p ≡ 0 mod n_slots the comb cross terms
         # do not cancel (+63.7% at duty 0.5) — combos are 3-phase-
         # degenerate, so the guard is garbage-in insurance
-        from phasesweep.fem_field import slot_source_moment
+        from phasesweep.solvers.fem_field import slot_source_moment
         geo = _slotted_geo()  # Q = 12
         with pytest.raises(ValueError, match="multiple of n_slots"):
             slot_source_moment(geo, n_p=6)  # 2*6 = 12 ≡ 0 mod 12

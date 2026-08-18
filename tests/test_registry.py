@@ -4,11 +4,11 @@ import dataclasses
 
 import pytest
 
-from phasesweep.geometry import inrunner
-from phasesweep.motor import DriveParams
+from phasesweep.machines.geometry import inrunner
+from phasesweep.machines.motor import DriveParams
 from phasesweep.registry import MODEL_REGISTRY, ModelInfo, _run_analytical_impl
 from phasesweep.sweep_types import RunConfig, compute_run_id
-from tests.conftest import make_motor
+from tests.conftest import make_motor, requires_sim
 
 # ---------------------------------------------------------------------------
 # Registry structure
@@ -18,8 +18,10 @@ class TestRegistryStructure:
 
     def test_registered_models(self):
         assert set(MODEL_REGISTRY.keys()) == {
-            "analytical", "fem", "drive_sim", "rated_torque", "stall_torque",
+            "analytical", "fem", "drive_sim", "drive_sim_two_mass",
+            "rated_torque", "stall_torque",
             "thermal_duty", "torque_speed", "iron_loss", "demag_screen",
+            "cogging_torque",
             "backemf_capture", "inductance_test", "resistance_test",
             "torque_test", "airgap_flux_test", "iron_loss_test",
         }
@@ -168,9 +170,9 @@ class TestAnalyticalRunner:
         # on a slotted motor: the inversion and psi_f_carter use the same
         # Carter-adjusted field radii and original-bore winding formula
         # (was −2.06% before the Carter-consistent inversion)
-        from phasesweep.configs import load_motor
+        from phasesweep.machines.configs import load_motor
         from tests.conftest import REPO_ROOT
-        motor = load_motor(REPO_ROOT / "motors/actuator_steel_rotor.toml")
+        motor = load_motor(REPO_ROOT / "motors/outrunner_14mm_steel.toml")
         motor = dataclasses.replace(motor, psi_f=0.268e-3, B_rem=None)
         result = _run_analytical_impl(RunConfig(motor=motor, model="analytical"))
         assert result["flux_linkage_peak"] == pytest.approx(0.268e-3, rel=1e-9)
@@ -192,12 +194,14 @@ class TestAnalyticalRunner:
 
 class TestHashFieldsIntegration:
 
+    @requires_sim
     def test_every_runconfig_field_reaches_the_hash(self):
         # Guard against silent run-ID collisions: a RunConfig field added
         # without a matching entry in compute_run_id's solver_params dict
         # would silently drop out of hashing. An unregistered model skips
         # the hash_fields filter, so every solver param must move the ID.
-        from phasesweep.sim import SimPlan
+        from phasesweep.simulation.sim import SimPlan
+        from phasesweep.solver_params import TwoMassLoad
         perturb = {
             "maxh_fraction": 0.123,
             "n_theta": 721,
@@ -212,6 +216,9 @@ class TestHashFieldsIntegration:
             ),
             "duty_profile": ((1.0, 2.0),),
             "dataset_id": "guard",
+            "load_mech": TwoMassLoad(J_L=0.005, K_S=700.0, C_S=0.01),
+            "rotation": 0.123,
+            "cogging_points": 24,
         }
         solver_fields = {
             f.name for f in dataclasses.fields(RunConfig)
@@ -240,8 +247,9 @@ class TestHashFieldsIntegration:
         fields = MODEL_REGISTRY["fem"].hash_fields
         assert compute_run_id(rc1, fields) != compute_run_id(rc2, fields)
 
+    @requires_sim
     def test_drive_sim_hash_sensitive_to_load(self):
-        from phasesweep.sim import SimPlan
+        from phasesweep.simulation.sim import SimPlan
         motor = make_motor()
         base = SimPlan(
             load_torque=1.0, load_time=0.5, t_stop=1.0, speed_step_time=0.05,
@@ -300,7 +308,16 @@ class TestHashFieldsIntegration:
         # v1 — they never had pre-v2 outputs.
         post_convention_fix = {
             "thermal_duty", "torque_speed", "iron_loss", "demag_screen",
+            "drive_sim_two_mass", "cogging_torque",
         }
         for key, info in MODEL_REGISTRY.items():
             if info.source == "computed" and key not in post_convention_fix:
                 assert info.version >= 2, f"{key} still at version {info.version}"
+
+
+def test_all_registry_entries_importable():
+    """Verify every MODEL_REGISTRY entry's lazy imports resolve."""
+    for key, info in MODEL_REGISTRY.items():
+        assert info.fn is not None or info.source == "measured", (
+            f"{key}: fn is None for a computed model"
+        )
