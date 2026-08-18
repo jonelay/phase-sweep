@@ -11,10 +11,12 @@ import queue
 import re
 import threading
 import time
+from importlib.util import find_spec
 
 import pytest
 
-pytest.importorskip("fastapi")
+if not find_spec("fastapi"):
+    pytest.skip("requires phasesweep[server] (fastapi not installed)", allow_module_level=True)
 
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -141,7 +143,7 @@ def ws_receive_json(ws, timeout_s=30.0):
     return val
 
 
-# -- configs ---------------------------------------------------
+# -- configs -------------------------------------------------------------------
 
 def test_configs_list_and_detail(client):
     r = client.get("/api/configs")
@@ -162,7 +164,7 @@ def test_configs_list_and_detail(client):
     assert client.get("/api/configs/nope").status_code == 404
 
 
-# -- config editor write path -----------------------------------
+# -- config editor write path ---------------------------------------------------
 
 def put_config(client, name, mutate=None, expect=201):
     raw = client.get("/api/configs/test_inrunner/raw").json()["raw"]
@@ -262,7 +264,7 @@ def test_user_configs_persist_and_never_shadow_anchor(workspace):
         assert raw["geometry"]["L_stk"] == 0.12
 
 
-# -- job lifecycle ---------------------------------------
+# -- job lifecycle -------------------------------------------------------------
 
 def test_single_point_job_lifecycle(client):
     job = submit(client, "analytical")
@@ -391,6 +393,66 @@ def test_submit_bad_param_shapes_are_400(client):
         {"field": "r_outer", "start": 0.9, "stop": 1.1, "steps": 2}]}, expect=400)
 
 
+def test_drive_sim_two_mass_submit_and_auto_derive(client):
+    """drive_sim_two_mass auto-derives sim_plan from motor, same as
+    drive_sim, and accepts load_mech as structured params."""
+    load_mech = {"J_L": 0.01, "K_S": 500.0, "C_S": 0.1, "B_L": 0.0}
+    job = submit(client, "drive_sim_two_mass", params={"load_mech": load_mech})
+    assert job["total"] == 1
+    done = wait_job(client, job["id"], deadline_s=90.0)
+    assert done["status"] == "completed"
+    assert len(done["result_ids"]) == 1
+
+
+def test_drive_sim_two_mass_bad_load_mech_is_400(client):
+    submit(client, "drive_sim_two_mass",
+           params={"load_mech": "oops"}, expect=400)
+    submit(client, "drive_sim_two_mass",
+           params={"load_mech": {"J_L": -1, "K_S": 500, "C_S": 0}}, expect=400)
+    submit(client, "drive_sim_two_mass",
+           params={"load_mech": {}}, expect=400)
+
+
+def test_drive_sim_two_mass_without_load_mech_is_400(client):
+    """Missing load_mech must fail at submit (400), not at runtime."""
+    r = client.post("/api/jobs", json={
+        "motor": "test_inrunner", "model": "drive_sim_two_mass", "params": {}})
+    assert r.status_code == 400
+    assert "load_mech" in r.json()["detail"]
+
+
+def test_drive_sim_rejects_load_mech(client):
+    """load_mech on plain drive_sim is a caller error, not silently ignored."""
+    load_mech = {"J_L": 0.01, "K_S": 500.0, "C_S": 0.1}
+    r = client.post("/api/jobs", json={
+        "motor": "test_inrunner", "model": "drive_sim",
+        "params": {"load_mech": load_mech}})
+    assert r.status_code == 400
+
+
+def test_validate_filters_load_mech_per_model(client):
+    """Validate with sim_plan + load_mech runs both drive_sim and
+    drive_sim_two_mass — load_mech is filtered out for drive_sim."""
+    from phasesweep.server.app import load_motor_configs
+    from phasesweep.simulation.sim import plan_sim
+    from phasesweep.solver_params import prepare_drive_sim
+
+    motor = load_motor_configs(client.app.state.settings.motors_dir)["test_inrunner"]
+    sim_plan = plan_sim(prepare_drive_sim(motor)).to_dict()
+    load_mech = {"J_L": 0.01, "K_S": 500.0, "C_S": 0.1}
+    job = submit(client, "validate", params={
+        "models": ["drive_sim", "drive_sim_two_mass"],
+        "sim_plan": sim_plan,
+        "load_mech": load_mech,
+    })
+    assert job["total"] == 2
+    done = wait_job(client, job["id"], deadline_s=90.0)
+    assert done["status"] == "completed"
+    statuses = {st["model"]: st["status"] for st in done["subtasks"]}
+    assert statuses["drive_sim"] in ("OK", "cached")
+    assert statuses["drive_sim_two_mass"] in ("OK", "cached")
+
+
 def test_thermal_duty_auto_derive_rejects_at_submit(client):
     """An r_th-budget motor validates for thermal_duty without I_rated, but
     the duty_profile auto-derive needs it — fail at submit (400) like
@@ -406,7 +468,31 @@ def test_thermal_duty_auto_derive_rejects_at_submit(client):
     assert "I_rated" in r.json()["detail"]
 
 
-# -- sweep fan-out ---------------------------------------------
+@pytest.mark.parametrize("route", ["single", "validate", "sweep"])
+def test_cogging_rejects_nonzero_j_s(client, route):
+    """cogging_torque with j_s != 0 must be rejected at submit time on all
+    three server routes — otherwise cache aliasing serves the j_s=0 result."""
+    if route == "single":
+        r = client.post("/api/jobs", json={
+            "motor": "test_inrunner", "model": "cogging_torque",
+            "params": {"j_s": 100.0}})
+    elif route == "validate":
+        r = client.post("/api/jobs", json={
+            "motor": "test_inrunner", "model": "validate",
+            "params": {"models": ["cogging_torque"], "j_s": 100.0}})
+    else:
+        r = client.post("/api/jobs", json={
+            "motor": "test_inrunner", "model": "sweep",
+            "params": {
+                "model_keys": ["cogging_torque"], "j_s": 100.0,
+                "axes": [{"field": "r_outer", "start": 0.9,
+                          "stop": 1.1, "steps": 2}],
+            }})
+    assert r.status_code == 400, f"{route}: {r.text}"
+    assert "j_s" in r.json()["detail"].lower()
+
+
+# -- sweep fan-out ---------------------------------------------------------------
 
 def test_sweep_fan_out(client):
     job = submit(client, "sweep", params={
@@ -442,7 +528,7 @@ def test_sweep_partial_cache(client):
     assert statuses == ["OK", "cached", "cached"]
 
 
-# -- validate job ------------------------------------------------
+# -- validate job -----------------------------------------------------------------
 
 def test_validate_job(client):
     job = submit(client, "validate", params={
@@ -464,8 +550,9 @@ def test_validate_default_models_exclude_gated_and_slow(client):
     assert "analytical" in models
     assert "fem" not in models          # slow-cost excluded from default
     assert "demag_screen" not in models  # i_fault-gated
-    assert "drive_sim" not in models     # sim_plan-gated
-    assert "thermal_duty" not in models  # duty_profile-gated
+    assert "drive_sim" not in models           # sim_plan-gated
+    assert "drive_sim_two_mass" not in models  # load_mech-gated
+    assert "thermal_duty" not in models        # duty_profile-gated
     done = wait_job(client, job["id"])
     assert done["status"] == "completed"
 
@@ -480,7 +567,7 @@ def test_duplicate_run_ids_collapse_to_one_subtask(client):
     assert done["completed"] == done["total"] == 1
 
 
-# -- cancellation ------------------------------------------------
+# -- cancellation -----------------------------------------------------------------
 
 def test_cancel_terminal_job_is_noop(client):
     job = submit(client, "analytical")
@@ -555,7 +642,7 @@ def test_stop_returns_while_job_draining(workspace, monkeypatch):
     release.set()
 
 
-# -- WebSocket -----------------------------------------------------
+# -- WebSocket ---------------------------------------------------------------------
 
 def test_ws_message_sequence_manager_level(workspace):
     """Deterministic full-sequence assertion: progress 1..N, then complete."""
@@ -671,7 +758,7 @@ def test_ws_rejects_cross_origin(client):
         pass
 
 
-# -- measured import ----------------------------------------------
+# -- measured import ------------------------------------------------------------------
 
 def test_measured_import(client):
     r = client.post("/api/measured/test_inrunner", json=dict(MEASURED_JSON))
@@ -749,7 +836,7 @@ def test_validation_endpoint(client):
     assert {"quantity", "rel_pct", "tol_pct", "passed", "comparison_type"} <= set(row)
 
 
-# -- calibration workflow ---------------------------------------
+# -- calibration workflow --------------------------------------------------------
 
 def test_measured_attaches_across_config_edits(client):
     # Measured data describes the hardware: it follows the Motor NAME
@@ -872,7 +959,7 @@ def test_validation_dedupe_prefers_ok_over_failed(client):
     assert len(tau) == 1 and tau[0]["passed"] is True
 
 
-# -- job-type vocabulary ----------------------------------------
+# -- job-type vocabulary ---------------------------------------------------------
 
 def test_models_endpoint(client):
     r = client.get("/api/models")
@@ -886,7 +973,7 @@ def test_models_endpoint(client):
     assert "torque_test" not in by_key
 
 
-# -- dashboard static files ------------------
+# -- dashboard static files ------------------------------------------------------
 
 def test_dashboard_served_at_root(client):
     r = client.get("/")

@@ -187,7 +187,7 @@ async function buildForm(container) {
   });
 }
 
-// -- panel contract -------------------------------------------------
+// -- panel contract ------------------------------------------------------------------
 
 export default {
   name: "jobs",

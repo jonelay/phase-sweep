@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from phasesweep.motor import Motor
+from phasesweep.machines.motor import Motor
 from phasesweep.sweep_types import RunResult, Source, Status, _resolve_model, compute_run_id
 
 
@@ -46,7 +46,7 @@ def _json_default(o: Any) -> Any:
 
 def _attached(source: str, motor_config_id: str, motor_name: str,
               target_config_id: str, target_name: str) -> bool:
-    """Spec 05 §10.1 attach rule: computed results belong to an exact motor
+    """Attach rule: computed results belong to an exact motor
     config; measured/published describe the hardware, so they follow the
     Motor name through parameter edits."""
     return (motor_config_id == target_config_id

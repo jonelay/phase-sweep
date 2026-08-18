@@ -1,0 +1,93 @@
+# 14 mm Outrunner — Steel Rotor
+# 12-pole (6 pole pairs), 9-slot, SPMSM outrunner
+# Geometry from caliper/micrometer/gauge-pin measurements + geometry.py derivation
+
+[motor]
+name = "14 mm Outrunner (Steel)"
+type = "SPMSM"
+topology = "outrunner"
+
+[circuit]
+n_p = 6
+R_s = 0.139              # Ohm (phase, from L-L decomposition: 142.4+140.2+133.8 / 3 = 138.8 mOhm)
+L_d = 12.5e-6            # H (L_self - M = 9.03 - (-3.49) = 12.52 uH)
+L_q = 12.5e-6            # H (SPMSM, L_d = L_q)
+                         # Source: 6-pair LCR 1kHz measurements (2026-03-16), Brown=neutral
+                         # L_self avg 9.03 uH (line-neutral), M avg -3.49 uH (from line-line)
+                         # L-L R self-consistent; Blue-Brown re-tested 2026-03-18: 240.5 mOhm, 8.7 uH (line-neutral)
+                         # Original was probe contact artifact (336 mOhm, Blue-Brown line-to-neutral); re-test in family
+                         # Full decomposition in separate script
+# psi_f omitted — derive from B_rem via winding params
+J = 4.73e-7              # kg*m2, rotor-only geometric estimate (cylindrical shell model)
+                         # Steel shell (rho=7850) + NdFeB magnets (rho=7500)
+                         # Rotor-only, no shaft or coupling load inertia — may add 10-30%
+                         # Not measured — update when physical measurement available
+I_rated = 4.53           # A pk (= MAX_I_S; supply-limited, not thermally characterized)
+
+[winding]
+n_slots = 9
+N = 8                    # turns per coil (bottom layer; top layer may have 1-2 fewer)
+coils_series = 3         # 9 slots / 3 phases = 3 coils per phase, no parallel branches
+layers = 2
+k_w = 0.866              # ideal double-layer 9s/12p: kp = sin(2pi/3), kd = 1
+
+[geometry]
+r_outer = 0.009665       # m (rotor shell OD/2, 19.33/2 mm)
+r_rotor = 0.008765       # m (cup ID/2, shell OD/2 - wall)
+r_magnet = 0.007478      # m (magnet inner face/2, r_rotor - magnet thickness)
+r_stator = 0.006950      # m (stator OD/2, 13.9/2 mm)
+r_inner = 0.003000       # m (stator bore/2, 6.0/2 mm, nominal drawing dimension)
+n_slots = 9
+slot_depth = 0.003            # m (3.0 mm, caliper estimate)
+slot_width_ratio = 0.45       # body at yoke; tooth narrows from 3.6 mm to ~1.5 mm
+slot_opening_width = 0.0008      # m; bore opening gap (~0.165 of 4.85 mm pitch)
+alpha_p = 0.635              # from geometry.py (chord-to-arc corrected at cup ID)
+L_stk = 0.007            # m (7 mm)
+
+[materials]
+magnet_type = "NdFeB_N52"    # nominal, suspected below spec
+B_rem = 1.45                 # T (N52 nominal at 20C, may need derating)
+mu_r_pm = 1.05
+B_knee = 0.30                # T (N52 typical at 20 C; actual grade suspect — conservative)
+steel_grade = "unknown"      # TBD — use generic soft iron until identified
+mu_r_fe = 3000               # assumption: generic silicon steel (grade unknown)
+
+[drive]
+U_DC = 24.0              # V (bench test baseline; SMPS design range is 24–48 V)
+MAX_I_S = 4.53           # A (3.2A supply limit * sqrt(2))
+                         # CAUTION: 3.2A is DC bus limit from bench supply; conversion to
+                         # peak phase assumes RMS=DC for resistive load at stall. Verify
+                         # against motor controller current limit setting.
+W_REF = 1047.2           # rad/s (10000 RPM mechanical)
+
+[validation]
+# Measured (back-EMF speed sweep 2026-03-18, steel rotor, 20-120 rps, 3-channel):
+# Supersedes single-channel/single-speed estimate (psi_f was 266 µWb).
+# 3-channel linear fit of V_peak vs omega (forced through origin), R² = 0.99997.
+# Per-channel Ke: CH1=1.599, CH2=1.609, CH4=1.612 mV/(rad/s), combined=1.607.
+psi_f_measured = 0.000268    # Wb (0.268 mWb)
+Ke_measured = 0.001607       # V/(rad/s) mechanical
+Kt_measured = 0.002412       # Nm/A (1.5 * n_p * psi_f)
+# Model-predicted Ke (B_rem=1.45 T, Zhu & Howe Carter-consistent, k_w=0.866)
+# = 2.047 mV/(rad/s), +27.4%. Discrepancy attributed to magnetization
+# profile below ideal square-wave, 3D leakage, magnet grade -- but this is
+# INCOMPLETE: with a single air gap, magnet grade and the model's gap-handling
+# error are degenerate (both absorbed into effective B_rem 1.139 T).
+
+[provenance]
+source = "Motor lab measurements"
+geometry_tool = "geometry.py"
+rotor_variant = "steel shell — machined, press-fit bearings"
+notes = """
+Magnets: vendor claims N52 but performance suggests lower grade.
+Flat rectangular magnets on curved rotor ID — non-uniform gap across width.
+k_w = 0.866 is the ideal double-layer 9s/12p value (0.945 was
+the 9s/8p-10p value); unequal layer turns put true effective k_w slightly below.
+Air gap 0.528 mm from geometry derivation (gauge pin cross-check: 0.005 mm error).
+Measured values in [validation].
+Back-EMF: 3-channel speed sweep (20-120 rps), linear fit R²=0.99997 (2026-03-18).
+Supersedes single-channel estimate from 2026-03-16 (capture bug fixed).
+Current-limited stall: bench supply limits at 3.2 A DC bus.
+Electromagnetic stall (V_phase/R_s ~ 92 A) is thermally unrealizable.
+System stall torque: T_output = Kt * I_limit.
+"""

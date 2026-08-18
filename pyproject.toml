@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "phasesweep"
-version = "0.3.0"
+version = "0.4.0"
 description = "PMSM simulation for stator/rotor design exploration"
 requires-python = ">=3.12"
 authors = [{name = "Jone Lay", email = "jlay.dev@pm.me"}]
@@ -20,16 +20,17 @@ classifiers = [
 ]
 dependencies = [
     "numpy",
-    "matplotlib",
-    "motulator>=0.7.3,<0.8",  # _fix_mtpv_nan patches 0.7.x privates (_psi_s_mtpv)
-    "ngsolve",
-    "scipy",  # calibration least_squares (was already transitive via motulator)
+    "scipy",
 ]
 
 [project.optional-dependencies]
+fem = ["ngsolve"]
+sim = ["motulator>=0.7.3,<0.8"]  # _fix_mtpv_nan patches 0.7.x privates (_psi_s_mtpv)
+viz = ["matplotlib"]
+server = ["fastapi", "uvicorn[standard]", "structlog", "tomli-w"]
+all = ["phasesweep[fem,sim,viz,server]"]
 gpu = ["cupy-cuda12x"]
 mkl = ["mkl"]  # ngsolve PARDISO/BLAS backend — never imported directly
-server = ["fastapi", "uvicorn[standard]", "structlog", "tomli-w"]
 test = ["pytest", "pytest-timeout", "httpx"]
 dev = ["ruff", "mypy"]
 
@@ -39,16 +40,18 @@ Issues = "https://github.com/jonelay/phase-sweep/issues"
 Changelog = "https://github.com/jonelay/phase-sweep/blob/main/CHANGELOG.md"
 
 [project.scripts]
-phasesweep-import = "phasesweep.cli_import:main"
-phasesweep-crossval = "phasesweep.cli_crossval:main"
-phasesweep-calibrate = "phasesweep.cli_calibrate:main"
+phasesweep-import = "phasesweep.validation.cli_import:main"
+phasesweep-crossval = "phasesweep.validation.cli_crossval:main"
+phasesweep-calibrate = "phasesweep.validation.cli_calibrate:main"
 phasesweep-server = "phasesweep.server.__main__:main"
 
 [tool.hatch.build.targets.sdist]
 exclude = [
+    ".claude/",
     "notes/",
     "output/",
     "results/",
+    "docs/internal/",
     "docs/refs/",
     "docs/datasheets/",
     "data/*/captures/",
@@ -98,13 +101,13 @@ module = ["ngsolve.*", "netgen.*", "motulator.*", "cupy", "scipy.*"]
 ignore_missing_imports = true
 
 # Mutation testing — mutmut is not a declared dependency:
-#   uv pip install mutmut && mutmut run "phasesweep.analytical.*"
+#   uv pip install mutmut && mutmut run "phasesweep.solvers.analytical.*"
 # The whole package is copied so imports resolve inside mutants/; restrict
 # which mutants actually run with the positional filter above.
 [tool.mutmut]
 source_paths = ["phasesweep"]
 also_copy = ["tests", "motors", "pyproject.toml", "phasesweep/defaults.toml"]
-pytest_add_cli_args_test_selection = ["tests/test_analytical.py"]
+pytest_add_cli_args_test_selection = ["tests/solvers/test_analytical.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

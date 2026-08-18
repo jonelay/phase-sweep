@@ -1,0 +1,89 @@
+# Toyota Prius 2004 (Gen2 THS-II) — 50 kW IPM traction motor
+# 8-pole, 48-slot, V-shape NdFeB interior magnets, distributed winding
+#
+# Primary source (physical teardown + electrical measurements):
+#   Hsu et al., ORNL/TM-2004/137, OSTI 885676 (teardown, geometry)
+#   Hsu et al., ORNL/TM-2004/185 rev. 2007, OSTI 921782 (back-EMF)
+#   Staunton et al., ORNL/TM-2004/247, OSTI 890029 (dynamometer)
+# Circuit parameters consistent with:
+#   Kuptsov et al., Machines 7(4):75, 2019 (FEM-vs-ORNL validation)
+#
+# CIRCUIT-ONLY motor — no [geometry]. The V-shape IPM rotor needs IPM
+# geometry support (not yet implemented); all validation is through the
+# circuit-parameter models: stall_torque, torque_speed.
+#
+# DECLARED ASSUMPTIONS (Prius community-standard practice):
+#   B_rem / magnet grade: never disclosed by Toyota. ψ_f is calibrated
+#     to ORNL back-EMF (TM-2004/185 Fig. 13: ~500 V L-L at 3600 rpm).
+#     ψ_f = 0.1607 Wb per-phase peak reproduces ~297 V L-L rms at
+#     3600 rpm (fundamental only; ORNL waveform includes harmonics).
+#   L_d, L_q: strongly saturation-dependent for V-IPM. Values here are
+#     from Kuptsov's FEM d-q parameterization at moderate load (Eq. 13,
+#     Fig. 5). At peak current (~250 A) L_d drops to ~1.8 mH and L_q
+#     to ~3 mH (Fig. 5, 200 A curve). The constant-inductance model
+#     massively over-predicts reluctance torque at high current (~166%
+#     at 250 A vs ORNL) — only low-current anchors are tight.
+#   R_s: ORNL measured 0.069 Ω at 21 C; 0.077 Ω is a 25 C estimate.
+#   No I_rated: the motor's continuous current depends on the vehicle's
+#     oil-cooling system; no single published value exists independent of
+#     the thermal management context.
+
+[motor]
+name = "Toyota Prius 2004 IPM"
+type = "IPMSM"
+
+[circuit]
+n_p = 4                # 8 poles
+R_s = 0.077            # Ohm per phase at 25 C
+L_d = 0.00226          # H (Kuptsov Eq. 13, MTPA operating point; drops to ~1.8 mH at peak)
+L_q = 0.00615          # H (Kuptsov Fig. 5 saliency ~2.72; drops to ~3 mH at peak)
+psi_f = 0.1607         # Wb per-phase peak (Kuptsov Eq. 13, calibrated to ORNL back-EMF)
+
+[materials]
+steel_grade = "M400-50A"
+mu_r_fe = 2500               # Pyleecan model value
+magnet_type = "NdFeB"
+B_rem = 1.24                  # T at 20 C (Pyleecan MagnetPrius, community-standard)
+mu_r_pm = 1.05
+alpha_Br = -0.001             # /K (reversible temperature coefficient)
+
+[winding]
+n_slots = 48
+N = 9                  # turns per coil (ORNL teardown)
+k_w = 0.966            # q=2 full-pitch distributed: sin(30°)/(2·sin(15°))
+coils_series = 8       # 8 coils per phase in series, single layer
+layers = 1
+
+[drive]
+U_DC = 500.0           # V (boost converter output, battery 201.6 V nominal)
+MAX_I_S = 250.0        # A peak (system maximum)
+W_REF = 125.664        # rad/s (1200 rpm — peak-torque/peak-power transition)
+
+[rated]
+speed_rpm = 1200
+power_kW = 50.0
+max_speed_rpm = 6000
+
+[provenance]
+doi = "10.3390/machines7040075"
+references = [
+    "Hsu et al., ORNL/TM-2004/137, OSTI 885676, 2004 (teardown)",
+    "Hsu et al., ORNL/TM-2004/185 rev. 2007, OSTI 921782 (back-EMF)",
+    "Staunton et al., ORNL/TM-2004/247, OSTI 890029, 2004 (dynamometer)",
+    "Kuptsov et al., Machines 7(4):75, 2019 (FEM validation)",
+]
+notes = """
+The most-reproduced IPM benchmark in the electric-machine literature.
+The only generation with a complete public geometry + measurement chain.
+Machine-readable geometry from Pyleecan: data/prius_2004/pyleecan_geometry.json
+(Apache-2.0, for future IPM geometry ingest when that lands).
+
+Key design features demonstrated:
+  - IPM saliency: L_q/L_d ≈ 2.72, strong reluctance torque contribution
+  - Wide CPSR: characteristic current ψ_f/L_d ≈ 71 A << MAX_I_S = 250 A
+    (Kuptsov Eq. 13), so the motor reaches deep flux reversal at peak
+    current; the no-load voltage limit (~4290 rpm) is below the 6000 rpm
+    mechanical limit, but I_ch << I_peak gives infinite theoretical max
+    speed under load
+  - EV traction scale: 50 kW peak, 6000 rpm, 500 V DC bus
+"""

@@ -16,8 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
-from phasesweep.configs import load_motor
-from phasesweep.fem_field import solve_field_fem
+from phasesweep.machines.configs import load_motor
+from phasesweep.solvers.fem_field import solve_field_fem
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "output" / "reference_br"
@@ -25,7 +25,7 @@ OUT_DIR = ROOT / "output" / "reference_br"
 
 def capture_zhu_inrunner():
     """Zhu & Howe 8-pole inrunner with default geometry."""
-    from phasesweep.geometry import default_inrunner
+    from phasesweep.machines.geometry import default_inrunner
     geo = default_inrunner()
     theta, B_r = solve_field_fem(
         geo=geo, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=5000,

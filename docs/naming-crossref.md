@@ -1,9 +1,8 @@
 # Concept Analysis: Naming Across Domains
 
-> **Historical document — migrations complete.** This analysis drove the
-> Phase 1 naming decisions; the collisions it describes are resolved and
-> several identifiers shown as "current code" no longer exist. It is kept
-> for the rationale. For today's conventions, see `docs/glossary.md`.
+> **Historical reference.** The collisions below are resolved; identifiers
+> shown as "current code" may have since been renamed. For current
+> conventions, see [glossary.md](glossary.md).
 
 How phase-sweep names things vs its three upstream references:
 **Zhu & Howe 2002** (physics), **motulator** (drive simulation), **NGSolve** (FEM).
@@ -26,9 +25,9 @@ overlapping symbols for different physical boundaries.
 | Stator bore (airgap boundary) | `R_s` | — | `_R_SI` | removed → `Geometry.r_stator` |
 | Magnet outer radius | `R_m` | — | `_R_RO` | removed → `Geometry.r_magnet` |
 | Rotor iron radius | `R_r` | — | `_R_RI` | removed → `Geometry.r_rotor` |
-| Air-gap centre | (derived) | — | `_R_AG` | removed → `Geometry.r_ag` (derived) |
+| Air-gap center | (derived) | — | `_R_AG` | removed → `Geometry.r_ag` (derived) |
 | Stator bore (in tests) | `R_s` | — | `Rs` | `test_analytical.py` passim |
-| Stator resistance (ohms) | — | `R_s` | `R_s` | current — `configs.py` [circuit] |
+| Stator resistance (ohms) | — | `R_s` | `R_s` | current — `machines/configs.py` [circuit] |
 
 Key collisions:
 
@@ -88,7 +87,7 @@ No changes needed. Three domains, three valid reasons for the variation.
 - `M_n` in tests follows the paper's convention for reference implementations.
   The bridge `M_n = B_rem / MU0` is the explicit conversion.
 - motulator never sees remanence — it works in the `psi_f` (flux linkage) domain.
-  `_derive_B_rem` in `fem_field.py` bridges from `psi_f` to `B_rem`.
+  `_derive_B_rem` in `solvers/analytical.py` bridges from `psi_f` to `B_rem`.
 
 ---
 
@@ -101,9 +100,8 @@ No changes needed. Three domains, three valid reasons for the variation.
 - `n_slots` follows the motulator `n_` prefix convention for counts (`n_p`).
 - `Q` is the standard motor design shorthand (from Zhu's `Q_s`).
 
-Recommendation at the time: keep `n_slots` on data structures, `Q` in math
-expressions. In practice the `Q` local aliases have since been removed —
-current code uses `n_slots` (via `geometry.n_slots`) throughout.
+Current rule: use `n_slots` (via `geometry.n_slots`) on data structures
+and in implementation code throughout.
 
 ---
 
@@ -153,9 +151,9 @@ The A-formulation solver uses topology-agnostic boundary labels
 | `q` | PM / air-gap interface | `R_m` | `R_m` |
 | `p` | Far iron boundary | `R_r` (rotor iron) | `R_r` (outer iron) |
 
-In `zhu_howe_Br` (`fem_field.py:514`): `p, q, s = r_rotor, r_magnet, r_stator`.
+In `zhu_howe_Br` (`phasesweep/solvers/analytical.py`): `p, q, s = r_rotor, r_magnet, r_stator`.
 
-In `aform_Br` (`test_analytical.py:101`): parameters are `s, q, p` with
+In `aform_Br` (`tests/solvers/test_analytical.py`): parameters are `s, q, p` with
 docstring "s=iron BC, q=PM/airgap, p=far iron BC".
 
 These should stay abstract — renaming to `R_s, R_m, R_r` would break the
@@ -196,7 +194,7 @@ prefix for GridFunctions. Our naming follows this.
 |---|---|---|---|
 | `RunResult` | dataclass (not frozen) | Config + status + metrics from any run | `sweep_types.py` |
 | `ResultStore` | class | JSONL persistence layer | `result_store.py` |
-| `MeasuredResult` | frozen dataclass | Imported lab/published data with comparison metadata | `measured.py` |
+| `MeasuredResult` | frozen dataclass | Imported lab/published data with comparison metadata | `validation/measured.py` |
 
 `RunResult` (originally `SweepResult`) is the single result type for all
 run types. Its `model` field (registry key)
@@ -204,7 +202,7 @@ identifies the runner; legacy `run_type` values are mapped via
 `_resolve_model()` during deserialization. Two *new* types later reused the
 freed-up names for different purposes: `SlimResult` (index entry NamedTuple,
 `result_store.py`) and `SweepResult` (geometry-sweep container,
-`geo_sweep.py`).
+`geo_parallel.py`).
 
 ---
 

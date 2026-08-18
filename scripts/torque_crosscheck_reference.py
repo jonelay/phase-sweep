@@ -29,8 +29,8 @@ sys.path.insert(0, str(ROOT))
 
 from motulator.drive.utils import Step
 
-from phasesweep.motor import DriveParams
-from phasesweep.sim import build_sim, plan_torque_sim
+from phasesweep.machines.motor import DriveParams
+from phasesweep.simulation.sim import build_sim, plan_torque_sim
 from phasesweep.solver_params import DriveSimParams
 
 # Synthetic placeholder params (nominal "GBM2804H" label; see module docstring)

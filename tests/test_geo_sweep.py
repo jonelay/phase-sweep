@@ -2,15 +2,16 @@
 
 import pytest
 
-from phasesweep.geo_sweep import (
+from phasesweep.geo_parallel import (
     SweepAxis,
     SweepPoint,
     SweepResult,
     generate_grid,
     run_sweep,
 )
-from phasesweep.geometry import default_inrunner
-from phasesweep.motor import Motor
+from phasesweep.machines.geometry import default_inrunner
+from phasesweep.machines.motor import Motor
+from tests.conftest import requires_fem
 
 # ---------------------------------------------------------------------------
 # SweepAxis
@@ -112,7 +113,7 @@ class TestLstkSweep:
 class TestBackIronSweep:
 
     def _base(self):
-        from phasesweep.geometry import outrunner
+        from phasesweep.machines.geometry import outrunner
         return outrunner(r_outer=0.80, r_rotor=0.70, r_magnet=0.64,
                          r_stator=0.50, r_inner=0.10)
 
@@ -196,6 +197,7 @@ class TestRunSweep:
         # Smaller gap → higher B₁
         assert fundamentals[0] > fundamentals[-1]
 
+    @requires_fem
     def test_multi_model_sweep(self):
         motor = self._make_motor()
         points = [SweepPoint(geometry=motor.geometry)]

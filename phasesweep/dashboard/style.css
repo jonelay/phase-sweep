@@ -448,7 +448,7 @@ body {
 
 .panel-card.collapsed > header { border-bottom: none; }
 
-/* drag-to-reorder (H2): handle affordance + drop target cue */
+/* drag-to-reorder: handle affordance + drop target cue */
 .drag-handle {
   color: var(--text-muted);
   cursor: grab;
@@ -606,7 +606,7 @@ body {
 
 .job-row .error { color: var(--status-critical); font-size: 12px; white-space: pre-wrap; }
 
-/* -- run history panel ---------------------------------------------- */
+/* -- run history panel -------------------------------------------------------------- */
 
 .history-filters {
   display: flex;
@@ -703,7 +703,7 @@ body {
 
 .panel-caption { color: var(--text-secondary); font-size: 12px; padding: 2px 0 6px; }
 
-/* -- stat tiles + provenance (widgets.js) ----------------------- */
+/* -- stat tiles + provenance (widgets.js) ------------------------------------- */
 
 .stat-strip {
   display: flex;
@@ -736,7 +736,7 @@ body {
 }
 .provenance:empty { display: none; }
 
-/* -- A/B measurement cursors (cursors.js) ----------------------- */
+/* -- A/B measurement cursors (cursors.js) -------------------------------------- */
 
 .cursor-stats-host { overflow-x: auto; margin: 6px 0 2px; }
 .cursor-stats-host:empty { display: none; }
@@ -774,7 +774,7 @@ body {
   vertical-align: middle;
 }
 
-/* -- sweep comparison table ---------------------------------------- */
+/* -- sweep comparison table -------------------------------------------------------- */
 
 .sweep-table-wrap { max-height: 380px; overflow: auto; }
 
@@ -894,7 +894,7 @@ body {
 }
 .sweep-overflow { margin: 2px 0 6px; }
 
-/* -- config editor -------------------------------------------------- */
+/* -- config editor ------------------------------------------------------------------ */
 
 .cfg-save-row {
   display: flex;
@@ -1042,7 +1042,7 @@ body {
 
 .cfg-run > button { margin-right: 8px; margin-bottom: 8px; }
 
-/* -- validation summary ---------------------------------------- */
+/* -- validation summary -------------------------------------------------------- */
 
 .val-diagnosis { font-size: 13px; font-weight: 600; padding: 2px 0 4px; }
 .val-diagnosis[data-tone="good"] { color: var(--status-good); }
@@ -1097,7 +1097,7 @@ body {
 .val-legend .chip[data-tone="fail"] { background: color-mix(in srgb, var(--status-critical) 20%, transparent); }
 .val-legend .chip[data-tone="skip"] { background: var(--hairline); }
 
-/* -- status bar ------------------------------------------- */
+/* -- status bar ------------------------------------------------------------------- */
 
 /* frame footer: connection ● · job count · last result. Also the future
    home of the cursor-stats table (H1) — it may grow rows, never move. */
@@ -1120,7 +1120,7 @@ body {
 .val-matrix td[data-tone="fail"] { background: color-mix(in srgb, var(--status-critical) 20%, transparent); }
 .val-matrix td[data-tone="skip"] { color: var(--text-muted); }
 
-/* -- keyboard layer + linked highlight ------------------------ */
+/* -- keyboard layer + linked highlight --------------------------------------- */
 
 /* shortcut overlay (? toggles); [hidden] must beat display:flex */
 #kbd-overlay {

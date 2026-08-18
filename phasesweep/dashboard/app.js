@@ -21,10 +21,10 @@ import {
 const REGISTRY = [
   { panel: jobsPanel, slot: "sidebar" },
   { panel: runHistoryPanel, slot: "sidebar" },
-  { panel: brWaveformPanel, slot: "results", hero: true },
-  { panel: harmonicsPanel, slot: "results" },
-  { panel: crossSectionPanel, slot: "results" },
+  { panel: crossSectionPanel, slot: "results", hero: true },
+  { panel: brWaveformPanel, slot: "results" },
   { panel: simWaveformsPanel, slot: "results" },
+  { panel: harmonicsPanel, slot: "results" },
   { panel: sweepTablePanel, slot: "sweep" },
   { panel: modelComparisonPanel, slot: "validation" },
   { panel: validationSummaryPanel, slot: "validation" },
@@ -402,7 +402,8 @@ let activateTab = null; // set by mountTabs; the keyboard layer drives it
 
 // Derived from registry ORDER, never hand-authored: reordering the
 // registry (or a future drag-to-reorder splice) must move panels
-// without touching this code. Area names are panel names; a short last row spans.
+// without touching this code, and the tiling is meant to be
+// computed. Area names are panel names; a short last row spans.
 const tabPanes = new Map(); // tab id -> { pane, entries: [{panel, hero}] }
 
 function columnsForViewport() {
@@ -602,8 +603,10 @@ function mountPanels() {
       card.classList.toggle("collapsed", collapsed);
       btn.textContent = collapsed ? "+" : "−";
       btn.title = collapsed ? "expand" : "collapse";
-      // plotly panels re-fit on expand (responsive: true listens for this)
-      if (wasCollapsed && !collapsed) window.dispatchEvent(new Event("resize"));
+      if (wasCollapsed && !collapsed) {
+        window.dispatchEvent(new Event("resize"));
+        panel.retheme?.();
+      }
     };
     setCollapsed(localStorage.getItem(storeKey) === "1"
       || (localStorage.getItem(storeKey) === null && !!panel.startCollapsed));
@@ -617,7 +620,7 @@ function mountPanels() {
     body.className = "panel-body";
     if (slot !== "sidebar") {
       card.style.gridArea = panel.name;
-      // drag-to-reorder (H2): handle starts the drag, the whole card
+      // drag-to-reorder: handle starts the drag, the whole card
       // is the drop target — dropping splices this tab's panel order
       const handle = document.createElement("span");
       handle.className = "drag-handle";
@@ -826,7 +829,6 @@ function panelAccepts(panel, r) {
 // while it was in flight. Job/history callers omit it (late completions
 // deliberately land).
 async function routeResult(resultId, epoch) {
-  seenResults.add(resultId);
   let result;
   try {
     result = await fetchResult(resultId);
@@ -835,6 +837,7 @@ async function routeResult(resultId, epoch) {
     return;
   }
   if (epoch !== undefined && epoch !== routeEpoch) return;
+  seenResults.add(resultId);
   // Foreign-route auto-registration: membership (and the
   // config's color) is established BEFORE panels draw, so overlay-pool
   // panels always find a slot. Only overlay-pool results register — a

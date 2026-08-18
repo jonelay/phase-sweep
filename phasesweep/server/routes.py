@@ -13,13 +13,13 @@ import tomli_w
 from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
-from phasesweep.configs import motor_from_dict
-from phasesweep.measured import MeasuredResult, measured_run_result, validate_measured
+from phasesweep.machines.configs import motor_from_dict
 from phasesweep.registry import MODEL_REGISTRY
 from phasesweep.result_store import version_current
 from phasesweep.server.jobs import JobManager
 from phasesweep.server.protocol import ServerMsg
 from phasesweep.sweep_types import RunConfig, _resolve_model, compute_run_id
+from phasesweep.validation.measured import MeasuredResult, measured_run_result, validate_measured
 
 log = structlog.get_logger()
 
@@ -52,7 +52,7 @@ def _manager(request: Request) -> JobManager:
     return request.app.state.manager
 
 
-# -- jobs -----------------------------------------------------------------
+# -- jobs ------------------------------------------------------
 
 @api.post("/jobs", status_code=201)
 async def submit_job(request: Request, body: dict[str, Any]) -> dict[str, Any]:
@@ -99,7 +99,7 @@ async def cancel_job(request: Request, job_id: str) -> dict[str, Any]:
     return job.to_dict()
 
 
-# -- results ----------------------------------------------------------------
+# -- results ---------------------------------------------------
 
 @api.get("/results")
 async def list_results(
@@ -162,7 +162,7 @@ async def get_result(request: Request, result_id: str) -> dict[str, Any]:
     return {"result_id": result_id, **found}
 
 
-# -- validation summary ------------------------------------------------------
+# -- validation summary ----------------------------
 
 @api.get("/validation/{motor_name}")
 async def get_validation(request: Request, motor_name: str) -> dict[str, Any]:
@@ -175,7 +175,7 @@ async def get_validation(request: Request, motor_name: str) -> dict[str, Any]:
     return manager.validation_summary(motor_name)
 
 
-# -- job-type vocabulary ------------------------------------------------------
+# -- job-type vocabulary ----------------------------------------
 
 @api.get("/models")
 async def list_models() -> list[dict[str, Any]]:
@@ -215,7 +215,7 @@ async def model_defaults(
 
 def _derive_model_defaults(motor: Any, model_key: str) -> dict[str, Any]:
     if model_key == "drive_sim":
-        from phasesweep.sim import plan_sim
+        from phasesweep.simulation.sim import plan_sim
         from phasesweep.solver_params import prepare_drive_sim
         params = prepare_drive_sim(motor)
         return {"sim_plan": plan_sim(params).to_dict()}
@@ -223,7 +223,7 @@ def _derive_model_defaults(motor: Any, model_key: str) -> dict[str, Any]:
         if motor.I_rated is None:
             raise ValueError(
                 "thermal_duty defaults need I_rated on the motor")
-        from phasesweep.rated_torque import magnet_torque_constant
+        from phasesweep.models.rated_torque import magnet_torque_constant
         from phasesweep.solver_params import _resolve_psi_f
         psi_f = _resolve_psi_f(motor)
         tau = magnet_torque_constant(motor.n_p, psi_f) * motor.I_rated
@@ -237,7 +237,7 @@ def _derive_model_defaults(motor: Any, model_key: str) -> dict[str, Any]:
     return {}
 
 
-# -- configs ------------------------------------------------------------------
+# -- configs ----------------------------------------------------
 # Anchor configs in motors_dir are read-only; writes go to the
 # user-configs directory.
 
@@ -337,7 +337,7 @@ async def put_config(
     return _config_summary(request, name)
 
 
-# -- measured import -----------------------------------------------------------
+# -- measured import -------------------------------------------
 
 @api.post("/measured/{motor_name}", status_code=201)
 async def import_measured(
@@ -375,7 +375,7 @@ async def import_measured(
     }
 
 
-# -- WebSocket ------------------------------------------------------------------
+# -- WebSocket ---------------------------------------------------
 
 class ConnectionManager:
     """Tracks WS clients and their job subscriptions. Stateless across
