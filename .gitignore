@@ -8,8 +8,10 @@ __pycache__/
 results/
 output/
 plots/
+user_configs/
 *.png
 !docs/images/*.png
+!docs/images/validation/*.png
 
 # OS / IDE
 .DS_Store
@@ -19,9 +21,6 @@ Thumbs.db
 *.swp
 *~
 
-# Reference materials / datasheets
-docs/refs/
-docs/datasheets/
-
-# Lab capture CSVs (large; back-EMF validation reads summary JSON instead)
-data/actuator_steel_rotor/captures/
+# mutation-testing scratch (mutmut)
+mutants/
+.mutmut-cache

@@ -123,10 +123,9 @@ export default {
   update(result) {
     const m = result.metrics;
     if (!m || !m.B_r_list || !m.theta_list) return;
-    // same run id = identical data, nothing to redraw
     if (overlay.has(result.result_id)) return;
     const slot = appCtx.compare.slotFor(result.config?.motor?.name);
-    if (slot === undefined) return; // routeResult registers before dispatch
+    if (slot === undefined) return;
 
     overlay.add(result.result_id, {
       _slot: slot,

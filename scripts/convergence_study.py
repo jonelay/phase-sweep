@@ -23,10 +23,10 @@ from pathlib import Path
 
 import numpy as np
 
-from phasesweep.configs import load_motor
-from phasesweep.fem_field import solve_field_fem
-from phasesweep.geometry import default_inrunner
-from phasesweep.harmonics import compute_thd, harmonics_1sided
+from phasesweep.machines.configs import load_motor
+from phasesweep.machines.geometry import default_inrunner
+from phasesweep.solvers.fem_field import solve_field_fem
+from phasesweep.solvers.harmonics import compute_thd, harmonics_1sided
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "output" / "convergence"

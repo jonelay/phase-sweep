@@ -16,8 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from phasesweep.configs import load_motor
-from phasesweep.motor import Motor
+from phasesweep.machines.configs import load_motor
+from phasesweep.machines.motor import Motor
 from phasesweep.result_store import ResultStore
 from phasesweep.server.jobs import JobManager
 from phasesweep.server.routes import ConnectionManager, api, ws_router

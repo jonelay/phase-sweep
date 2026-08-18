@@ -1,15 +1,42 @@
 """Shared test fixtures."""
 
 import os
+from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
 
-from phasesweep.geometry import default_inrunner, inrunner, outrunner
-from phasesweep.motor import DriveParams, Motor
+from phasesweep.machines.geometry import default_inrunner, inrunner, outrunner
+from phasesweep.machines.motor import DriveParams, Motor
 
 # Anchor for repo-relative test data — keeps tests cwd-independent
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# ---------------------------------------------------------------------------
+# Optional-dep detection + skip markers
+# ---------------------------------------------------------------------------
+
+FEM_SKIP = "requires phasesweep[fem] (ngsolve not installed)"
+SIM_SKIP = "requires phasesweep[sim] (motulator not installed)"
+VIZ_SKIP = "requires phasesweep[viz] (matplotlib not installed)"
+SERVER_SKIP = "requires phasesweep[server] (fastapi not installed)"
+
+def _try_import(name: str) -> bool:
+    try:
+        __import__(name)
+        return True
+    except Exception:
+        return False
+
+_has_fem = _try_import("ngsolve")
+_has_sim = find_spec("motulator") is not None
+_has_viz = find_spec("matplotlib") is not None
+_has_server = find_spec("fastapi") is not None
+
+requires_fem = pytest.mark.skipif(not _has_fem, reason=FEM_SKIP)
+requires_sim = pytest.mark.skipif(not _has_sim, reason=SIM_SKIP)
+requires_viz = pytest.mark.skipif(not _has_viz, reason=VIZ_SKIP)
+requires_server = pytest.mark.skipif(not _has_server, reason=SERVER_SKIP)
 
 # Skips that are legitimate on a clean checkout: the datasets behind them are
 # gitignored third-party downloads, not repo content. Every other skip means a
@@ -25,17 +52,30 @@ CREATOR_CSV_SKIP = (
     "CREATOR-derived CSVs not found — run "
     "python scripts/fetch_creator_dataset.py"
 )
+CREATOR_JSON_SKIP = (
+    "CREATOR-derived JSONs not found — run "
+    "python scripts/fetch_creator_dataset.py"
+)
 STEEL_TABLES_SKIP = "M250-35A steel loss tables absent (gitignored dataset)"
 # Lab capture CSVs are tracked on main but excluded from the public release
 # branch, where their absence is by design rather than a broken checkout.
 CAPTURES_SKIP = "lab capture CSVs absent (not on the public release branch)"
 
+_CORE_LANE = bool(os.environ.get("PHASESWEEP_CORE_LANE"))
+
 ALLOWED_SKIP_SUBSTRINGS = (
     CREATOR_DATASET_SKIP,
     CREATOR_CSV_SKIP,
+    CREATOR_JSON_SKIP,
     STEEL_TABLES_SKIP,
     CAPTURES_SKIP,
+    FEM_SKIP,
 )
+if _CORE_LANE:
+    ALLOWED_SKIP_SUBSTRINGS = (
+        *ALLOWED_SKIP_SUBSTRINGS,
+        SIM_SKIP, VIZ_SKIP, SERVER_SKIP,
+    )
 
 
 def pytest_sessionfinish(session, exitstatus):

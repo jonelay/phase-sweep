@@ -37,7 +37,7 @@ r_inner = 0.056
 n_slots = 24
 slot_depth = 0.020      # m — estimated from Fig 6a visual inspection (~80% of analytical bound 25.6 mm)
 slot_width_ratio = 0.36 # estimated from Fig 6a visual inspection (~80% of initial 0.45; more iron than winding)
-slot_opening_ratio = 0.165 # estimated from Fig 6a; stepped tooth profile similar to actuator (narrow opening)
+slot_opening_ratio = 0.165 # estimated from Fig 6a; stepped tooth profile similar to 14 mm outrunner (narrow opening)
 alpha_p = 0.855         # magnet-arc to pole-pitch ratio (Table I: 85.5%)
 L_stk = 0.035          # m (35 mm)
 

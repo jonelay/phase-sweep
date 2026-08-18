@@ -1,15 +1,5 @@
 """Model registry mapping model keys to metadata and solver functions.
 
-Eight computational model entries (plus five measured-source keys; thirteen total):
-- analytical: Zhu & Howe closed-form air-gap field
-- fem: NGSolve 2D magnetostatic FEM (linear/nonlinear; smooth/slotted from
-  Geometry.n_slots)
-- drive_sim: motulator PMSM drive simulation
-- rated_torque, stall_torque: MTPA circuit models
-- torque_speed: MTPA / voltage-limited torque-speed envelope
-- iron_loss: lumped Bertotti (hysteresis + eddy) iron loss
-- thermal_duty: copper-loss S1 budget over a torque-time profile
-
 Registry is a plain dict. No Protocol/ABC/plugin system.
 
 Validation uses solver_params factories as the single source of truth:
@@ -27,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 
 if TYPE_CHECKING:
-    from phasesweep.motor import Motor
+    from phasesweep.machines.motor import Motor
     from phasesweep.sweep_types import RunConfig
 
 
@@ -129,13 +119,13 @@ def _validate_demag_screen(motor: Motor) -> None:
 # ---------------------------------------------------------------------------
 
 def _run_analytical_impl(config: RunConfig) -> dict[str, Any]:
-    from phasesweep.analytical import (
+    from phasesweep.solver_params import prepare_analytical, psi_f_carter
+    from phasesweep.solvers.analytical import (
         carter_adjusted_radii,
         end_effect_factor,
         zhu_howe_Br_series,
     )
-    from phasesweep.harmonics import compute_thd, harmonics_1sided
-    from phasesweep.solver_params import prepare_analytical, psi_f_carter
+    from phasesweep.solvers.harmonics import compute_thd, harmonics_1sided
 
     params = prepare_analytical(config.motor)
     geo = params.geometry
@@ -216,32 +206,33 @@ def _run_analytical_impl(config: RunConfig) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _lazy_rated_torque(config: RunConfig) -> dict[str, Any]:
-    from phasesweep.rated_torque import run_rated_torque
+    from phasesweep.models.rated_torque import run_rated_torque
     return run_rated_torque(config)
 
 
 def _lazy_stall_torque(config: RunConfig) -> dict[str, Any]:
-    from phasesweep.rated_torque import run_stall_torque
+    from phasesweep.models.rated_torque import run_stall_torque
     return run_stall_torque(config)
 
 
 def _lazy_thermal_duty(config: RunConfig) -> dict[str, Any]:
-    from phasesweep.thermal_duty import run_thermal_duty
+    from phasesweep.models.thermal_duty import run_thermal_duty
     return run_thermal_duty(config)
 
 
 def _lazy_torque_speed(config: RunConfig) -> dict[str, Any]:
-    from phasesweep.torque_speed import run_torque_speed
+    from phasesweep.models.torque_speed import run_torque_speed
     return run_torque_speed(config)
 
 
 def _lazy_iron_loss(config: RunConfig) -> dict[str, Any]:
-    from phasesweep.iron_loss import run_iron_loss
+    from phasesweep.models.iron_loss import run_iron_loss
     return run_iron_loss(config)
 
 
 def _lazy_demag_screen(config: RunConfig) -> dict[str, Any]:
-    from phasesweep.demag_screen import run_demag_screen
+    _check_fem("demag_screen")
+    from phasesweep.models.demag_screen import run_demag_screen
     return run_demag_screen(config)
 
 
@@ -291,7 +282,7 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
             "B_mag_grid", "grid_coords_list",
         }),
         needs=frozenset({"B_rem", "n_p", "geometry", "mu_r_pm", "mu_r_fe", "alpha_p"}),
-        hash_fields=frozenset({"maxh_fraction", "n_theta", "nonlinear", "j_s"}),
+        hash_fields=frozenset({"maxh_fraction", "n_theta", "nonlinear", "j_s", "rotation"}),
         validate=_validate_fem,
         fn=lambda config: _lazy_fem(config),
     ),
@@ -310,6 +301,23 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         needs=frozenset({"R_s", "L_d", "L_q", "psi_f", "J", "n_p"}),
         hash_fields=frozenset({
             "sim_plan",
+            "U_DC", "MAX_I_S", "W_REF", "I_LIMIT",
+        }),
+        validate=_validate_drive_sim,
+        fn=lambda config: _lazy_sim(config),
+    ),
+    "drive_sim_two_mass": ModelInfo(
+        name="drive_sim_two_mass",
+        source="computed",
+        cost="medium",
+        produces=frozenset({
+            "t_settle", "i_ss", "speed_droop", "tau_peak", "tau_S_peak",
+            "t_list", "w_M_list", "tau_M_list", "i_s_abs_list",
+            "w_L_list", "tau_S_list",
+        }),
+        needs=frozenset({"R_s", "L_d", "L_q", "psi_f", "J", "n_p"}),
+        hash_fields=frozenset({
+            "sim_plan", "load_mech",
             "U_DC", "MAX_I_S", "W_REF", "I_LIMIT",
         }),
         validate=_validate_drive_sim,
@@ -428,6 +436,22 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         validate=_validate_demag_screen,
         fn=_lazy_demag_screen,
     ),
+    "cogging_torque": ModelInfo(
+        name="cogging_torque",
+        source="computed",
+        # v1: rotor sweep at j_s=0 with Arkkio radial-averaging torque.
+        # RunConfig.rotation is an input-schema addition with an
+        # identity-preserving default (no fem version bump).
+        cost="slow",
+        produces=frozenset({
+            "rotation_list", "tau_cogging_list", "tau_cogging_pp",
+            "tau_cogging_pp_Nm", "dominant_order", "n_cogging_periods",
+        }),
+        needs=frozenset({"B_rem", "n_p", "geometry", "mu_r_pm", "mu_r_fe", "alpha_p"}),
+        hash_fields=frozenset({"maxh_fraction", "n_theta", "nonlinear", "cogging_points"}),
+        validate=_validate_fem,
+        fn=lambda config: _lazy_cogging(config),
+    ),
     "backemf_capture": ModelInfo(
         name="backemf_capture",
         source="measured",
@@ -482,11 +506,31 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
 }
 
 
+def _check_fem(model_name: str) -> None:
+    from importlib.util import find_spec
+    if find_spec("ngsolve") is None:
+        raise ImportError(
+            f"model '{model_name}' requires: pip install phasesweep[fem]"
+        )
+
+
 def _lazy_fem(config: RunConfig) -> dict[str, Any]:
-    from phasesweep.fem_runner import _run_fem_impl
+    _check_fem("fem")
+    from phasesweep.solvers.fem_runner import _run_fem_impl
     return _run_fem_impl(config)
 
 
+def _lazy_cogging(config: RunConfig) -> dict[str, Any]:
+    _check_fem("cogging_torque")
+    from phasesweep.solvers.cogging import _run_cogging_impl
+    return _run_cogging_impl(config)
+
+
 def _lazy_sim(config: RunConfig) -> dict[str, Any]:
-    from phasesweep.sim_runner import _run_sim_impl
+    from importlib.util import find_spec
+    if find_spec("motulator") is None:
+        raise ImportError(
+            "model 'drive_sim' requires: pip install phasesweep[sim]"
+        )
+    from phasesweep.simulation.sim_runner import _run_sim_impl
     return _run_sim_impl(config)

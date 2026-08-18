@@ -102,7 +102,7 @@ Per-kg Steinmetz coefficients for the lumped two-term Bertotti model,
 plus the core mass and the single peak flux density the whole mass is
 assumed to cycle at. All five are needed together — `prepare_iron_loss`
 names the missing ones. Fit `k_h`/`k_e`/`alpha_fe` from a
-multi-frequency specific-loss table with `phasesweep.iron_loss.fit_bertotti`.
+multi-frequency specific-loss table with `phasesweep.models.iron_loss.fit_bertotti`.
 
 | Field | Units | Notes |
 |-------|-------|-------|
@@ -120,8 +120,8 @@ which, in the file, since the two carry very different claims.
 `motors/creator_case_pmsm.toml` is the calibrated case and documents
 both numbers; the fit itself runs through the calibration framework
 (`scripts/calibrate_creator_b_core.py`) and leaves a record next to the
-dataset, so "calibrated" there is a path you can re-walk rather than a
-claim in a comment.
+dataset, the adjacent calibration record makes the calibrated value
+reproducible.
 
 With `[iron]` set, `thermal_duty` consumes the same `p_fe` against its
 S1 budget (added to both the consumption and the `rated_current`

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from phasesweep.motor import Motor
+    from phasesweep.machines.motor import Motor
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA = REPO_ROOT / "data/creator_case_pmsm"
@@ -51,9 +51,9 @@ def unfitted_b_core(motor: Motor) -> float:
 
 
 def main() -> None:
-    from phasesweep.calibration import calibrate
-    from phasesweep.configs import load_motor
-    from phasesweep.measured import (
+    from phasesweep.machines.configs import load_motor
+    from phasesweep.validation.calibration import calibrate
+    from phasesweep.validation.measured import (
         MeasuredResult,
         measured_run_result,
         validate_measured,

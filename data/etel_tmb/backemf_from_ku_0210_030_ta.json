@@ -16,6 +16,9 @@
   "uncertainty": {},
   "source_file": "ETEL TMB+0210-030 datasheet 07.01.2019 (Y2gH-FAAX-FhIA-QCEC), winding TA",
   "source": "published",
+  "tolerances": {
+    "backemf_fundamental": 0.5
+  },
   "derived_params": ["psi_f"],
   "provenance_note": "Unit conversion of the datasheet constant, NOT an independent measurement: the motor TOML psi_f = 0.149938 Wb is DERIVED from this same Ku (psi_f = sqrt(2)*Ku/(sqrt(3)*n_p)), so backemf_fundamental here equals psi_f*n_p*omega by construction. derived_params arms the calibration circularity guard (REQ-0819): fitting psi_f (or interderivable B_rem) against this dataset is an echo, not a calibration, and is refused."
 }

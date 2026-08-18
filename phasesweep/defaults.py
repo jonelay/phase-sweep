@@ -17,3 +17,6 @@ PICARD_RELAXATION: float = DEFAULTS["picard"]["relaxation"]
 
 # Stepped-slot geometry
 SLOT_OPENING_FRACTION: float = DEFAULTS["slots"]["opening_fraction"]
+
+# Copper temperature coefficient (1/K, pure copper)
+COPPER_TEMP_COEFF: float = 0.00393

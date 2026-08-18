@@ -16,15 +16,47 @@ import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from phasesweep.geometry import Geometry
+from phasesweep.machines.geometry import Geometry
 
 if TYPE_CHECKING:
-    from phasesweep.motor import DriveParams, Motor
+    from phasesweep.machines.motor import DriveParams, Motor
 
 
 # ---------------------------------------------------------------------------
 # Parameter types
 # ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class TwoMassLoad:
+    """Load-side parameters for a two-mass mechanical system.
+
+    J_L — load inertia (kg·m²); K_S — shaft torsional stiffness (N·m/rad);
+    C_S — shaft torsional damping (N·m·s/rad); B_L — viscous load friction
+    (N·m·s/rad).
+    """
+
+    J_L: float
+    K_S: float
+    C_S: float
+    B_L: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.J_L <= 0:
+            raise ValueError(f"J_L must be > 0, got {self.J_L}")
+        if self.K_S <= 0:
+            raise ValueError(f"K_S must be > 0, got {self.K_S}")
+        if self.C_S < 0:
+            raise ValueError(f"C_S must be >= 0, got {self.C_S}")
+        if self.B_L < 0:
+            raise ValueError(f"B_L must be >= 0, got {self.B_L}")
+
+    def to_dict(self) -> dict[str, float]:
+        return {"J_L": self.J_L, "K_S": self.K_S, "C_S": self.C_S, "B_L": self.B_L}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, float]) -> TwoMassLoad:
+        return cls(J_L=d["J_L"], K_S=d["K_S"], C_S=d["C_S"], B_L=d.get("B_L", 0.0))
+
 
 @dataclass(frozen=True)
 class AnalyticalParams:
@@ -67,11 +99,10 @@ class FemParams:
     relative permeabilities (dimensionless); alpha_p — pole-arc ratio ((0, 1]).
 
     mu_r_fe sets the iron reluctivity of the LINEAR solve only. With
-    nonlinear=True the solver replaces it with the generic B-H table
-    (see Documented Limitations) — it merely seeds
-    Picard iteration 0 and the result is insensitive to its value (inert
-    to 6e-6 across 500→4000). It stays validated and hashed either
-    way.
+    nonlinear=True the solver replaces it with the generic B-H table —
+    it merely seeds Picard iteration 0 and the result is insensitive to
+    its value (inert to 6e-6 across 500→4000). It stays validated and
+    hashed either way.
     """
 
     geometry: Geometry
@@ -427,7 +458,7 @@ def j_s_from_phase_current(
     """
     from math import pi
 
-    from phasesweep.fem_field import slot_source_moment
+    from phasesweep.solvers.fem_field import slot_source_moment
 
     geo = _require_geometry(motor, "j_s_from_phase_current")
     S = slot_source_moment(geo, slot_width_ratio=slot_width_ratio,
@@ -442,7 +473,7 @@ def phase_current_from_j_s(
     exact inverse of ``j_s_from_phase_current``."""
     from math import pi
 
-    from phasesweep.fem_field import slot_source_moment
+    from phasesweep.solvers.fem_field import slot_source_moment
 
     geo = _require_geometry(motor, "phase_current_from_j_s")
     S = slot_source_moment(geo, slot_width_ratio=slot_width_ratio,
@@ -459,7 +490,7 @@ def _derive_B_rem_from_psi_f(motor: Motor) -> float | None:
     Returns derived B_rem, or None if derivation inputs are missing.
     N_eff = N (turns per coil) × coils_series = total series turns per phase.
     """
-    from phasesweep.analytical import _derive_B_rem, carter_adjusted_radii
+    from phasesweep.solvers.analytical import _derive_B_rem, carter_adjusted_radii
 
     if motor.psi_f is None:
         return None
@@ -490,7 +521,7 @@ def derive_psi_f_smooth(motor: Motor) -> float | None:
     """
     import numpy as np
 
-    from phasesweep.analytical import zhu_howe_Br
+    from phasesweep.solvers.analytical import zhu_howe_Br
 
     if motor.B_rem is None:
         return None
@@ -516,7 +547,7 @@ def _derive_psi_f(motor: Motor) -> float | None:
     round-trips exactly.
     Returns derived psi_f, or None if derivation inputs are missing.
     """
-    from phasesweep.analytical import carter_adjusted_radii
+    from phasesweep.solvers.analytical import carter_adjusted_radii
 
     if motor.B_rem is None:
         return None
@@ -540,7 +571,7 @@ def psi_f_carter(
     """
     import numpy as np
 
-    from phasesweep.analytical import zhu_howe_Br
+    from phasesweep.solvers.analytical import zhu_howe_Br
 
     if motor.N is None or motor.k_w is None or motor.L_stk is None:
         return None
@@ -848,7 +879,7 @@ def prepare_demag_screen(motor: Motor) -> DemagScreenParams:
     B_rem·[1 + alpha_Br·(T − 20)] and B_knee + alpha_B_knee·(T − 20)
     (the knee slope is absolute T/K — the knee can cross zero).
     """
-    from phasesweep.thermal_duty import psi_f_at_magnet_temp
+    from phasesweep.models.thermal_duty import psi_f_at_magnet_temp
 
     geo = _require_geometry(motor, "demag_screen")
     if geo.n_slots == 0 or geo.slot_depth == 0:
@@ -932,7 +963,7 @@ def _resolve_thermal_budget(
         return (motor.winding_temp_limit - motor.ambient_temp) / motor.r_th, "thermal_resistance"
 
     if motor.I_rated is not None:
-        from phasesweep.thermal_duty import copper_loss
+        from phasesweep.models.thermal_duty import copper_loss
         return copper_loss(R_s_op, motor.I_rated) + p_fe, "rated_current"
 
     raise ValueError(
@@ -968,7 +999,7 @@ def _thermal_duty_p_fe(motor: Motor) -> float:
             f"needs all of {', '.join(_IRON_FIELDS)} to include iron loss "
             f"(missing: {', '.join(missing)}); set them or clear the section"
         )
-    from phasesweep.iron_loss import bertotti_loss_density
+    from phasesweep.models.iron_loss import bertotti_loss_density
     if motor.drive.W_REF is None:
         raise ValueError(
             f"Motor '{motor.name}': thermal_duty with [iron] needs "
@@ -987,7 +1018,7 @@ def _check_thermal_duty_motor(
     a silent skip — the coefficient is grade-specific (NdFeB ≈ -0.0012/K,
     SmCo ≈ -0.0003/K), so there is no safe default.
     """
-    from phasesweep.thermal_duty import psi_f_at_magnet_temp, r_s_at_operating_temp
+    from phasesweep.models.thermal_duty import psi_f_at_magnet_temp, r_s_at_operating_temp
     psi_f = _resolve_psi_f(motor)
     if motor.magnet_temp is not None and motor.alpha_Br is None:
         raise ValueError(

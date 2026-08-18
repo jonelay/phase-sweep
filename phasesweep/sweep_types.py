@@ -9,8 +9,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
-    from phasesweep.motor import Motor
-    from phasesweep.sim import SimPlan
+    from phasesweep.machines.motor import Motor
+    from phasesweep.simulation.sim import SimPlan
+
+from phasesweep.solver_params import TwoMassLoad
 
 Status = Literal["OK", "TIMEOUT", "ERROR"]
 
@@ -31,7 +33,13 @@ class RunConfig:
     duty_profile — thermal-duty torque-time segments ((torque_Nm,
     duration_s), ...) for the thermal_duty model;
     dataset_id — identity of an imported measured dataset (None for
-    computed models); distinguishes repeat captures of the same test.
+    computed models); distinguishes repeat captures of the same test;
+    load_mech — two-mass load parameters (TwoMassLoad) for the
+    drive_sim_two_mass model; None for single-mass drive_sim;
+    rotation — mechanical rotor angle (rad) for rotated FEM solves;
+    0.0 = aligned (identity-preserving default, no version bump);
+    cogging_points — angular samples per cogging period for the
+    cogging_torque model (default 12).
     """
 
     motor: Motor
@@ -51,6 +59,12 @@ class RunConfig:
 
     dataset_id: str | None = None
 
+    load_mech: TwoMassLoad | None = None
+
+    rotation: float = 0.0
+
+    cogging_points: int = 12
+
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
             "motor": self.motor.to_dict(),
@@ -68,20 +82,35 @@ class RunConfig:
             d["duty_profile"] = [list(seg) for seg in self.duty_profile]
         if self.dataset_id is not None:
             d["dataset_id"] = self.dataset_id
+        if self.load_mech is not None:
+            d["load_mech"] = self.load_mech.to_dict()
+        if self.rotation != 0.0:
+            d["rotation"] = self.rotation
+        if self.cogging_points != 12:
+            d["cogging_points"] = self.cogging_points
         return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> RunConfig:
-        from phasesweep.motor import Motor as MotorCls
-        from phasesweep.sim import SimPlan
+        from phasesweep.machines.motor import Motor as MotorCls
 
         motor = MotorCls.from_dict(d["motor"])
         sim_plan = None
         if "sim_plan" in d and d["sim_plan"] is not None:
+            try:
+                from phasesweep.simulation.sim import SimPlan
+            except ImportError:
+                raise ImportError(
+                    "stored result contains a drive-sim plan; "
+                    "install phasesweep[sim] to load it"
+                ) from None
             sim_plan = SimPlan.from_dict(d["sim_plan"])
         duty_profile = None
         if d.get("duty_profile") is not None:
             duty_profile = tuple((float(t), float(dt)) for t, dt in d["duty_profile"])
+        load_mech = None
+        if d.get("load_mech") is not None:
+            load_mech = TwoMassLoad.from_dict(d["load_mech"])
         return cls(
             motor=motor,
             model=d["model"],
@@ -93,6 +122,9 @@ class RunConfig:
             i_fault=d.get("i_fault"),
             duty_profile=duty_profile,
             dataset_id=d.get("dataset_id"),
+            load_mech=load_mech,
+            rotation=d.get("rotation", 0.0),
+            cogging_points=d.get("cogging_points", 12),
         )
 
 
@@ -219,10 +251,17 @@ def compute_run_id(
             rc.sim_plan.to_dict(), sort_keys=True
         )
     if rc.duty_profile is not None:
-        # The torque-time profile drives every thermal-duty metric
         solver_params["duty_profile"] = json.dumps(
             [list(seg) for seg in rc.duty_profile], sort_keys=True
         )
+    if rc.load_mech is not None:
+        solver_params["load_mech"] = json.dumps(
+            rc.load_mech.to_dict(), sort_keys=True
+        )
+    if rc.rotation != 0.0:
+        solver_params["rotation"] = f"{rc.rotation:.10f}"
+    if rc.cogging_points != 12:
+        solver_params["cogging_points"] = str(rc.cogging_points)
 
     if needs is not None:
         solver_params = {k: v for k, v in solver_params.items() if k in needs}
