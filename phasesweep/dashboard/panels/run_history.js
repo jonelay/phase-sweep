@@ -78,7 +78,27 @@ function render() {
     badge.className = "badge";
     badge.textContent = r.status;
     badge.dataset.status = r.status;
-    head.append(title, badge);
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-meta-btn";
+    copyBtn.textContent = "Copy";
+    copyBtn.title = "Copy result metadata as JSON";
+    copyBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const meta = {
+        result_id: r.result_id,
+        motor_config_id: r.motor_config_id,
+        motor_name: r.motor_name,
+        model: r.model,
+        source: r.source,
+        status: r.status,
+        timestamp: r.timestamp,
+      };
+      navigator.clipboard.writeText(JSON.stringify(meta, null, 2)).then(() => {
+        copyBtn.textContent = "Copied";
+        setTimeout(() => { copyBtn.textContent = "Copy"; }, 1200);
+      });
+    });
+    head.append(title, badge, copyBtn);
 
     const sub = document.createElement("div");
     sub.className = "sub";

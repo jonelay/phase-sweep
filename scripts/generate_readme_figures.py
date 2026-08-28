@@ -43,8 +43,9 @@ GRAY   = "#888888"
 def fig_fem_hero() -> Path:
     """CREATOR 4p/6s inrunner, nonlinear |B| field map."""
     from phasesweep.machines.configs import load_motor
-    from phasesweep.solver_params import prepare_fem
-    from phasesweep.solvers.fem_field import rasterise_cross_section, solve_field_fem
+    from phasesweep.solvers.fem_field import solve_field_fem
+    from phasesweep.solvers.fem_runner import prepare_fem
+    from phasesweep.solvers.fem_sampling import rasterise_cross_section
 
     motor = load_motor(ROOT / "motors" / "creator_case_pmsm.toml")
     params = prepare_fem(motor)

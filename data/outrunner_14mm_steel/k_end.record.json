@@ -1,0 +1,38 @@
+{
+  "motor_name": "14 mm Outrunner (Steel)",
+  "motor_toml": "motors/outrunner_14mm_steel.toml",
+  "geometry_config_id": "ce72bdfebcbf",
+  "n_p": 6,
+  "L_stk_m": 0.007,
+  "magnet_overhang_m": 0.00025,
+  "yoke_overhang_m": 0.00025,
+  "settings": {
+    "z_box_factor": 6.0,
+    "order": 2,
+    "n_z": 97,
+    "n_theta": 31,
+    "B_rem": 1.45,
+    "mu_r_pm": 1.05,
+    "mu_r_fe_linear": 10000.0,
+    "maxh_m": 0.00017600000000000024,
+    "maxh_bulk_m": 0.0008054166666666666,
+    "bh_table": "fem_field generic 19-point (_BH_B/_BH_H) \u2014 a table change stales the nonlinear values"
+  },
+  "results": {
+    "k_end": 0.918486,
+    "k_end_linear": 0.969365,
+    "k_end_bore": 0.919279,
+    "flux_droop_ratio": 0.96944,
+    "k_end_at_B_rem_sens": 0.943382,
+    "B_rem_sens": 1.25
+  },
+  "wall_s": {
+    "linear": 3.0,
+    "nonlinear": 37.3,
+    "sensitivity": 53.2
+  },
+  "idealizations": "smooth bore; full-pitch (alpha_p=1) magnet; distributed-winding fundamental; flux linkage truncated at the active stack; verified against the 2D analytic limit + convergence, NOT an independent 3D benchmark",
+  "solver": "fem_wedge.solve_wedge_endeffect (NGSolve scalar-phi)",
+  "date": "2026-08-25",
+  "note": "overhang: client-confirmed partial ~0.25 mm past stator teeth (photo review 2026-06); bench observation, not a caliper measurement"
+}

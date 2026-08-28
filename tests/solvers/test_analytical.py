@@ -4,8 +4,14 @@ Pure-math checks (numpy only, no FEM/NGSolve) that catch transcription
 errors: wrong signs, swapped exponents, missing terms.
 """
 
+from itertools import pairwise
+
 import numpy as np
 import pytest
+
+from phasesweep.machines.geometry import default_inrunner, inrunner, outrunner
+from phasesweep.solvers.analytical import carter_adjusted_radii, carter_factor
+from tests.solvers.fem_shared import _SLOTTED_GEO_KW, _SLOTTED_OUT_GEO_KW
 
 MU0 = 4e-7 * np.pi
 
@@ -613,3 +619,70 @@ class TestAlphaPScaling:
         Br_explicit = zhu_howe_Br(theta, n_p=4, B_rem=1.2, alpha_p=1.0,
                                   **radii)
         np.testing.assert_allclose(Br_explicit, Br_default, rtol=1e-15)
+
+
+# ---------------------------------------------------------------------------
+# Carter factor tests
+# ---------------------------------------------------------------------------
+
+class TestCarterFactor:
+
+    def test_no_slots(self):
+        assert carter_factor(0.030, 0, 0.6, 0.001) == 1.0
+
+    def test_increases_with_slot_opening(self):
+        k1 = carter_factor(0.030, 12, 0.3, 0.005)
+        k2 = carter_factor(0.030, 12, 0.6, 0.005)
+        k3 = carter_factor(0.030, 12, 0.9, 0.005)
+        assert 1.0 < k1 < k2 < k3
+
+    def test_approaches_unity_large_g_prime(self):
+        """Very thick magnets (large g') → slot openings negligible → k_c → 1."""
+        k = carter_factor(0.030, 12, 0.6, 0.100)  # 100mm g'
+        assert k == pytest.approx(1.0, abs=0.01)
+
+    def test_known_value(self):
+        """Verify against hand-calculated value for CREATOR-like geometry."""
+        # CREATOR: r_stator=0.0239, n_slots=6, swr≈0.6, g'≈4.4mm
+        k = carter_factor(0.0239, 6, 0.6, 0.0044)
+        assert 1.2 < k < 1.5
+
+    def test_lower_bound_everywhere(self):
+        """k_c >= 1 over the physical parameter box: slotting can only
+        widen the effective gap, never narrow it."""
+        for n_s in (3, 6, 12, 36):
+            for sor in (0.05, 0.3, 0.6, 0.95):
+                for gp in (0.0005, 0.005, 0.05):
+                    assert carter_factor(0.030, n_s, sor, gp) >= 1.0
+
+    def test_unity_limit_as_slot_opening_closes(self):
+        """b_o -> 0 removes the slotting perturbation entirely."""
+        assert carter_factor(0.030, 12, 1e-8, 0.005) == pytest.approx(
+            1.0, abs=1e-9)
+
+    def test_monotonic_decreasing_in_g_prime(self):
+        """A wider effective gap dilutes the slot-opening dips."""
+        ks = [carter_factor(0.030, 12, 0.6, gp)
+              for gp in (0.002, 0.005, 0.01, 0.03)]
+        assert all(a > b for a, b in pairwise(ks))
+
+class TestCarterAdjustedRadii:
+
+    def test_smooth_bore_identity(self):
+        geo = default_inrunner()
+        r_s, r_m, k_c = carter_adjusted_radii(geo, 1.05)
+        assert (r_s, r_m, k_c) == (geo.r_stator, geo.r_magnet, 1.0)
+
+    def test_inrunner_widens_gap_keeps_magnet(self):
+        geo = inrunner(**_SLOTTED_GEO_KW, slot_opening_width=0.055)  # ratio ~0.15
+        r_s, r_m, k_c = carter_adjusted_radii(geo, 1.05)
+        assert k_c > 1.0
+        assert r_s > geo.r_stator
+        assert r_m == geo.r_magnet
+
+    def test_outrunner_widens_gap_keeps_magnet(self):
+        geo = outrunner(**_SLOTTED_OUT_GEO_KW, slot_opening_width=0.0063)  # ratio ~0.15
+        r_s, r_m, k_c = carter_adjusted_radii(geo, 1.05)
+        assert k_c > 1.0
+        assert r_s < geo.r_stator
+        assert r_m == geo.r_magnet

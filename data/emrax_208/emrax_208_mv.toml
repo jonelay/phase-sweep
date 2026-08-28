@@ -1,0 +1,86 @@
+# EMRAX 208 Medium Voltage (MV) — axial flux PMSM, 20-pole, WYE
+# Second axial-flux anchor. Same YASA-like topology as the 228 but smaller
+# stator (208 mm OD vs 228 mm). Provides axial-flux family scaling data.
+# Source:
+#   EMRAX 208 datasheet v1.7 (Aug 2026), Medium Voltage column, LC cooling.
+#   https://emrax.com/e-motors/emrax-208/
+#   PDF: https://emrax.com/wp-content/uploads/2026/08/EMRAX_208_datasheet_v1.7.pdf
+#
+# Same EMRAX unit conventions as the 228 (see emrax_228_mv.toml header):
+#   R_s: footnote 4 (208 ds): pp resistance at 25 °C divided by 2.
+#   psi_f: peak per-phase. Cross-checks:
+#        Ke = psi_f·n_p·(2π/60) = 0.02653 (+1.7% vs tabled Ke if peak);
+#        from Ke as phase-peak: psi = 0.04474/(10·0.10472) = 0.02832
+#        (vs 0.02533 — 11.8% high, larger scatter than the 228).
+#        Kt = 1.5·n_p·psi_f = 0.380 (matches tabled 0.38 exactly).
+#        The Kt closure is tighter here; take psi_f at face value.
+#   L_d/L_q: 47.2/49.4 µH. Same mild saliency pattern as 228 (L_q/L_d
+#        = 1.047, 4.7% — slightly more pronounced).
+#
+# Kt·I cross-checks:
+#   Continuous: 0.38·220 = 83.6 Nm vs tabled 75 Nm (LC, thermal limit)
+#   Peak: 0.38·400 = 152.0 Nm vs tabled 150 Nm (+1.3%)
+#   The continuous over-prediction (11.5%) is expected — thermal derating
+#   is more aggressive on the smaller frame at the same power density.
+
+[motor]
+name = "EMRAX 208 MV (axial flux PMSM)"
+type = "axial-flux PMSM (single-stator dual-rotor, concentrated winding)"
+topology = "axial"
+
+[circuit]
+n_p = 10               # 20 poles
+R_s = 0.00277          # Ω per-phase at 25 °C (datasheet 5.54 mΩ; fn 4: pp/2)
+L_d = 47.2e-6          # H per-phase (datasheet 47.2 µH)
+L_q = 49.4e-6          # H per-phase (datasheet 49.4 µH)
+psi_f = 0.02533        # Wb, peak per-phase (datasheet "PM Flux Linkage")
+I_rated_rms = 220.0    # A rms continuous (LC cooling, datasheet)
+J = 0.0239             # kg·m² rotor inertia (LC/AC variant)
+
+[drive]
+U_DC = 420.0           # V DC for peak power (datasheet "Voltage required")
+MAX_I_S = 565.69       # A peak = √2 · 400 A_rms (datasheet peak motor current)
+W_REF = 628.32         # rad/s = 2π·6000/60 (peak power speed)
+
+[rated]
+torque_Nm = 75.0       # continuous torque, LC cooling (datasheet)
+speed_rpm = 6000       # peak power speed
+peak_torque_Nm = 150.0 # peak torque (datasheet, all variants)
+peak_power_kW = 86.0   # S2 30s peak power at 6000 RPM (datasheet)
+
+[envelope]
+od_mm = 208.0          # outer diameter
+axial_length_mm = 85.0 # total axial length (housing)
+weight_kg = 10.3       # LC variant
+
+[provenance]
+source = "EMRAX 208 datasheet v1.7 (Aug 2026), MV column, LC cooling"
+url = "https://emrax.com/wp-content/uploads/2026/08/EMRAX_208_datasheet_v1.7.pdf"
+motor_model = "EMRAX 208 MV LC (axial flux, liquid cooled)"
+duty = "S1 continuous at LC cooling (min 6 l/min, max 50 °C, T_amb ≤ 30 °C); S2 30s peak"
+Ke_Vrms_per_RPM = 0.02966     # datasheet (likely peak despite header)
+Kt_Nm_per_Arms = 0.38         # datasheet (likely per A_peak despite header)
+Kv_no_load = 25.02             # RPM/V_DC at no load
+continuous_power_LC_kW = 47.0  # S1 continuous power, LC
+max_speed_rpm = 7000           # limiting speed
+efficiency_peak_pct = 96       # datasheet peak efficiency
+cooling_variants = "AC (air) / LC (liquid) / CC (combined)"
+temp_limit_winding = 100       # °C
+temp_limit_rotor = 80          # °C
+temp_limit_integrated = 120    # °C
+notes = """
+Second axial-flux anchor, same topology family as the 228 but smaller
+frame (208 vs 228 mm OD, 10.3 vs 13.5 kg). Together with emrax_228_mv,
+provides a two-point scaling check for axial-flux models: same pole count
+and topology, different active diameter.
+
+Circuit-tier only, same eligibility as emrax_228_mv: rated_torque,
+thermal_duty, torque_speed. The 208 also publishes six winding variants
+(HV/MV/LV standard + three extended variants).
+
+The 208 has a higher max speed (7000 vs 6500 RPM) and lower flux linkage
+(0.02533 vs 0.04200 Wb), consistent with a shorter active radius at the
+same pole count. Peak power is 86 kW vs 124 kW — the scaling tracks
+roughly with OD² (208²/228² = 0.833, 86/124 = 0.694 — sub-quadratic,
+as expected when the inner radius doesn't scale proportionally).
+"""

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from phasesweep.machines.geometry import geometry_from_toml
-from phasesweep.machines.motor import DriveParams, Motor
+from phasesweep.machines.motor import DriveParams, InductionParams, Motor
 
 
 def _require_section(raw: dict[str, Any], section: str, label: str) -> dict[str, Any]:
@@ -65,6 +65,7 @@ def motor_from_dict(raw: dict[str, Any], *, label: str, default_name: str) -> Mo
     drive_raw = raw.get("drive") or {}
     thermal = raw.get("thermal") or {}
     iron = raw.get("iron") or {}
+    induction_raw = raw.get("induction") or {}
 
     # [geometry] is optional: datasheet/circuit-only motors run the circuit
     # tier (rated/stall torque, torque_speed, drive_sim, thermal_duty,
@@ -97,6 +98,13 @@ def motor_from_dict(raw: dict[str, Any], *, label: str, default_name: str) -> Mo
     except ValueError as e:
         raise ValueError(f"{label}: [drive] {e}") from e
 
+    induction = None
+    if induction_raw:
+        try:
+            induction = InductionParams.from_dict(induction_raw)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"{label}: [induction] {e}") from e
+
     name = motor_raw.get("name", default_name)
 
     I_rated = circuit.get("I_rated")
@@ -117,11 +125,21 @@ def motor_from_dict(raw: dict[str, Any], *, label: str, default_name: str) -> Mo
             J=circuit.get("J"),
             B_rem=materials.get("B_rem"),
             alpha_p=geometry_raw.get("alpha_p", 1.0),
-            mu_r_fe=_get_or_warn(materials, "mu_r_fe", 1000.0, label),
+            magnetization=geometry_raw.get("magnetization", "radial"),
+            halbach_segments=geometry_raw.get("halbach_segments"),
+            halbach_angles_deg=(
+                tuple(geometry_raw["halbach_angles_deg"])
+                if "halbach_angles_deg" in geometry_raw else None
+            ),
+            # No missing-mu_r_fe warning for induction machines: the
+            # circuit tier never reads it (a PM/FEM default only)
+            mu_r_fe=(materials.get("mu_r_fe", 1000.0) if induction is not None
+                     else _get_or_warn(materials, "mu_r_fe", 1000.0, label)),
             mu_r_pm=materials.get("mu_r_pm", 1.05),
             N=winding.get("N"),
             k_w=winding.get("k_w"),
             L_stk=geometry_raw.get("L_stk"),
+            k_end=geometry_raw.get("k_end"),
             I_rated=I_rated,
             coils_series=winding.get("coils_series"),
             winding_temp_limit=thermal.get("winding_temp_limit"),
@@ -139,6 +157,7 @@ def motor_from_dict(raw: dict[str, Any], *, label: str, default_name: str) -> Mo
             m_core=iron.get("m_core"),
             B_core=iron.get("B_core"),
             drive=drive,
+            induction=induction,
         )
     except ValueError as e:
         raise ValueError(f"{label}: {e}") from e

@@ -215,19 +215,16 @@ async def model_defaults(
 
 def _derive_model_defaults(motor: Any, model_key: str) -> dict[str, Any]:
     if model_key == "drive_sim":
+        from phasesweep.simulation.params import prepare_drive_sim
         from phasesweep.simulation.sim import plan_sim
-        from phasesweep.solver_params import prepare_drive_sim
         params = prepare_drive_sim(motor)
         return {"sim_plan": plan_sim(params).to_dict()}
     if model_key == "thermal_duty":
         if motor.I_rated is None:
             raise ValueError(
                 "thermal_duty defaults need I_rated on the motor")
-        from phasesweep.models.rated_torque import magnet_torque_constant
-        from phasesweep.solver_params import _resolve_psi_f
-        psi_f = _resolve_psi_f(motor)
-        tau = magnet_torque_constant(motor.n_p, psi_f) * motor.I_rated
-        return {"duty_profile": [[tau, 3600.0]]}
+        from phasesweep.server.jobs import _rated_duty_torque
+        return {"duty_profile": [[_rated_duty_torque(motor), 3600.0]]}
     if model_key == "demag_screen":
         if motor.drive.MAX_I_S is None:
             raise ValueError(
@@ -249,6 +246,16 @@ def _user_names(request: Request) -> set[str]:
     return names
 
 
+def _geometry_topology(geo: Any) -> str | None:
+    if geo is None:
+        return None
+    if hasattr(geo, "topology"):
+        return geo.topology
+    if hasattr(geo, "variant"):
+        return f"axial:{geo.variant}"
+    return None
+
+
 def _config_summary(request: Request, name: str) -> dict[str, Any]:
     m = _manager(request).motors[name]
     return {
@@ -256,7 +263,7 @@ def _config_summary(request: Request, name: str) -> dict[str, Any]:
         "motor_name": m.name,
         "motor_config_id": m.config_id,
         "n_p": m.n_p,
-        "topology": m.geometry.topology if m.geometry is not None else None,
+        "topology": _geometry_topology(m.geometry),
         "has_geometry": m.geometry is not None,
         "editable": name in _user_names(request),
     }

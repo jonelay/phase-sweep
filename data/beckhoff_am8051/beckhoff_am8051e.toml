@@ -1,5 +1,5 @@
 # Beckhoff AM8051-E — synchronous servo motor (8-pole)
-# Fourth multi-voltage torque-speed envelope anchor (REQ-0814): the
+# Fourth multi-voltage torque-speed envelope anchor: the
 # operation manual tabulates the SAME winding's S1 nominal point
 # (Nn, Mn, Pn) at FOUR mains voltages — UN = 115/230/400/480 VAC →
 # 500/1400/2500/3000 rpm — all far below the 9000 rpm mechanical cap.
@@ -67,7 +67,7 @@ source = "Beckhoff AM8000/AM8500 Operation Instructions v4.9.1 (2023-09), sectio
 url = "https://download.beckhoff.com/download/document/motion/am8000_am8500_ba_en.pdf"
 motor_model = "Beckhoff AM8051-E (AM8000 series, one-cable technology)"
 duty = "S1 continuous at Mn/Nn, 40 C ambient, 100 K winding overtemperature, reference flange 305 x 305 x 10 mm aluminum"
-# Multi-voltage S1 nominal points (REQ-0814 anchor class; the key evidence):
+# Multi-voltage S1 nominal points (the key evidence):
 #   UN [VAC] | U_DC = sqrt(2)*UN | Mn [Nm] | Nn [rpm] | Pn [kW] | In [A]
 #     115    |      162.6        |  4.80   |    500   |  0.25   |   —
 #     230    |      325.3        |  4.70   |   1400   |  0.69   |   —

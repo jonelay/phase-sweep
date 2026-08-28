@@ -20,5 +20,5 @@
     "backemf_fundamental": 1.0
   },
   "source_file": "data/outrunner_14mm_steel/backemf_speed_sweep.json",
-  "provenance_note": "Import-format distillation of the raw sweep (backemf_speed_sweep.json + captures/). Deliberately NOT tagged derived_params: the motor TOML omits psi_f (derived from B_rem) and carries nominal N52 B_rem = 1.45 T, so fitting B_rem against this dataset is the flagship calibration case (manual inversion -> effective B_rem 1.139 T; since automated, REQ-0819). Uncertainty ~1% from the per-channel Ke spread (1.599-1.612 mV/(rad/s))."
+  "provenance_note": "Import-format distillation of the raw sweep (backemf_speed_sweep.json + captures/). Deliberately NOT tagged derived_params: the motor TOML omits psi_f (derived from B_rem) and carries nominal N52 B_rem = 1.45 T, so fitting B_rem against this dataset is the flagship calibration case (manual inversion -> effective B_rem 1.139 T; since automated). Uncertainty ~1% from the per-channel Ke spread (1.599-1.612 mV/(rad/s))."
 }

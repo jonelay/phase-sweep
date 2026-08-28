@@ -1,0 +1,113 @@
+# NWPU 12 kW 3-Segment Halbach Array PMSM — 20-pole/24-slot inrunner
+# First Halbach-magnetization motor in the validation set.
+#
+# Source: Liu, J.; Shang, M.; Gong, C. "Analytical Modeling and Analysis
+#   of Halbach Array Permanent Magnet Synchronous Motor," World Electric
+#   Vehicle Journal, 16(8):413, 2025. DOI: 10.3390/wevj16080413
+#   Northwestern Polytechnical University, Xi'an, China.
+#
+# Prototype manufactured and back-EMF tested (Section 4.3).
+# Line back-EMF at 1000 r/min: FEM 74.4 V, analytical 76.4 V,
+# MEASURED 75.2 V (amplitude = peak). FEM vs measured error 1.1%,
+# analytical vs measured 1.6%.
+#
+# HALBACH MAGNETIZATION: 3-segment array per pole — one radially
+# magnetized main pole (width theta_2 = 6 deg), flanked by two sub-poles
+# magnetized at theta_m = 45 deg from radial. This produces higher
+# fundamental and lower harmonics than pure radial magnetization.
+#
+# FEM HALBACH SUPPORT: the FEM solver supports per-segment Halbach
+# magnetization via magnetization="halbach" + halbach_segments + optional
+# halbach_angles_deg below. The analytical model (Zhu & Howe 2002) is
+# radial-only and gates Halbach motors with a loud error.
+#
+# The demag screen's sample_magnet_Bm projects B onto each segment's
+# magnetization axis for Halbach motors.
+#
+# UNIT/BOOKKEEPING FLAGS:
+# - "Line back-EMF amplitude" = PEAK value of line-to-line voltage.
+#   Phase peak = line peak / sqrt(3).
+# - psi_f derived from measured line back-EMF at 1000 r/min:
+#     E_line_peak = 75.2 V → E_phase_peak = 75.2/sqrt(3) = 43.42 V
+#     omega_e = 10 * 2*pi*1000/60 = 1047.2 rad/s
+#     psi_f = 43.42 / 1047.2 = 0.04147 Wb
+#   Cross-check from FEM at 5000 rpm (Fig. 7):
+#     E_phase_peak = 214.8 V → psi_f = 214.8/5236 = 0.04103 Wb
+#   ~1% difference, consistent with the 1.1% FEM-vs-measured error.
+# - Shaft diameter (r_inner) not published; set to 0.0.
+# - N = 12 (turns per coil, Table 1); coils_series unknown.
+
+[motor]
+name = "NWPU Halbach 12 kW"
+type = "surface-magnet PMSM (20p/24s, 3-segment Halbach array)"
+topology = "inrunner"
+
+[geometry]
+r_outer = 0.0570        # m, R_sy + ~0.5 mm yoke; R_sy = 56.5 mm is the
+                        # slot bottom, paper says yoke minimized to reduce weight
+r_stator = 0.047        # m, stator inner radius R_s = 47 mm (Table 1)
+r_magnet = 0.046        # m, rotor outer radius R_m = 46 mm (Table 1)
+r_rotor = 0.043         # m, PM inner radius R_r = 43 mm (Table 1)
+r_inner = 0.0           # m, shaft not published
+L_stk = 0.056           # m, axial length = 56 mm (Table 1)
+alpha_p = 1.0           # Halbach: all 3 segments together span full pole pitch
+magnetization = "halbach"
+halbach_segments = 3
+halbach_angles_deg = [0.0, -45.0, -135.0]   # main pole radial, sub-poles at 45 deg
+slot_depth = 0.0095     # m, R_sy - R_s = 56.5 - 47 = 9.5 mm
+slot_width_ratio = 0.733  # slot angle alpha=11 deg / slot pitch 15 deg
+slot_opening_width = 0.003281  # m, slot opening angle beta=4 deg at R_s=47 mm
+                               # arc = 0.047 * 4 * pi/180
+
+[winding]
+n_slots = 24            # Table 1
+N = 12                  # turns per coil (Table 1)
+
+[circuit]
+n_p = 10                # 20 poles (Table 1)
+psi_f = 0.04147         # Wb, peak per-phase — from measured line back-EMF
+                        # at 1000 rpm: sqrt(3)^-1 * 75.2 / (10*2*pi*1000/60)
+# R_s: NOT published
+# L_d, L_q: NOT published (Halbach SPM → L_d ≈ L_q expected)
+
+[materials]
+B_rem = 1.35            # T, typical N45UH at 20 C (NNF45UH, TDK/Neomax)
+mu_r_pm = 1.09          # Section 4.1 (FEM verification)
+mu_r_fe = 1000.0        # stator 1J22 cobalt-iron (mu_r 460-5200); nominal
+
+[rated]
+speed_rpm = 5000
+torque_Nm = 23.0        # 12 kW = 23 Nm * 2*pi*5000/60
+power_kW = 12.0
+
+[provenance]
+source = "Liu, Shang, Gong (2025), WEVJ 16(8):413, Table 1 + Section 4.3"
+doi = "10.3390/wevj16080413"
+institution = "Northwestern Polytechnical University, Xi'an, China"
+motor_model = "NWPU 12 kW 3-segment Halbach SPM prototype"
+duty = "EV traction (prototype)"
+notes = """
+First Halbach-magnetization motor in the validation set. 3-segment
+Halbach array per pole: one radially magnetized main pole (6 deg width)
+flanked by two sub-poles at 45 deg magnetization angle. PM axially
+subdivided into 8 laminations to reduce eddy currents.
+
+Measured line back-EMF at 1000 r/min: 75.2 V peak (1.1% vs FEM,
+1.6% vs analytical). Loading test at rated 5000 r/min, 23 Nm confirms
+12 kW electromagnetic performance.
+
+Materials: NNF45UH sintered NdFeB (mu_r 1.09), 1J22 cobalt-iron stator
+(B_sat ~2.3 T), DT4E pure iron rotor core.
+
+FEATURE STATUS for phase-sweep:
+- FEM: per-segment Halbach magnetization implemented (Zhang 2021
+  formulation). Set magnetization/halbach_segments/halbach_angles_deg
+  in [geometry].
+- Analytical: Zhu-Howe model is radial-only; gates Halbach motors.
+- Demag screen: per-segment B_m projection implemented for Halbach.
+- Circuit tier: would work if L_d/L_q were published (SPM → L_d ≈ L_q).
+
+Eligible for: geometry validation, FEM back-EMF benchmarking, demag_screen
+  (needs B_knee + i_fault).
+NOT eligible for: rated_torque, stall_torque, torque_speed (no L_d/L_q/R_s).
+"""

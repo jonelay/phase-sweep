@@ -47,6 +47,28 @@ def test_load_motor_geometry():
     assert motor.geometry.r_magnet == pytest.approx(0.047 / 2)
 
 
+def test_load_motor_k_end_and_overhang(tmp_path):
+    toml = tmp_path / "kend.toml"
+    toml.write_text("""
+[motor]
+topology = "outrunner"
+[circuit]
+n_p = 6
+[geometry]
+r_outer = 0.009665
+r_rotor = 0.008765
+r_magnet = 0.007478
+r_stator = 0.006950
+r_inner = 0.003
+L_stk = 0.007
+magnet_overhang = 0.00025
+k_end = 0.9252
+""")
+    motor = load_motor(toml)
+    assert motor.k_end == pytest.approx(0.9252)
+    assert motor.geometry.magnet_overhang == pytest.approx(0.00025)
+
+
 def test_load_motor_derives_slot_opening_ratio():
     # slot_opening_width 3.23mm over the 6-slot pitch at the 23.9mm bore;
     # n_slots comes from [winding], so the rebuild path must re-derive
@@ -179,4 +201,81 @@ def test_load_motors_default_skips_bad_file(tmp_path, caplog):
         motors = load_motors(tmp_path)
     assert len(motors) == 1
     assert any("bad.toml" in r.getMessage() for r in caplog.records)
+
+
+class TestHalbachToml:
+
+    def test_halbach_loads(self, tmp_path):
+        p = tmp_path / "halbach.toml"
+        p.write_text(
+            "[circuit]\nn_p = 10\n"
+            "[materials]\nB_rem = 1.35\nmu_r_pm = 1.09\n"
+            "[geometry]\n"
+            "r_outer = 0.057\nr_stator = 0.047\n"
+            "r_magnet = 0.046\nr_rotor = 0.043\n"
+            'magnetization = "halbach"\n'
+            "halbach_segments = 3\n"
+            "halbach_angles_deg = [0.0, -45.0, -135.0]\n"
+        )
+        motor = load_motor(p)
+        assert motor.magnetization == "halbach"
+        assert motor.halbach_segments == 3
+        assert motor.halbach_angles_deg == (0.0, -45.0, -135.0)
+
+    def test_halbach_ideal_no_angles(self, tmp_path):
+        p = tmp_path / "halbach_ideal.toml"
+        p.write_text(
+            "[circuit]\nn_p = 4\n"
+            "[materials]\nB_rem = 1.2\n"
+            "[geometry]\n"
+            "r_outer = 0.06\nr_stator = 0.048\n"
+            "r_magnet = 0.04\nr_rotor = 0.03\n"
+            'magnetization = "halbach"\n'
+            "halbach_segments = 4\n"
+        )
+        motor = load_motor(p)
+        assert motor.magnetization == "halbach"
+        assert motor.halbach_segments == 4
+        assert motor.halbach_angles_deg is None
+
+    def test_halbach_validation_error_includes_path(self, tmp_path):
+        p = tmp_path / "bad_halbach.toml"
+        p.write_text(
+            "[circuit]\nn_p = 4\n"
+            "[materials]\nB_rem = 1.2\n"
+            "[geometry]\n"
+            "r_outer = 0.06\nr_stator = 0.048\n"
+            "r_magnet = 0.04\nr_rotor = 0.03\n"
+            'magnetization = "halbach"\n'
+        )
+        with pytest.raises(ValueError, match="bad_halbach"):
+            load_motor(p)
+
+    def test_halbach_angles_length_mismatch_from_toml(self, tmp_path):
+        p = tmp_path / "bad_angles.toml"
+        p.write_text(
+            "[circuit]\nn_p = 4\n"
+            "[materials]\nB_rem = 1.2\n"
+            "[geometry]\n"
+            "r_outer = 0.06\nr_stator = 0.048\n"
+            "r_magnet = 0.04\nr_rotor = 0.03\n"
+            'magnetization = "halbach"\n'
+            "halbach_segments = 3\n"
+            "halbach_angles_deg = [0.0, -45.0]\n"
+        )
+        with pytest.raises(ValueError, match="length"):
+            load_motor(p)
+
+    def test_radial_default_unchanged(self, tmp_path):
+        p = tmp_path / "radial.toml"
+        p.write_text(
+            "[circuit]\nn_p = 4\n"
+            "[geometry]\n"
+            "r_outer = 0.06\nr_stator = 0.048\n"
+            "r_magnet = 0.04\nr_rotor = 0.03\n"
+        )
+        motor = load_motor(p)
+        assert motor.magnetization == "radial"
+        assert motor.halbach_segments is None
+        assert motor.halbach_angles_deg is None
 

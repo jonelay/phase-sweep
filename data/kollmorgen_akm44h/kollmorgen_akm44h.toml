@@ -1,5 +1,5 @@
 # Kollmorgen AKM44H — brushless servo motor (surface PM, 10-pole)
-# First multi-voltage torque-speed envelope anchor (REQ-0814): the catalog
+# First multi-voltage torque-speed envelope anchor: the catalog
 # publishes the SAME winding's rated point (Trtd, Nrtd) at four DC bus
 # voltages — 160/320/560/640 Vdc — all below the 6000 rpm mechanical cap,
 # so the rated-speed progression is voltage-set by construction (a
@@ -61,7 +61,7 @@ source = "Kollmorgen AKM Servomotor Selection Guide (AKM-KM-SG_000077_RevE), AKM
 url = "https://www.kollmorgen.com/sites/default/files/AKM-KM-SG_000077_RevE_EN.pdf"
 motor_model = "Kollmorgen AKM44H (frame AKM4, winding H, resolver feedback)"
 duty = "S1 continuous at Tcs/Ics, winding dT = 100 C at 40 C ambient, 10in x 10in x 1/4in aluminum plate heat sink"
-# Multi-voltage rated points (REQ-0814 anchor class; the key evidence):
+# Multi-voltage rated points (the key evidence):
 #   Vbus [Vdc] | Trtd [Nm] | Nrtd [rpm] | Prtd [kW]
 #        160   |   5.44    |    1000    |   0.57
 #        320   |   4.66    |    2500    |   1.22

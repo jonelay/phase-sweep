@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from phasesweep.solver_params import DriveSimParams, TwoMassLoad
+    from phasesweep.simulation.params import DriveSimParams, TwoMassLoad
 
 import numpy as np
 
@@ -32,7 +32,11 @@ except ImportError:
         "pip install phasesweep[sim]"
     ) from None
 
-from phasesweep.models.rated_torque import magnet_torque_constant
+from phasesweep.models.rated_torque import (
+    magnet_torque_constant,
+    mtpa_gamma,
+    mtpa_torque,
+)
 
 
 def _clamp(val: float, lo: float, hi: float) -> float:
@@ -121,7 +125,9 @@ def plan_sim(params: DriveSimParams, load_fraction: float = 0.5) -> SimPlan:
 
     k_t approximation uses non-salient formula (1.5 * n_p * psi_f).
     This is conservative for salient motors since reluctance torque
-    adds capability, making load_fraction more conservative.
+    adds capability, making load_fraction more conservative. For psi_f = 0
+    (SynRM) that formula gives zero, so tau_peak falls back to the full
+    MTPA torque at I_limit instead (reluctance-only).
 
     tau_peak is sized from I_LIMIT (thermal/application limit) while
     build_sim caps the controller at MAX_I_S — when I_LIMIT < MAX_I_S the
@@ -134,6 +140,15 @@ def plan_sim(params: DriveSimParams, load_fraction: float = 0.5) -> SimPlan:
     assert drive.U_DC is not None and drive.MAX_I_S is not None and drive.W_REF is not None
     I_limit = drive.I_LIMIT if drive.I_LIMIT is not None else drive.MAX_I_S
     tau_peak = k_t * I_limit
+    if tau_peak == 0.0:
+        g = mtpa_gamma(params.psi_f, params.L_d, params.L_q, I_limit)
+        tau_peak = mtpa_torque(
+            params.n_p, params.psi_f, params.L_d, params.L_q, I_limit, g)
+    if tau_peak <= 0.0:
+        raise ValueError(
+            "psi_f = 0 with L_d == L_q: machine cannot produce torque, "
+            "no sim plan exists"
+        )
 
     u_emf = params.n_p * drive.W_REF * params.psi_f
     u_avail = drive.U_DC / np.sqrt(3)
@@ -317,14 +332,29 @@ def build_sim(
     When `load_mech` is set, the mechanical system becomes a two-mass
     model (TwoMassMechanicalSystem). Controllers see J_M + J_L.
 
-    Reverse-salient machines (L_d > L_q) are rejected: motulator 0.7.3's
-    MTPA locus is silently wrong for them — below psi_f/(L_d - L_q) the
-    angle search hits a zero-torque sentinel, above it brentq converges on
-    the demagnetizing stationary point (negative torque). Unfixed upstream;
-    remove this guard when motulator ships a fix.
+    Reverse-salient PM machines (psi_f > 0, L_d > L_q) are rejected:
+    motulator 0.7.3's MTPA locus is silently wrong for them — below
+    psi_f/(L_d - L_q) the angle search hits a zero-torque sentinel, above
+    it brentq converges on the demagnetizing stationary point (negative
+    torque). Unfixed upstream; remove this guard when motulator ships a
+    fix. SynRMs (psi_f = 0) are the opposite way around: motulator's
+    psi_f = 0 branch brackets the MTPA/MTPV angle search in (0, pi/2),
+    which is correct only for the L_d > L_q SynRM convention — so
+    psi_f = 0 with L_d > L_q runs fine, and psi_f = 0 with L_q > L_d is
+    rejected (it would silently produce a negative-torque locus and a
+    garbage current LUT).
     """
     _require_sim_drive_fields(params)
-    if params.L_d > params.L_q:
+    if params.psi_f == 0.0 and params.L_q > params.L_d:
+        raise ValueError(
+            f"SynRM (psi_f = 0) with L_q={params.L_q} > L_d={params.L_d}: "
+            "motulator's psi_f = 0 MTPA/MTPV angle search assumes the "
+            "L_d > L_q SynRM convention (gamma bracketed in (0, pi/2)); "
+            "with L_q > L_d it builds a negative-torque locus and the "
+            "drive silently produces no torque — swap the axis labels so "
+            "L_d > L_q to run drive_sim"
+        )
+    if params.psi_f > 0.0 and params.L_d > params.L_q:
         raise ValueError(
             f"reverse-salient machine (L_d={params.L_d} > L_q={params.L_q}): "
             "motulator's MTPA current reference is wrong for L_d > L_q "
@@ -381,7 +411,10 @@ def build_sim(
         ctrl_sys.set_speed_ref(
             Step(step_time=sst, step_value=drive.W_REF, initial_value=0))
 
-    _fix_mtpv_nan(vector_ctrl.reference_gen)
+    # psi_f = 0: the patch's j*psi_f fallback would be 0j (phase 0, not
+    # pi/2), and the SynRM (L_d > L_q here) MTPV locus is finite anyway.
+    if params.psi_f > 0.0:
+        _fix_mtpv_nan(vector_ctrl.reference_gen)
 
     return Simulation(mdl=mdl, ctrl=ctrl_sys, show_progress=False)
 
@@ -389,8 +422,8 @@ def build_sim(
 def extract_waveforms(
     res: Any, max_points: int = 1200, *, two_mass: bool = False,
 ) -> dict[str, list[float]]:
-    """Downsampled time-domain traces for the dashboard sim-waveforms panel.
-    Additive alongside extract_metrics — scalar metrics are
+    """Downsampled time-domain traces for the dashboard sim-waveforms panel
+   . Additive alongside extract_metrics — scalar metrics are
     unchanged."""
     t = np.asarray(res.mdl.t)
     stride = max(1, -(-len(t) // max_points))

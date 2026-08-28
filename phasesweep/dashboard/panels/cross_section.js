@@ -1,7 +1,7 @@
 // Cross-section heatmap panel: |B| over the motor
 // cross-section from the FEM raster (B_mag_grid), material region
 // boundaries drawn as circles from the config geometry. Plotly heatmap
-// (decision 2026-07-09: no Three.js).
+// (decision: no Three.js).
 
 import { PLOT_CONFIG, SERIES, axisStyle, baseLayout, chartVar, sequential } from "./plot_theme.js";
 import { provenanceText } from "./widgets.js";

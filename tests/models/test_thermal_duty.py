@@ -13,12 +13,12 @@ from phasesweep.machines.motor import DriveParams, Motor
 from phasesweep.models.thermal_duty import (
     COPPER_TEMP_COEFF,
     current_for_torque,
+    prepare_thermal_duty,
     psi_f_at_magnet_temp,
     r_s_at_operating_temp,
     run_thermal_duty,
 )
 from phasesweep.registry import MODEL_REGISTRY
-from phasesweep.solver_params import prepare_thermal_duty
 from phasesweep.sweep_types import RunConfig, compute_run_id
 from tests.conftest import REPO_ROOT
 
@@ -63,6 +63,43 @@ def test_current_for_torque_inverts_mtpa_torque():
     assert mtpa_torque(2, 0.1, 5e-3, 1.05e-2, i, g) == pytest.approx(4.0, rel=1e-6)
 
 
+def test_current_synrm_closed_form_inverts_mtpa():
+    # psi_f = 0: reluctance-only, MTPA at 45 deg, tau = 0.75*n_p*|dL|*I^2
+    from phasesweep.models.rated_torque import mtpa_gamma, mtpa_torque
+    i = current_for_torque(2, 0.0, 5e-3, 1.05e-2, 4.0)
+    assert i == pytest.approx((4.0 / (0.75 * 2 * 5.5e-3)) ** 0.5, rel=1e-12)
+    g = mtpa_gamma(0.0, 5e-3, 1.05e-2, i)
+    assert mtpa_torque(2, 0.0, 5e-3, 1.05e-2, i, g) == pytest.approx(4.0, rel=1e-9)
+
+
+def test_current_synrm_zero_torque():
+    assert current_for_torque(2, 0.0, 5e-3, 1.05e-2, 0.0) == 0.0
+
+
+def test_current_synrm_no_saliency_raises():
+    with pytest.raises(ValueError, match="cannot produce torque"):
+        current_for_torque(2, 0.0, 5e-3, 5e-3, 1.0)
+    with pytest.raises(ValueError, match="cannot produce torque"):
+        current_for_torque(2, 0.0, None, None, 1.0)
+
+
+def test_current_synrm_reverse_salient_closed_form():
+    # L_d > L_q SynRM convention: same closed form via |L_q - L_d|,
+    # roundtrips through the MTPA locus (gamma < 0, magnetizing i_d)
+    from phasesweep.models.rated_torque import mtpa_gamma, mtpa_torque
+    i = current_for_torque(2, 0.0, 1.05e-2, 5e-3, 4.0)
+    assert i == current_for_torque(2, 0.0, 5e-3, 1.05e-2, 4.0)
+    g = mtpa_gamma(0.0, 1.05e-2, 5e-3, i)
+    assert g < 0
+    assert mtpa_torque(2, 0.0, 1.05e-2, 5e-3, i, g) == pytest.approx(4.0, rel=1e-9)
+
+
+def test_current_synrm_negative_torque():
+    # Braking segments map through |tau| like the PM path
+    i_neg = current_for_torque(2, 0.0, 5e-3, 1.05e-2, -4.0)
+    assert i_neg == current_for_torque(2, 0.0, 5e-3, 1.05e-2, 4.0)
+
+
 def test_current_reverse_salient_roundtrip():
     # Reverse saliency (L_d > L_q): MTPA locus (gamma < 0, magnetizing i_d)
     # still needs less current than the non-salient mapping.
@@ -72,6 +109,23 @@ def test_current_reverse_salient_roundtrip():
     g = mtpa_gamma(0.1, 1.05e-2, 5e-3, i)
     assert g < 0
     assert mtpa_torque(2, 0.1, 1.05e-2, 5e-3, i, g) == pytest.approx(4.0, rel=1e-6)
+
+
+def test_run_synrm_psi_f_zero_end_to_end():
+    # SynRM through the full runner: budget from I_rated, segments mapped
+    # through the reluctance-only closed form.
+    r = run_thermal_duty(_config(_motor(psi_f=0.0)))
+    assert r["p_cu_avg"] > 0
+    assert r["p_s1_budget"] == pytest.approx(1.5 * 0.5 * 10.0**2)
+
+
+def test_run_synrm_negative_torque_segment():
+    # A braking segment dissipates the same copper loss as its motoring
+    # mirror — the runner must not choke on tau < 0 with psi_f = 0.
+    r = run_thermal_duty(_config(_motor(psi_f=0.0),
+                                 profile=((-5.0, 10.0), (5.0, 10.0))))
+    assert r["p_cu_peak"] == pytest.approx(r["p_cu_avg"], rel=1e-12)
+    assert r["p_cu_avg"] > 0
 
 
 # --- budget resolution ---
@@ -805,7 +859,7 @@ def test_w_ref_now_hashed_for_thermal_duty():
 
 
 def test_params_reject_negative_p_fe():
-    from phasesweep.solver_params import ThermalDutyParams
+    from phasesweep.models.thermal_duty import ThermalDutyParams
     with pytest.raises(ValueError, match="p_fe"):
         ThermalDutyParams(n_p=2, psi_f=0.1, R_s=0.5, p_s1_budget=10.0,
                           budget_source="rated_current",

@@ -47,6 +47,7 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | r_ag | m | Air-gap center radius = (r_stator + r_magnet)/2 | — (derived) |
 | OD | — | Outer Diameter (sensitivity parameter) | — |
 | L_stk | m | Stack (core) axial length | L (Table I: "Axial length") |
+| magnet_overhang | m | Magnet axial extension per side beyond L_stk; input to the offline 3D k_end solve, not used by the 2D solvers | — |
 | n_slots | — | Number of stator slots | Q_s (Table I) |
 | slot_depth | m | Slot depth perpendicular to bore | — (Zhu uses b_o for slot opening) |
 | slot_width_ratio | — | Slot body width as fraction of slot pitch | — |
@@ -57,12 +58,10 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 
 > **α_p scaling (Zhu Eq 7a).** For the fundamental harmonic, the ratio of
 > partial-pitch to full-pitch magnetization is exactly `sin(πα_p/2)`.
-> **Analytical:** `zhu_howe_Br` applies this as `k_mp = sin(πα_p/2)` directly.
-> **FEM:** The mesh models discrete magnet arcs (`_cut_magnet_arcs`
-> in `solvers/fem_field.py`) — `fem_runner` passes unscaled
-> `B_rem` together with `alpha_p`, and the geometry itself captures the
-> inter-magnet gaps. Arcs are skipped (full ring) when the gap width
-> would be < 0.5 mm, to avoid OCC boolean failures.
+> **Analytical:** the harmonic source applies this factor directly.
+> **FEM:** the mesh models discrete magnet arcs from unscaled `B_rem` and
+> `alpha_p`, so the geometry captures the inter-magnet gaps. The geometry
+> guide and physics spec own the arc-collapse rule.
 
 > **Key collision (resolved):** Zhu's R_s (stator bore radius) ≠ motulator's R_s
 > (stator winding resistance). Our `r_stator` sidesteps this. See `naming-crossref.md §1`.
@@ -84,7 +83,8 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 
 > **Zhu assumes infinite iron permeability** (boundary conditions Eq 11a–b impose
 > H_θ = 0 at iron surfaces). Our FEM solver relaxes this via finite mu_r_fe and
-> optional B-H curve with Picard iteration.
+> optional B-H curve with damped Newton iteration by default and Picard
+> startup/fallback.
 
 ## Air-Gap Flux Density
 
@@ -149,9 +149,9 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | i_s_ab | A (complex) | Stator current in αβ frame (peak) | motulator: `i_s_ab` ✓ |
 | J | kg·m² | Moment of inertia | motulator: `J` on MechanicalSystem ✓ |
 
-> **backemf_fundamental** formula in `registry.py`: `w_e = W_REF * n_p` correctly
-> converts mechanical → electrical, then `E = w_e × ψ_f`. Validated: CREATOR 47.91 V
-> computed vs 47.37 V measured (1.1%).
+> **backemf_fundamental:** mechanical speed is converted to electrical
+> speed before applying `E = ω_e × ψ_f`. Numerical validation results live
+> in the validation report.
 
 ## Winding Parameters
 
@@ -163,20 +163,23 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | coils_series | — | Coils in series per phase (required explicitly when N/k_w are set; no auto-derivation) | — |
 | R_s | Ω | Stator winding resistance | motulator: `R_s` on SynchronousMachinePars ✓ |
 | backemf_fundamental | V | Fundamental back-EMF (peak) = ω_e × ψ_f | — |
+| k_end | — | 3D axial end-effect factor on B_rem-derived flux linkage; computed offline by `scripts/compute_k_end.py` (never applied to a measured ψ_f). Bounds are documented in the motor TOML guide | — |
 
 > **N vs W:** Zhu's W = total series turns per phase. Our N = turns per coil.
-> The bridge is N_eff = N × coils_series ≈ W. For CREATOR: N=328, coils_series=2
-> (set in the TOML [winding] section), N_eff=656.
+> The bridge is N_eff = N × coils_series ≈ W; motor-specific values belong
+> in the corresponding TOML provenance comments.
 
 ## FEM Solver
 
 | Term | Meaning |
 |------|---------|
 | NGSolve | Open-source FEM library (Netgen/NGSolve, LGPL) for 2-D magnetostatics |
-| maxh_fraction | Max mesh element size as fraction of r_outer (default 0.05) |
-| n_theta | Angular sampling points in air-gap (default 360) |
-| nonlinear | Enables B-H curve with Picard iteration |
-| Picard iteration | Fixed-point iteration updating reluctivity from local |B| |
+| ElmerFEM | Independent open-source FEM code (CSC) used only to cross-verify the `fem`/`fem_axial` solvers via pinned comparisons (`scripts/elmer_*/`); never imported by the package |
+| maxh_fraction | Max mesh element size as fraction of r_outer; see `defaults.toml` for the default |
+| n_theta | Angular sampling points in air-gap; see `defaults.toml` for the default |
+| nonlinear | Enables the B-H curve; damped Newton is the default nonlinear method, with Picard startup/fallback |
+| Newton iteration | Line-search-damped nonlinear solve using the B-H tangent; the v0.5 default |
+| Picard iteration | Fixed-point iteration updating reluctivity from local \|B\|; used for Newton startup/fallback or when explicitly selected |
 | picard_relax | Relaxation factor (0–1) for Picard updates |
 | A-formulation | Magnetic vector potential: −∇·(ν ∇A_z) = source in PM region |
 | fes | Finite Element Space (H1 for potential, L2 for reluctivity) |
@@ -257,22 +260,18 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | key_mapping | Direct scalar-to-scalar mapping with per-quantity tolerance |
 | delta | Fallback: direct difference on shared metric keys |
 
-### Tolerance tiers
+### Tolerance ownership
 
-| Tier | Typical range | When used |
-|------|---------------|-----------|
-| Per-dataset | varies | Overrides in individual measured-data JSON (highest priority) |
-| Model-to-model | 1–10% | Comparing computed vs computed (analytical, fem, drive_sim) |
-| Model-to-published | 3–15% | Comparing computed vs literature values |
-| Model-to-measured | 5–20% | Comparing computed vs lab measurements |
-| Default | 10% | Fallback when quantity not in any table |
+Per-dataset tolerances take precedence. Shared policy and fallback values are
+defined by `phasesweep.validation.crossval`; they are not duplicated in the
+glossary.
 
 ## Reference Motors
 
 | Name | Topology | Poles/Slots | n_p | Key validation |
 |------|----------|-------------|-----|----------------|
-| CREATOR Case PMSM | Inrunner | 4p/6s | 2 | Back-EMF: 47.91 V computed vs 47.37 V measured (1.1%) |
-| Belkhadir 22p/24s ER-PMSM | Outrunner | 22p/24s | 11 | Air-gap B₁ ≈ 1.026 T (analytical) / 1.020 T (FEM) |
+| CREATOR Case PMSM | Inrunner | 4p/6s | 2 | Inset-magnet FEM and circuit-tier validation |
+| Belkhadir 22p/24s ER-PMSM | Outrunner | 22p/24s | 11 | Analytical/FEM air-gap-field validation |
 | Awan 2.2-kW IPM | Inrunner (salient) | 6p | 3 | Torque curve, MTPA angle |
 | Zhu & Howe 8-pole | Both | 8p/smooth | 4 | Paper reference geometry (analytical verification) |
 
@@ -308,4 +307,3 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | geometry_*.png | Motor cross-section sketch from Geometry |
 | field_*.png | Rasterized FEM field solution (|B| over the cross-section) |
 | sensitivity_*.png | Response change (%) vs parameter change (%) per track |
-

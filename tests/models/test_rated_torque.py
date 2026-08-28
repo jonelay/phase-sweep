@@ -18,9 +18,8 @@ import pytest
 
 from phasesweep.machines.geometry import default_inrunner
 from phasesweep.machines.motor import Motor
-from phasesweep.models.rated_torque import mtpa_curve, mtpa_gamma, mtpa_torque
+from phasesweep.models.rated_torque import mtpa_curve, mtpa_gamma, mtpa_torque, prepare_rated_torque
 from phasesweep.registry import MODEL_REGISTRY
-from phasesweep.solver_params import prepare_rated_torque
 from tests.conftest import REPO_ROOT
 from tests.conftest import make_motor as _make_motor
 
@@ -47,6 +46,28 @@ def test_salient_handcalc():
     # sin_gamma=0.2777341286, tau_mtpa=0.1068458108
     assert abs(result["tau_mtpa"] - 0.1068458108) < 1e-7
     assert result["tau_mtpa"] > 0
+
+
+# --- SynRM: psi_f = 0, reluctance-only torque ---
+def test_synrm_handcalc():
+    m = _make_motor(psi_f=0.0, L_d=5e-3, L_q=1.05e-2, I_rated=10.0)
+    result = MODEL_REGISTRY["rated_torque"].fn(_make_config(m))
+    # MTPA at 45 deg from q-axis: tau = 0.75 * n_p * |L_q - L_d| * I^2
+    expected = 0.75 * 2 * 5.5e-3 * 10.0**2
+    assert result["tau_mtpa"] == pytest.approx(expected, rel=1e-9)
+    assert result["gamma_opt_deg"] == pytest.approx(45.0, rel=1e-9)
+    assert result["k_T"] == 0.0
+
+
+def test_synrm_no_saliency_raises():
+    # psi_f = 0 with L_d == L_q (or unset) cannot produce torque — a
+    # silent tau_mtpa = 0 result would poison downstream consumers.
+    m_equal = _make_motor(psi_f=0.0, L_d=5e-3, L_q=5e-3, I_rated=10.0)
+    with pytest.raises(ValueError, match="cannot produce torque"):
+        MODEL_REGISTRY["rated_torque"].fn(_make_config(m_equal))
+    m_unset = _make_motor(psi_f=0.0, L_d=None, L_q=None, I_rated=10.0)
+    with pytest.raises(ValueError, match="cannot produce torque"):
+        MODEL_REGISTRY["rated_torque"].fn(_make_config(m_unset))
 
 
 # --- Test 3: Non-salient fallback (L_d == L_q gives same as None) ---

@@ -14,10 +14,7 @@ harmonic decomposition: phasesweep.harmonics.
 from __future__ import annotations
 
 import logging
-import os
-import tempfile
 from math import pi
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
@@ -27,505 +24,31 @@ if TYPE_CHECKING:
     from ngsolve import CoefficientFunction, GridFunction, Mesh
     from ngsolve.comp import FESpace, LinearForm
 
-from phasesweep.machines.geometry import Geometry, default_inrunner
+from phasesweep.machines.geometry import Geometry
+from phasesweep.solvers.fem_materials import _MU0, _bh_nu, _bh_nu_prime
+from phasesweep.solvers.fem_mesh import (
+    _MIN_ARC_GAP_M,
+    _arcs_active,
+    _circle_spec,
+    _get_or_build_mesh,
+    _interpole_gap_width,
+)
+from phasesweep.solvers.fem_sampling import sample_Br
 
 # ---------------------------------------------------------------------------
 # Physical constants
 # ---------------------------------------------------------------------------
-_MU0: float = 4e-7 * pi
 _MIN_PICARD_RELAX: float = 0.02
 
-# Interpole gaps narrower than this collapse to a full PM ring (α_p = 1.0):
-# OCC boolean cuts on sub-0.5 mm arc slivers fail unreliably ("Could not
-# divide Edge"). solve_field_fem warns and flags the collapse.
-_MIN_ARC_GAP_M: float = 5e-4
-
-
-def _interpole_gap_width(geo: Geometry, alpha_p: float, n_p: int) -> float:
-    """Arc-length width of the interpole gap between adjacent magnet arcs.
-
-    Evaluated at the *inner* PM-annulus radius (rotor iron behind the
-    magnets: ``r_rotor`` inrunner, ``r_magnet`` outrunner). The gap is a
-    radial wedge whose arc-length grows with radius, so the inner edge is
-    its narrowest point — where the OCC boolean fails to cut the sliver
-    (the ``_MIN_ARC_GAP_M`` collapse threshold) and where the pm_gap
-    refinement must place its ≥2 elements. Using the outer radius here
-    overestimated the gap on both topologies (fem v6 and earlier).
-    """
-    r_pm = geo.r_rotor if geo.topology == "inrunner" else geo.r_magnet
-    return (1 - alpha_p) * pi / n_p * r_pm
-
-# ---------------------------------------------------------------------------
-# Mesh cache — keyed by (config_id, maxh_fraction, n_slots,
-#                        slot_width_ratio, alpha_p, n_p, rotation)
-# In-memory + optional disk persistence for subprocess workers.
-# ---------------------------------------------------------------------------
-_CacheKey = tuple[str, float, int, float, float, int, float]
-_mesh_cache: dict[_CacheKey, Mesh] = {}
-_disk_cache_dir: Path | None = None
-
-
-def set_disk_cache_dir(path: Path | str | None) -> None:
-    """Enable disk mesh cache. Set to None to disable."""
-    global _disk_cache_dir
-    if path is not None:
-        p = Path(path)
-        p.mkdir(parents=True, exist_ok=True)
-        _disk_cache_dir = p
-    else:
-        _disk_cache_dir = None
-
-
-def clear_mesh_cache() -> None:
-    """Drop all cached meshes (for testing or memory management)."""
-    _mesh_cache.clear()
-
-
-def _cache_filename(key: _CacheKey) -> str:
-    config_id, maxh_frac, n_slots, swr, alpha_p, n_p, _rotation = key
-    # v5: injective float repr — the old 6-sig-fig %g could serve the wrong
-    # mesh for params differing below 1e-6 relative. Rotated keys never
-    # reach disk (see _save_to_disk), so no rotation suffix.
-    # v6: interpole gap width measured at the inner radius (fem v7) changes
-    # pm_gap and global maxh for every alpha_p<1 mesh — invalidate stale
-    # .vol.gz.
-    return (f"mesh_v6_{config_id}_{maxh_frac!r}_{n_slots}_{swr!r}"
-            f"_{alpha_p!r}_{n_p}.vol.gz")
-
-
-def _load_from_disk(key: _CacheKey) -> Mesh | None:
-    if _disk_cache_dir is None or key[6] != 0.0:
-        return None
-    fpath = _disk_cache_dir / _cache_filename(key)
-    if not fpath.exists():
-        return None
-    from netgen.meshing import Mesh as NetMesh
-    from ngsolve import Mesh
-    nm = NetMesh()
-    try:
-        nm.Load(str(fpath))
-    except Exception:
-        # Corrupt cache entry (e.g. interrupted write) — drop and rebuild.
-        # Load raises from C++; the exception type is not stable across
-        # netgen versions, so catch broadly.
-        logging.warning("corrupt mesh cache %s, rebuilding", fpath.name)
-        fpath.unlink(missing_ok=True)
-        return None
-    return Mesh(nm)
-
-
-def _save_to_disk(key: _CacheKey, mesh: Mesh) -> None:
-    # Rotated meshes (cogging sweeps: one per angle) stay in-memory only —
-    # persisting them would grow the disk cache without bound.
-    if _disk_cache_dir is None or key[6] != 0.0:
-        return
-    fpath = _disk_cache_dir / _cache_filename(key)
-    # Unique temp name per writer — parallel workers on the same key must
-    # not interleave; .vol.gz suffix keeps NGSolve from appending it again
-    fd, tmp = tempfile.mkstemp(dir=_disk_cache_dir, suffix=".vol.gz")
-    os.close(fd)
-    mesh.ngmesh.Save(tmp)
-    Path(tmp).replace(fpath)
-
-# Generic soft magnetic steel B-H curve (representative, not grade-specific).
-# Source: composite of textbook soft iron data; suitable for design exploration.
-_BH_B = np.array([
-    0.0, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.2,
-    1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2,
-])
-_BH_H = np.array([
-    0., 25., 40., 60., 80., 110., 160., 210., 310.,
-    480., 900., 1800., 3800., 7500., 15000., 30000., 60000., 120000., 200000.,
-])
-
-# Default geometry for analytical model function defaults
-_DEFAULT_GEO = default_inrunner()
-
-
-def _bh_nu(B_mag: NDArray) -> NDArray:
-    """Reluctivity ν(|B|) from generic soft iron B-H curve.
-
-    Beyond the table end the curve continues with the vacuum differential
-    slope, H = H_end + (B − B_end)/μ0, so the secant ν = H/B is monotone
-    and approaches 1/μ0 from below. (np.interp alone would clamp H and
-    make deeply saturated iron look magnetically softer with rising B.)
-    """
-    H = np.interp(B_mag, _BH_B, _BH_H)
-    beyond = B_mag > _BH_B[-1]
-    if np.any(beyond):
-        H = np.where(beyond, _BH_H[-1] + (B_mag - _BH_B[-1]) / _MU0, H)
-    B_safe = np.maximum(B_mag, 1e-12)
-    nu = H / B_safe
-    nu_0 = _BH_H[1] / _BH_B[1]
-    return np.clip(nu, nu_0, 1 / _MU0)
-
-
-# ---------------------------------------------------------------------------
-# Region list from geometry
-# ---------------------------------------------------------------------------
-
-def _circle_spec(geo: Geometry) -> list[tuple[float, str]]:
-    """Return (radius, material_name) pairs ordered outside-in.
-
-    Inrunner: 4 regions (stator, airgap, pm, shaft). The shaft region is
-    meshed as solid iron to r=0 — r_inner is NOT represented. Accurate for
-    magnetic steel shafts (rotor yoke + shaft form one continuous iron
-    disk); hollow or non-magnetic shafts are not modeled, so a thin rotor
-    yoke over such a shaft cannot saturate realistically.
-    Outrunner: 5 regions (stator, airgap, pm, yoke, air), or 6 when
-    back_iron_thickness splits the yoke into back_iron (iron) + shell (mu_r=1).
-    """
-    if geo.topology == "inrunner":
-        return [
-            (geo.r_outer, "stator"),
-            (geo.r_stator, "airgap"),
-            (geo.r_magnet, "pm"),
-            (geo.r_rotor, "shaft"),
-        ]
-    # outrunner: outside-in = rotor back-iron, pm, airgap, stator, air
-    tail = [
-        (geo.r_rotor, "pm"),
-        (geo.r_magnet, "airgap"),
-        (geo.r_stator, "stator"),
-        (geo.r_inner, "air"),
-    ]
-    if geo.back_iron_thickness is not None:
-        r_bi = geo.r_rotor + geo.back_iron_thickness
-        return [(geo.r_outer, "shell"), (r_bi, "back_iron"), *tail]
-    return [(geo.r_outer, "yoke"), *tail]
-
-
-# ---------------------------------------------------------------------------
-# Geometry builders — parameterized by Geometry
-# ---------------------------------------------------------------------------
-
-def _build_annular_regions(
-    geo: Geometry,
-) -> tuple[list[Any], Any | None, dict[str, Any]]:
-    """Build annular ring faces from circle spec, outside-in.
-
-    Returns (faces, innermost_or_None, named_faces_dict).
-    named_faces_dict maps region name -> face for downstream operations.
-    """
-    from netgen.occ import WorkPlane
-
-    specs = _circle_spec(geo)
-    radii = [r for r, _ in specs]
-    names = [n for _, n in specs]
-
-    faces = []
-    named: dict[str, Any] = {}
-    for i in range(len(radii) - 1):
-        f_big = WorkPlane().Circle(radii[i]).Face()
-        f_small = WorkPlane().Circle(radii[i + 1]).Face()
-        region = f_big - f_small
-        region.faces.name = names[i]
-        faces.append(region)
-        named[names[i]] = region
-
-    innermost = None
-    if radii[-1] > 0:
-        f_inner = WorkPlane().Circle(radii[-1]).Face()
-        f_inner.faces.name = names[-1]
-        faces.append(f_inner)
-        named[names[-1]] = f_inner
-        innermost = f_inner
-
-    return faces, innermost, named
-
-
-def _cut_slots(
-    stator_face: Any,
-    geo: Geometry,
-    n_slots: int,
-    slot_width_ratio: float,
-    slot_depth: float,
-    slot_opening_ratio: float = 0.0,
-) -> tuple[Any, list[Any]]:
-    """Cut slots from stator face. Returns (modified_stator, slot_faces).
-
-    When slot_opening_ratio > 0 and differs from slot_width_ratio, cuts a
-    trapezoidal slot (narrow opening at bore, wider body at yoke).
-    """
-    from math import cos, sin
-    from math import pi as _pi
-
-    from netgen.occ import WorkPlane
-
-    delta_body = slot_width_ratio * _pi / n_slots
-    delta_open = (slot_opening_ratio if slot_opening_ratio > 0
-                  else slot_width_ratio) * _pi / n_slots
-
-    tapered = abs(delta_open - delta_body) > 1e-9
-
-    if geo.topology == "inrunner":
-        r_bore = geo.r_stator
-        r_bottom = geo.r_stator + slot_depth
-    else:
-        r_bore = geo.r_stator
-        r_bottom = geo.r_stator - slot_depth
-
-    # For stepped slots: opening depth as fraction of total slot depth
-    from phasesweep.defaults import SLOT_OPENING_FRACTION
-    if tapered:
-        if geo.topology == "inrunner":
-            r_step = r_bore + SLOT_OPENING_FRACTION * slot_depth
-        else:
-            r_step = r_bore - SLOT_OPENING_FRACTION * slot_depth
-
-    R_big = 2.0 * geo.r_outer
-
-    def _wedge_annulus(theta_k, delta, r_outer_clip, r_inner_clip):
-        wp = WorkPlane()
-        wp.MoveTo(0., 0.)
-        wp.LineTo(R_big * cos(theta_k - delta),
-                   R_big * sin(theta_k - delta))
-        wp.LineTo(R_big * cos(theta_k + delta),
-                   R_big * sin(theta_k + delta))
-        wp.Close()
-        f_o = WorkPlane().Circle(r_outer_clip).Face()
-        f_i = WorkPlane().Circle(r_inner_clip).Face()
-        return (wp.Face() * f_o) - f_i
-
-    slot_faces = []
-    for k in range(n_slots):
-        theta_k = 2 * _pi * k / n_slots
-
-        if not tapered:
-            sf = _wedge_annulus(theta_k, delta_body,
-                                max(r_bore, r_bottom), min(r_bore, r_bottom))
-            sf.faces.name = "slot"
-            stator_face = stator_face - sf
-            slot_faces.append(sf)
-        else:
-            # Stepped slot: two separate cuts per slot
-            if geo.topology == "inrunner":
-                sf_open = _wedge_annulus(theta_k, delta_open, r_step, r_bore)
-                sf_body = _wedge_annulus(theta_k, delta_body, r_bottom, r_step)
-            else:
-                sf_open = _wedge_annulus(theta_k, delta_open, r_bore, r_step)
-                sf_body = _wedge_annulus(theta_k, delta_body, r_step, r_bottom)
-
-            sf_open.faces.name = "slot"
-            sf_body.faces.name = "slot"
-            stator_face = stator_face - sf_open
-            stator_face = stator_face - sf_body
-            slot_faces.append(sf_open)
-            slot_faces.append(sf_body)
-
-    stator_face.faces.name = "stator"
-    return stator_face, slot_faces
-
-
-def slot_source_moment(
-    geo: Geometry,
-    n_slots: int | None = None,
-    slot_width_ratio: float | None = None,
-    n_p: int | None = None,
-) -> float:
-    """Radial second moment of the slot faces per unit angle (m²).
-
-    S = Σ_parts w_part · (r_hi² − r_lo²) / 2 over the slot cross-section
-    parts that ``_cut_slots`` builds (one annular sector, or opening +
-    body when the slot is stepped), with w = angular duty (width / pitch).
-
-    For the current-sheet source J_z = -j_s·k_w·cos(n_p·θ) over the slot
-    faces, the fundamental of the ampere-turns-per-angle distribution is
-    j_s·k_w·S: the θ-comb of uniformly spaced slots contributes its duty
-    factor exactly (the cross terms cancel by symmetry unless 2·n_p is a
-    multiple of n_slots), and behind high-μ teeth only a slot's total
-    ampere-turns set the gap field, not their radial position. This is
-    the geometry factor of the j_s ↔ phase-current mapping
-    (``solver_params.j_s_from_phase_current``).
-
-    Defaults mirror ``solve_field_fem``: n_slots / slot_width_ratio from
-    the geometry, opening taper from ``geo.slot_opening_ratio``. Raises
-    ValueError when the geometry builds no slot faces (n_slots == 0 or
-    slot_depth == 0) — the same configurations on which j_s would raise —
-    and, when ``n_p`` is given, when 2·n_p is a multiple of n_slots (the
-    cross terms then add up to +2/π·duty-level error instead of
-    cancelling; such combos put adjacent slots at electrical angle 0/π
-    and cannot be wound as a balanced 3-phase machine anyway).
-    """
-    from phasesweep.defaults import SLOT_OPENING_FRACTION
-
-    if n_slots is None:
-        n_slots = geo.n_slots
-    if slot_width_ratio is None:
-        slot_width_ratio = geo.slot_width_ratio
-    if n_slots == 0 or geo.slot_depth <= 0:
-        raise ValueError(
-            "slot_source_moment requires slot faces (n_slots > 0 and "
-            "slot_depth > 0) — this geometry cannot carry a j_s source"
-        )
-    if n_p is not None and (2 * n_p) % n_slots == 0:
-        raise ValueError(
-            f"2*n_p={2 * n_p} is a multiple of n_slots={n_slots}: the "
-            "slot-comb cross terms do not cancel and the j_s ↔ "
-            "phase-current mapping would be off by tens of percent — "
-            "this slot/pole combo is electrically degenerate (all slot "
-            "EMF phasors collinear) and unsupported"
-        )
-
-    w_body = slot_width_ratio
-    w_open = (geo.slot_opening_ratio if geo.slot_opening_ratio > 0
-              else slot_width_ratio)
-    tapered = abs(w_open - w_body) * pi / n_slots > 1e-9
-
-    sign = 1.0 if geo.topology == "inrunner" else -1.0
-    r_bore = geo.r_stator
-    r_bottom = r_bore + sign * geo.slot_depth
-    if not tapered:
-        return w_body * abs(r_bottom**2 - r_bore**2) / 2
-    r_step = r_bore + sign * SLOT_OPENING_FRACTION * geo.slot_depth
-    return (w_open * abs(r_step**2 - r_bore**2) / 2
-            + w_body * abs(r_bottom**2 - r_step**2) / 2)
-
-
-def _cut_magnet_arcs(
-    geo: Geometry,
-    n_p: int,
-    alpha_p: float,
-    rotation: float = 0.0,
-) -> tuple[list[Any], list[Any]]:
-    """Cut PM annulus into discrete arcs + interpole gaps.
-
-    Returns (arc_faces named "pm", gap_faces named "pm_gap").
-    2*n_p arcs centered on pole axes at theta_k = k*pi/n_p + rotation.
-    """
-    from math import cos, sin
-    from math import pi as _pi
-
-    from netgen.occ import WorkPlane
-
-    arc_faces = []
-    gap_faces = []
-    R_big = 2.0 * geo.r_outer
-
-    # PM annulus radii for intersection
-    if geo.topology == "inrunner":
-        r_pm_outer = geo.r_magnet
-        r_pm_inner = geo.r_rotor
-    else:
-        r_pm_outer = geo.r_rotor
-        r_pm_inner = geo.r_magnet
-
-    for k in range(2 * n_p):
-        theta_k = _pi * k / n_p + rotation
-        # Arc half-angle
-        arc_half = alpha_p * _pi / (2 * n_p)
-        # Gap half-angle (from arc edge to next arc edge)
-        gap_half = (1 - alpha_p) * _pi / (2 * n_p)
-
-        # Build arc wedge
-        a_lo = theta_k - arc_half
-        a_hi = theta_k + arc_half
-        wp = WorkPlane()
-        wp.MoveTo(0., 0.)
-        wp.LineTo(R_big * cos(a_lo), R_big * sin(a_lo))
-        wp.LineTo(R_big * cos(a_hi), R_big * sin(a_hi))
-        wp.Close()
-        wedge = wp.Face()
-
-        f_outer = WorkPlane().Circle(r_pm_outer).Face()
-        f_inner = WorkPlane().Circle(r_pm_inner).Face()
-        arc = (wedge * f_outer) - f_inner
-        arc.faces.name = "pm"
-        arc_faces.append(arc)
-
-        # Build gap wedge (between this arc and the next)
-        if gap_half > 1e-10:
-            g_lo = theta_k + arc_half
-            g_hi = theta_k + arc_half + 2 * gap_half
-            wp = WorkPlane()
-            wp.MoveTo(0., 0.)
-            wp.LineTo(R_big * cos(g_lo), R_big * sin(g_lo))
-            wp.LineTo(R_big * cos(g_hi), R_big * sin(g_hi))
-            wp.Close()
-            wedge_g = wp.Face()
-
-            gap = (wedge_g * f_outer) - f_inner
-            gap.faces.name = "pm_gap"
-            gap_faces.append(gap)
-
-    return arc_faces, gap_faces
-
-
-def _build_motor_geometry(
-    geo: Geometry,
-    *,
-    n_slots: int = 0,
-    slot_width_ratio: float = 0.6,
-    slot_depth: float = 0.0,
-    slot_opening_ratio: float = 0.0,
-    alpha_p: float = 1.0,
-    n_p: int = 0,
-    rotation: float = 0.0,
-) -> Any:
-    """Composable motor geometry builder.
-
-    1. Build annular regions (always)
-    2. Cut magnet arcs (when alpha_p < 1), pole axes offset by ``rotation``
-    3. Cut slots (when n_slots > 0), always stator-fixed
-    """
-    from netgen.occ import Glue
-
-    faces, _innermost, named = _build_annular_regions(geo)
-
-    # Cut magnet arcs if partial-pitch; sub-threshold gaps collapse to the
-    # full ring (solve_field_fem warns and sets info["arcs_collapsed"])
-    _do_arcs = (alpha_p < 1.0 and n_p > 0
-                and _interpole_gap_width(geo, alpha_p, n_p) >= _MIN_ARC_GAP_M)
-    if _do_arcs:
-        pm_face = named["pm"]
-        arc_faces, gap_faces = _cut_magnet_arcs(geo, n_p, alpha_p, rotation)
-        faces = [f for f in faces if f is not pm_face]
-        faces.extend(arc_faces)
-        faces.extend(gap_faces)
-
-    # Cut slots
-    if n_slots > 0 and slot_depth > 0:
-        stator_face = named["stator"]
-        faces = [f for f in faces if f is not stator_face]
-        modified_stator, slot_faces = _cut_slots(
-            stator_face, geo, n_slots, slot_width_ratio, slot_depth,
-            slot_opening_ratio,
-        )
-        faces.append(modified_stator)
-        faces.extend(slot_faces)
-
-    glued = Glue(faces)
-
-    # Name outer boundary edges on the glued shape — edges created before
-    # Glue lose their names, so match by circumference instead
-    circumference = 2 * pi * _circle_spec(geo)[0][0]
-    for e in glued.edges:
-        if abs(e.mass - circumference) < 1e-6 * circumference:
-            e.name = "outer"
-
-    return glued
-
-
-# Legacy wrappers (used by tests that call these directly)
-def _build_geometry(geo: Geometry) -> Any:
-    """Concentric-circle motor cross-section from Geometry."""
-    return _build_motor_geometry(geo)
-
-
-def _build_slotted_geometry(
-    geo: Geometry,
-    n_slots: int | None = None,
-    slot_width_ratio: float | None = None,
-    slot_depth: float | None = None,
-) -> Any:
-    """Motor cross-section with slots cut into the stator."""
-    _n_slots = n_slots if n_slots is not None else geo.n_slots
-    _swr = slot_width_ratio if slot_width_ratio is not None else geo.slot_width_ratio
-    _sd = slot_depth if slot_depth is not None else geo.slot_depth
-    return _build_motor_geometry(
-        geo, n_slots=_n_slots, slot_width_ratio=_swr, slot_depth=_sd,
-        slot_opening_ratio=geo.slot_opening_ratio,
-    )
+# Newton BH solve: stop threshold on the relative algebraic residual
+# ||K(nu(u))u - f|| / ||f||. 1e-4 matches or beats Picard's
+# shipping-tolerance B1 accuracy on the production nonlinear cases
+# (scripts/newton_bh_spike.py). Before the Newton loop, a few relaxed
+# Picard nu-updates improve the seed (the Elmer MagnetoDynamics2D /
+# Vande Sande hybrid start-up pattern); unrelaxed start-up steps are
+# not safe — see the divergence comment in _picard_solve.
+_NEWTON_RTOL: float = 1e-4
+_NEWTON_STARTUP_PICARD: int = 2
 
 
 # ---------------------------------------------------------------------------
@@ -541,69 +64,6 @@ def _demoivre(n_p: int) -> tuple[CoefficientFunction, CoefficientFunction]:
     for _ in range(n_p - 1):
         cr, si = cr * cos_t - si * sin_t, cr * sin_t + si * cos_t
     return cr, si
-
-
-def _get_or_build_mesh(
-    geo: Geometry,
-    maxh_fraction: float,
-    n_slots: int,
-    slot_width_ratio: float,
-    alpha_p: float,
-    n_p: int,
-    has_arcs: bool,
-    rotation: float = 0.0,
-) -> Mesh:
-    """Motor cross-section mesh: in-process cache → disk cache → build."""
-    from netgen.occ import OCCGeometry
-    from ngsolve import Mesh
-
-    cache_key: _CacheKey = (geo.config_id, maxh_fraction, n_slots,
-                            slot_width_ratio, alpha_p, n_p, rotation)
-    mesh = _mesh_cache.get(cache_key)
-    if mesh is None:
-        mesh = _load_from_disk(cache_key)
-    if mesh is None:
-        maxh = maxh_fraction * geo.r_outer
-        slot_depth = geo.slot_depth if n_slots > 0 else 0.0
-        shape = _build_motor_geometry(
-            geo,
-            n_slots=n_slots,
-            slot_width_ratio=slot_width_ratio,
-            slot_depth=slot_depth,
-            slot_opening_ratio=geo.slot_opening_ratio,
-            alpha_p=alpha_p,
-            n_p=n_p,
-            rotation=rotation,
-        )
-        if n_slots > 0:
-            maxh = min(maxh, 0.03 * geo.r_outer)
-        # Refine for interpole gaps — at least 2 elements across.
-        # The global maxh keeps its 0.5 mm floor; the per-face maxh
-        # below enforces the rule locally for 0.5–1.0 mm gaps where the
-        # floor would otherwise under-resolve (a no-op for wider gaps).
-        if has_arcs:
-            gap_width = _interpole_gap_width(geo, alpha_p, n_p)
-            clamp = max(gap_width * 0.5, _MIN_ARC_GAP_M)
-            if clamp < maxh:
-                # The arc clamp binds: for mm-scale arc motors the
-                # gap/2 term drives the global maxh below maxh_fraction·
-                # r_outer, which is then inert.
-                logging.info(
-                    "interpole arc clamp: global maxh %.4g mm -> %.4g mm "
-                    "(gap/2=%.4g mm, alpha_p=%.4g); maxh_fraction now inert",
-                    maxh * 1e3, clamp * 1e3, gap_width * 0.5 * 1e3, alpha_p,
-                )
-            maxh = min(maxh, clamp)
-            shape.faces["pm_gap"].maxh = gap_width * 0.5
-        # Tie airgap element size to the gap width via per-face maxh so the
-        # refinement stays local: thin-gap motors otherwise get a single
-        # element across the gap (14 mm outrunner: 0.26 mm gap vs 0.29 mm global
-        # maxh), under-resolving B_r at the r_ag sampling circle.
-        shape.faces["airgap"].maxh = abs(geo.r_stator - geo.r_magnet) / 3
-        mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=maxh))
-        _save_to_disk(cache_key, mesh)
-    _mesh_cache[cache_key] = mesh
-    return mesh
 
 
 def _picard_solve(
@@ -709,6 +169,180 @@ def _picard_solve(
         info["picard_residual"] = float(delta_raw_rel)
 
 
+def _newton_solve(
+    mesh: Mesh,
+    fes: FESpace,
+    lf: LinearForm,
+    gfu: GridFunction,
+    nu: CoefficientFunction,
+    region_names: list[str],
+    iron_regions: set[str],
+    max_newton: int,
+    info: dict[str, float] | None,
+) -> None:
+    """Nonlinear BH solve: Newton iteration with line-search damping.
+
+    Same discrete system as ``_picard_solve`` (element-wise L2^0 nu from
+    the BH table, element-averaged |B|), so both solvers converge to the
+    same solution — verified to ~1e-6 T on the production cases by
+    scripts/newton_bh_spike.py. Stops on the algebraic residual
+    ``_NEWTON_RTOL``, NOT on a nu-step criterion: the line search leaves
+    nu at nu(u), so a nu-step check here would compare nu(u) with itself
+    and report false convergence after one step.
+
+    The Jacobian uses the normalized SPD tangent form
+    nu_t I + (nu_l - nu_t) n n^T (n = grad A/|grad A| pointwise,
+    nu_l = dH/dB per element — see the jac comment below). nu_l is
+    evaluated at the element-averaged |B| while n is pointwise — an
+    inconsistent Jacobian, so the asymptotic rate is linear rather than
+    quadratic; irrelevant at the 1e-4 stop (several times fewer
+    iterations than Picard on the production cases,
+    scripts/newton_bh_spike.py).
+
+    Raises:
+        RuntimeError: If the line search stalls or ``max_newton`` is
+            exhausted. Callers fall back to ``_picard_solve``.
+    """
+    from ngsolve import L2, BilinearForm, GridFunction, dx, grad, sqrt
+
+    u, v = fes.TnT()
+    fes_nu = L2(mesh, order=0)
+    gfu_nu = GridFunction(fes_nu)
+    gfu_nu.Set(nu)
+
+    is_iron_cf: dict[str, float] = {
+        name: (1.0 if name in iron_regions else 0.0)
+        for name in region_names
+    }
+    iron_indicator = GridFunction(fes_nu)
+    iron_indicator.Set(mesh.MaterialCF(is_iron_cf))
+    iron_mask = iron_indicator.vec.FV().NumPy() > 0.5
+
+    free = fes.FreeDofs()
+    free_mask = np.array([free[i] for i in range(fes.ndof)])
+    lf_np = lf.vec.FV().NumPy().copy()
+
+    gg = grad(gfu)
+    gfu_coeff = GridFunction(fes_nu)
+    a = BilinearForm(gfu_nu * grad(u) * grad(v) * dx)
+    # Normalized SPD tangent form (ported from the wedge Newton):
+    # nu_t I + (nu_l - nu_t) n n^T with n = grad A/|grad A| pointwise,
+    # nu_t = nu(B_e) and nu_l = dH/dB(B_e) per element. Pointwise
+    # eigenvalues are exactly {nu_l, nu_t, nu_t} > 0 (the monotone BH
+    # spline keeps dH/dB > 0), so jac stays SPD even where nu' < 0 —
+    # which the PCHIP secant makes common at low B. The old
+    # un-normalized (nu'/|B_e|)(grad A . grad u)(grad A . grad v) term
+    # went indefinite there (pointwise |grad A| >> B_e in corners) and
+    # stalled convergence on saturating geometries. The 1e-30 T^2
+    # regularizer only matters at exactly-zero gradient, where the
+    # numerator vanishes too.
+    jac = BilinearForm(
+        gfu_nu * grad(u) * grad(v) * dx
+        + gfu_coeff * (gg * grad(u)) * (gg * grad(v)) / (gg * gg + 1e-30) * dx
+    )
+
+    tmp = gfu.vec.CreateVector()
+    rvec = gfu.vec.CreateVector()
+    step = gfu.vec.CreateVector()
+
+    def project_Bmag() -> NDArray:
+        gfu_B = GridFunction(fes_nu)
+        gfu_B.Set(sqrt(gg[0]**2 + gg[1]**2))
+        return gfu_B.vec.FV().NumPy().copy()
+
+    def residual_np() -> NDArray:
+        a.Assemble()
+        tmp.data = a.mat * gfu.vec
+        r = tmp.FV().NumPy() - lf_np
+        r[~free_mask] = 0.0
+        return r
+
+    # Iteration 0: linear solve with the seed nu (identical to Picard's
+    # first solve).
+    a.Assemble()
+    gfu.vec.data = a.mat.Inverse(free, inverse="sparsecholesky") * lf.vec
+
+    nu_seed = gfu_nu.vec.FV().NumPy().copy()
+
+    # Picard start-up: a few relaxed nu-updates before Newton (hybrid
+    # Picard->Newton pattern). Relaxed with the shipping Picard factor —
+    # unrelaxed steps diverge on saturating geometries (see
+    # _picard_solve). Capped by the shared iteration budget, always
+    # reserving at least one Newton iteration.
+    from phasesweep.defaults import PICARD_RELAXATION
+    n_startup = min(_NEWTON_STARTUP_PICARD, max(0, max_newton - 1))
+    for _ in range(n_startup):
+        nu_cur = gfu_nu.vec.FV().NumPy().copy()
+        nu_upd = nu_cur.copy()
+        nu_upd[iron_mask] = (
+            PICARD_RELAXATION * _bh_nu(project_Bmag())[iron_mask]
+            + (1 - PICARD_RELAXATION) * nu_cur[iron_mask]
+        )
+        gfu_nu.vec.FV().NumPy()[:] = nu_upd
+        a.Assemble()
+        gfu.vec.data = a.mat.Inverse(free, inverse="sparsecholesky") * lf.vec
+
+    f_norm = float(np.linalg.norm(lf_np[free_mask]))
+    n_backtracks = 0
+    rel_res = float("inf")
+    for _newton_i in range(max(1, max_newton - n_startup)):
+        B_vals = project_Bmag()
+        nu_upd = nu_seed.copy()
+        nu_upd[iron_mask] = _bh_nu(B_vals)[iron_mask]
+        gfu_nu.vec.FV().NumPy()[:] = nu_upd
+        r_np = residual_np()
+        rnorm = float(np.linalg.norm(r_np))
+        rel_res = rnorm / f_norm
+        if rel_res < _NEWTON_RTOL:
+            break
+
+        # Tangent slope nu_l = dH/dB of the effective clipped curve,
+        # nu + B*nu' — analytic from the BH spline (equals nu on the
+        # clip plateau, where the correction vanishes). Positive by
+        # monotonicity; floored well below nu_0 as pure safety.
+        nu_p = _bh_nu_prime(B_vals)
+        nu_l = np.maximum(nu_upd + B_vals * nu_p, 1.0)
+        gfu_coeff.vec.FV().NumPy()[:] = np.where(
+            iron_mask, nu_l - nu_upd, 0.0)
+
+        jac.Assemble()
+        jinv = jac.mat.Inverse(free, inverse="sparsecholesky")
+
+        rvec.FV().NumPy()[:] = r_np
+        step.data = jinv * rvec
+        step_np = step.FV().NumPy().copy()
+
+        u0 = gfu.vec.FV().NumPy().copy()
+        alpha, accepted = 1.0, False
+        for _ in range(8):
+            gfu.vec.FV().NumPy()[:] = u0 - alpha * step_np
+            nu_trial = nu_seed.copy()
+            nu_trial[iron_mask] = _bh_nu(project_Bmag())[iron_mask]
+            gfu_nu.vec.FV().NumPy()[:] = nu_trial
+            if float(np.linalg.norm(residual_np())) < rnorm:
+                accepted = True
+                break
+            n_backtracks += 1
+            alpha *= 0.5
+        if not accepted:
+            gfu.vec.FV().NumPy()[:] = u0
+            raise RuntimeError(
+                f"Newton line search stalled at iteration {_newton_i + 1} "
+                f"(rel residual: {rel_res:.4e})"
+            )
+    else:
+        raise RuntimeError(
+            f"Newton iteration did not converge in {max_newton} iterations "
+            f"({n_startup} Picard start-up + {max_newton - n_startup} Newton; "
+            f"rel residual: {rel_res:.4e}, tol: {_NEWTON_RTOL})"
+        )
+    if info is not None:
+        info["newton_iterations"] = float(_newton_i + 1)
+        info["newton_startup_iterations"] = float(n_startup)
+        info["newton_backtracks"] = float(n_backtracks)
+        info["newton_rel_residual"] = float(rel_res)
+
+
 def _check_iron_saturation(
     mesh: Mesh,
     gfu: GridFunction,
@@ -748,8 +382,11 @@ def solve_field_fem(
     n_slots: int | None = ..., j_s: float = ..., k_w: float = ...,
     slot_width_ratio: float | None = ..., nonlinear: bool = ...,
     max_picard: int = ..., picard_tol: float = ..., picard_relax: float = ...,
+    nonlinear_solver: str = ...,
     alpha_p: float = ..., rotation: float = ..., sheet_phase: float = ...,
     info: dict[str, float] | None = ...,
+    magnetization: str = ..., halbach_segments: int | None = ...,
+    halbach_angles_rad: tuple[float, ...] | None = ...,
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]: ...
 
 @overload
@@ -760,8 +397,11 @@ def solve_field_fem(
     n_slots: int | None = ..., j_s: float = ..., k_w: float = ...,
     slot_width_ratio: float | None = ..., nonlinear: bool = ...,
     max_picard: int = ..., picard_tol: float = ..., picard_relax: float = ...,
+    nonlinear_solver: str = ...,
     alpha_p: float = ..., rotation: float = ..., sheet_phase: float = ...,
     info: dict[str, float] | None = ...,
+    magnetization: str = ..., halbach_segments: int | None = ...,
+    halbach_angles_rad: tuple[float, ...] | None = ...,
 ) -> tuple[NDArray[np.floating], NDArray[np.floating], Any, Any]: ...
 
 def solve_field_fem(
@@ -781,10 +421,14 @@ def solve_field_fem(
     max_picard: int | None = None,
     picard_tol: float | None = None,
     picard_relax: float | None = None,
+    nonlinear_solver: str = "newton",
     alpha_p: float = 1.0,
     rotation: float = 0.0,
     sheet_phase: float = 0.0,
     info: dict[str, float] | None = None,
+    magnetization: str = "radial",
+    halbach_segments: int | None = None,
+    halbach_angles_rad: tuple[float, ...] | None = None,
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]] | tuple[NDArray[np.floating], NDArray[np.floating], Any, Any]:
     """Geometry-aware FEM solver with discrete magnet arcs.
 
@@ -808,6 +452,16 @@ def solve_field_fem(
     for ``alpha_p >= 1 - _MIN_ARC_GAP_M * n_p / (pi * r_pm_inner)``, where
     ``r_pm_inner`` is the inner PM-annulus radius (``r_rotor`` inrunner,
     ``r_magnet`` outrunner) — the gap wedge is narrowest there.
+
+    Inset rotors (``geo.magnet_mount == "inset"``): the interpole gaps
+    become rotor iron instead of air, and ``geo.bridge_thickness`` (when
+    set) inserts an iron "bridge" annulus between the magnet faces and
+    the airgap — the magnet arcs then stop ``bridge_thickness`` short of
+    the airgap. Both regions are nonlinear iron; ``nonlinear=True`` is
+    mandatory (the leakage shunt through them saturates by design, a
+    linear solve grossly overestimates it) and the solve raises if the
+    magnet arcs cannot be built (``alpha_p = 1.0`` or a sub-threshold
+    interpole gap).
 
     ``n_slots`` and ``slot_width_ratio`` default to the geometry's values;
     pass an explicit value (including 0) to override, e.g. ``n_slots=0``
@@ -838,14 +492,30 @@ def solve_field_fem(
     solve is a fixed-current locked-rotor snapshot, not a synchronous
     operating point; setting ``sheet_phase = n_p * rotation + γ`` holds
     the sheet MMF at a fixed electrical angle γ from the rotated magnet
-    axis. Each distinct rotation builds and caches its own mesh.
+    axis. Each distinct rotation builds and caches its own mesh, in memory
+    and (when a disk cache is configured) on disk — unless the geometry has
+    no discrete magnet arcs, in which case all rotations share one mesh.
+
+    ``nonlinear_solver`` selects the BH iteration (ignored when
+    ``nonlinear=False``, like the ``picard_*`` knobs): ``"newton"``
+    (default — line-search damped Newton with a short relaxed-Picard
+    start-up, same discrete system and converged solution as Picard,
+    several times fewer iterations on the production nonlinear cases;
+    see scripts/newton_bh_spike.py) or ``"picard"``
+    (adaptive-relaxation fixed point). Newton ignores ``picard_tol`` and
+    ``picard_relax`` (it stops on the algebraic residual,
+    ``_NEWTON_RTOL``) but shares the ``max_picard`` iteration budget;
+    if it stalls, the solve falls back to Picard automatically and sets
+    ``info["newton_fell_back"]``.
 
     ``info``, when provided, is populated with solve diagnostics:
     ``b_iron_max`` (peak |B| in iron regions, T), ``arcs_collapsed``
     (only when a sub-0.5 mm interpole gap collapsed the magnet arcs, see
     above) and — nonlinear only — ``picard_iterations``,
     ``picard_relax_final`` and ``picard_residual`` (raw, i.e. unrelaxed,
-    step — the stop criterion).
+    step — the stop criterion), or for the Newton path
+    ``newton_iterations``, ``newton_backtracks`` and
+    ``newton_rel_residual``.
 
     Contract:
         Preconditions:
@@ -857,19 +527,6 @@ def solve_field_fem(
             RuntimeError: If ``nonlinear=True`` and Picard iteration
                 does not converge within ``max_picard`` iterations.
     """
-    from ngsolve import (
-        H1,
-        BilinearForm,
-        GridFunction,
-        IfPos,
-        LinearForm,
-        dx,
-        grad,
-        sqrt,
-        x,
-        y,
-    )
-
     from phasesweep.defaults import (
         PICARD_MAX_ITERATIONS,
         PICARD_RELAXATION,
@@ -891,13 +548,42 @@ def solve_field_fem(
             "integrates over slot regions and would be silently ignored "
             "on a smooth-bore geometry"
         )
+    if nonlinear_solver not in ("picard", "newton"):
+        raise ValueError(
+            f"nonlinear_solver must be 'picard' or 'newton', "
+            f"got {nonlinear_solver!r}"
+        )
+
+    _is_inset = geo.magnet_mount == "inset"
+    _has_bridge = geo.bridge_thickness is not None
+    if _is_inset and not nonlinear:
+        raise ValueError(
+            "magnet_mount='inset' requires nonlinear=True: the interpole "
+            "iron (and bridge ring, when set) saturates by design — a "
+            "linear solve grossly overestimates the leakage shunt"
+        )
+    if _has_bridge and not _is_inset and not nonlinear:
+        raise ValueError(
+            "bridge_thickness requires nonlinear=True: the iron bridge "
+            "ring saturates by design — a linear solve grossly "
+            "overestimates the shunt flux through it"
+        )
 
     # Determine if discrete arcs will actually be built (same threshold as
     # _build_motor_geometry). A sub-threshold gap collapses the arcs to a
     # full PM ring — the FEM then solves α_p = 1.0, not the requested α_p.
     _wants_arcs = alpha_p < 1.0 and n_p > 0
-    _has_arcs = (_wants_arcs
-                 and _interpole_gap_width(geo, alpha_p, n_p) >= _MIN_ARC_GAP_M)
+    _has_arcs = _arcs_active(geo, alpha_p, n_p)
+    if _is_inset and not _has_arcs:
+        raise ValueError(
+            "magnet_mount='inset' needs discrete magnet arcs, but "
+            + ("alpha_p=1.0 builds none"
+               if not _wants_arcs else
+               f"the interpole gap "
+               f"{_interpole_gap_width(geo, alpha_p, n_p) * 1e3:.3g} mm is "
+               f"below the {_MIN_ARC_GAP_M * 1e3:.3g} mm OCC limit and the "
+               f"arcs would silently collapse to a full ring")
+        )
     if _wants_arcs and not _has_arcs:
         logging.warning(
             "interpole gap %.3g mm < %.3g mm OCC limit: magnet arcs "
@@ -909,8 +595,51 @@ def solve_field_fem(
         if info is not None:
             info["arcs_collapsed"] = 1.0
 
+    if magnetization not in ("radial", "halbach"):
+        raise ValueError(
+            f"magnetization must be 'radial' or 'halbach', "
+            f"got {magnetization!r}"
+        )
+    if magnetization == "halbach":
+        if halbach_segments is None or halbach_segments < 1:
+            raise ValueError(
+                f"halbach_segments must be >= 1 when magnetization='halbach', "
+                f"got {halbach_segments}"
+            )
+        if alpha_p != 1.0:
+            raise ValueError(
+                f"Halbach magnetization requires alpha_p=1.0, "
+                f"got alpha_p={alpha_p}"
+            )
+        if (
+            halbach_angles_rad is not None
+            and len(halbach_angles_rad) != halbach_segments
+        ):
+            raise ValueError(
+                f"halbach_angles_rad length ({len(halbach_angles_rad)}) "
+                f"must equal halbach_segments ({halbach_segments})"
+            )
+
+    # Imported after the validation gates so they stay loud without
+    # phasesweep[fem] installed.
+    from ngsolve import (
+        H1,
+        BilinearForm,
+        GridFunction,
+        IfPos,
+        LinearForm,
+        dx,
+        grad,
+        sqrt,
+        x,
+        y,
+    )
+
+    _is_halbach = magnetization == "halbach" and halbach_segments is not None
     mesh = _get_or_build_mesh(geo, maxh_fraction, n_slots, slot_width_ratio,
-                              alpha_p, n_p, _has_arcs, rotation)
+                              alpha_p, n_p, _has_arcs, rotation,
+                              magnetization=magnetization,
+                              halbach_segments=halbach_segments)
 
     if j_s != 0.0 and "slot" not in set(mesh.GetMaterials()):
         # n_slots > 0 alone does not guarantee slot faces — a zero
@@ -928,11 +657,24 @@ def solve_field_fem(
     if _has_arcs:
         region_names.append("pm_gap")
 
+    # Halbach: replace "pm" with per-segment region names
+    if _is_halbach:
+        assert halbach_segments is not None  # _is_halbach guarantees this
+        pm_region_names = [f"pmh{m}" for m in range(2 * n_p * halbach_segments)]
+        region_names = [n for n in region_names if n != "pm"]
+        region_names.extend(pm_region_names)
+    else:
+        pm_region_names = ["pm"]
+
     iron_regions = {"stator", "shaft", "yoke", "back_iron"}
+    if _is_inset:
+        iron_regions.add("pm_gap")
+    if _has_bridge:
+        iron_regions.add("bridge")
 
     nu_cf: dict[str, float] = {}
     for name in region_names:
-        if name == "pm":
+        if name in pm_region_names:
             nu_cf[name] = 1 / (_MU0 * mu_r_pm)
         elif name in iron_regions:
             nu_cf[name] = 1 / (_MU0 * mu_r_fe)
@@ -946,37 +688,66 @@ def solve_field_fem(
     r_cf = sqrt(x**2 + y**2)
     cos_t = x / r_cf
     sin_t = y / r_cf
-    # Square-wave radial magnetization: the curl-curl source is the coercive
-    # field H_c = B_rem/(μ0·μr_pm) = nu_pm·B_rem (reduces to B_rem/μ0 only at
-    # μr_pm=1), uniform within each pole, sign alternating per pole. Arcs are
-    # centered at θ_k = kπ/n_p
-    # where cos(n_p·θ) = ±1, so the sign is constant within each arc; at
-    # α_p = 1 the sign flips inside the full ring at pole boundaries.
-    # Rotate the sign pattern with the magnet arcs: cos(n_p·(θ − rotation)).
-    # The rotation == 0 branch keeps the CF expression bit-identical to the
-    # pre-rotation solver.
-    if rotation != 0.0:
-        cos_np_rot = (cos_np * float(np.cos(n_p * rotation))
-                      + sin_np * float(np.sin(n_p * rotation)))
-    else:
-        cos_np_rot = cos_np
-    M_r = nu_pm * B_rem * IfPos(cos_np_rot, 1.0, -1.0)
+
     mx_cf: dict[str, CoefficientFunction | float] = {}
     my_cf: dict[str, CoefficientFunction | float] = {}
-    for name in region_names:
-        if name == "pm":
-            mx_cf[name] = M_r * cos_t
-            my_cf[name] = M_r * sin_t
+
+    if _is_halbach:
+        # Per-segment constant magnetization: each segment m carries M of
+        # magnitude nu_pm*B_rem in absolute direction psi(m).
+        # theta_c(m) = rotation + m*pi/(n_p*kappa_m)
+        # phi_local: ideal rule or custom angles (half-wave symmetry for
+        # the second pole in each pole pair).
+        M_mag = nu_pm * B_rem
+        assert halbach_segments is not None  # _is_halbach guarantees this
+        kappa_m = halbach_segments
+        seg_pitch = pi / (n_p * kappa_m)
+        sign = -1.0 if geo.topology == "inrunner" else 1.0
+        for m, name in enumerate(pm_region_names):
+            theta_c = rotation + m * seg_pitch
+            local_idx = m % (2 * kappa_m)
+            if local_idx < kappa_m:
+                if halbach_angles_rad is not None:
+                    phi_local = halbach_angles_rad[local_idx]
+                else:
+                    phi_local = sign * n_p * local_idx * seg_pitch
+            else:
+                mirror_idx = local_idx - kappa_m
+                if halbach_angles_rad is not None:
+                    phi_local = halbach_angles_rad[mirror_idx] - pi
+                else:
+                    phi_local = sign * n_p * mirror_idx * seg_pitch - pi
+            psi = theta_c + phi_local
+            mx_cf[name] = M_mag * float(np.cos(psi))
+            my_cf[name] = M_mag * float(np.sin(psi))
+        for name in region_names:
+            if name not in pm_region_names:
+                mx_cf[name] = 0.
+                my_cf[name] = 0.
+    else:
+        # Radial square-wave magnetization (bit-identical to pre-Halbach)
+        if rotation != 0.0:
+            cos_np_rot = (cos_np * float(np.cos(n_p * rotation))
+                          + sin_np * float(np.sin(n_p * rotation)))
         else:
-            mx_cf[name] = 0.
-            my_cf[name] = 0.
+            cos_np_rot = cos_np
+        M_r = nu_pm * B_rem * IfPos(cos_np_rot, 1.0, -1.0)
+        for name in region_names:
+            if name == "pm":
+                mx_cf[name] = M_r * cos_t
+                my_cf[name] = M_r * sin_t
+            else:
+                mx_cf[name] = 0.
+                my_cf[name] = 0.
+
     Mx = mesh.MaterialCF(mx_cf)
     My = mesh.MaterialCF(my_cf)
 
     fes = H1(mesh, order=3, dirichlet="outer")
     u, v = fes.TnT()
 
-    lf_expr = (Mx * grad(v)[1] - My * grad(v)[0]) * dx("pm")
+    pm_dx_region = "|".join(pm_region_names)
+    lf_expr = (Mx * grad(v)[1] - My * grad(v)[0]) * dx(pm_dx_region)
     if n_slots > 0 and j_s != 0.0:
         # Shift the sheet wave by the electrical angle sheet_phase:
         # cos(n_p·θ − β) via De Moivre, same pattern as rotation above.
@@ -995,6 +766,18 @@ def solve_field_fem(
         a = BilinearForm(nu * grad(u) * grad(v) * dx)
         a.Assemble()
         gfu.vec.data = a.mat.Inverse(fes.FreeDofs(), inverse="sparsecholesky") * lf.vec
+    elif nonlinear_solver == "newton":
+        try:
+            _newton_solve(mesh, fes, lf, gfu, nu, region_names,
+                          iron_regions, max_picard, info)
+        except RuntimeError as e:
+            logging.warning("Newton BH solve failed (%s); falling back "
+                            "to Picard", e)
+            if info is not None:
+                info["newton_fell_back"] = 1.0
+            _picard_solve(mesh, fes, lf, gfu, nu, region_names,
+                          iron_regions, max_picard, picard_tol,
+                          picard_relax, info)
     else:
         _picard_solve(mesh, fes, lf, gfu, nu, region_names, iron_regions,
                       max_picard, picard_tol, picard_relax, info)
@@ -1005,323 +788,3 @@ def solve_field_fem(
     if return_full:
         return theta, B_r, mesh, gfu
     return theta, B_r
-
-
-def sample_Br(
-    mesh: Mesh, gfu: GridFunction, radius: float, n_theta: int = 360,
-) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
-    """Sample B_r = (1/r) ∂A_z/∂θ on a circle of the given radius from a
-    solved A_z GridFunction (as returned by solve_field_fem(return_full=True)).
-
-    Evaluates grad(A_z) directly at the sample points (vectorized) — no
-    global L2 projection.
-    """
-    from ngsolve import grad, sqrt, x, y
-
-    r_cf = sqrt(x**2 + y**2)
-    B_r_cf = (grad(gfu)[1] * x - grad(gfu)[0] * y) / r_cf
-
-    theta = np.linspace(0, 2 * pi, n_theta, endpoint=False)
-    mips = mesh(radius * np.cos(theta), radius * np.sin(theta))
-    B_r = np.asarray(B_r_cf(mips), dtype=float).reshape(-1)
-    return theta, B_r
-
-
-def maxwell_stress_torque(
-    mesh: Mesh, gfu: GridFunction, radius: float, L_stk: float = 1.0,
-    n_theta: int = 720,
-) -> float:
-    """Torque (N·m about z) on the material enclosed by a circle of the
-    given radius, via the Maxwell stress tensor evaluated on that circle.
-
-        tau = (L_stk · r² / μ0) · ∮ B_r · B_θ dθ
-
-    from the solved A_z (B_r = (1/r)·∂A/∂θ, B_θ = −∂A/∂r). The circle
-    must lie in a source-free air region (the air gap): there the
-    integral is contour-independent, which doubles as the correctness
-    check (see tests). Uniform grid over a periodic integrand — the
-    rectangle rule is spectrally accurate. L_stk = 1.0 gives torque per
-    metre of stack.
-
-    Sign: torque on the enclosed region — the rotor for an inrunner; for
-    an outrunner (rotor outside the sampling circle) the rotor torque is
-    the negative.
-    """
-    B_r, B_t = _sample_B_polar(mesh, gfu, radius, n_theta)
-    integral = float(np.sum(B_r * B_t)) * (2 * pi / n_theta)
-    return L_stk * radius * radius / _MU0 * integral
-
-
-def arkkio_torque(
-    mesh: Mesh, gfu: GridFunction, r_inner: float, r_outer: float,
-    L_stk: float = 1.0, n_r: int = 5, n_theta: int = 720,
-) -> float:
-    """Torque via Arkkio's radial-averaging method (N·m about z).
-
-    Averages the Maxwell-stress contour integral over ``n_r`` radii
-    spanning the air-gap annulus [r_inner, r_outer]:
-
-        tau = (1/(r_o - r_i)) * integral_{r_i}^{r_o} tau_contour(r) dr
-
-    The radial average suppresses mesh-noise that a single-contour
-    integral picks up (especially on re-meshed cogging sweeps where the
-    mesh changes per angle). Both bounds must lie strictly inside the
-    source-free gap.
-
-    Sign convention matches ``maxwell_stress_torque``: torque on the
-    enclosed region (rotor for inrunner; negate for outrunner rotor).
-    """
-    radii = np.linspace(r_inner, r_outer, n_r)
-    tau_per_r = np.empty(n_r)
-    for i, r in enumerate(radii):
-        B_r, B_t = _sample_B_polar(mesh, gfu, r, n_theta)
-        integral = float(np.sum(B_r * B_t)) * (2 * pi / n_theta)
-        tau_per_r[i] = L_stk * r * r / _MU0 * integral
-    return float(np.trapezoid(tau_per_r, radii) / (r_outer - r_inner))
-
-
-def _sample_B_polar(
-    mesh: Mesh, gfu: GridFunction, radius: float, n_theta: int,
-) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
-    """(B_r, B_θ) on a uniform circle of the given radius from solved A_z."""
-    from ngsolve import grad, sqrt, x, y
-
-    r_cf = sqrt(x**2 + y**2)
-    B_r_cf = (grad(gfu)[1] * x - grad(gfu)[0] * y) / r_cf
-    B_t_cf = -(grad(gfu)[0] * x + grad(gfu)[1] * y) / r_cf
-    theta = np.linspace(0, 2 * pi, n_theta, endpoint=False)
-    mips = mesh(radius * np.cos(theta), radius * np.sin(theta))
-    return (np.asarray(B_r_cf(mips), dtype=float).reshape(-1),
-            np.asarray(B_t_cf(mips), dtype=float).reshape(-1))
-
-
-def maxwell_interaction_torque_order(
-    mesh: Mesh,
-    gfu_a: GridFunction,
-    gfu_b: GridFunction,
-    radius: float,
-    order: int,
-    L_stk: float = 1.0,
-    n_theta: int = 720,
-) -> float:
-    """Single-space-harmonic interaction torque (N·m about z) between two
-    solved fields on the same mesh, from the Maxwell-stress cross terms:
-
-        tau_n = (2π·L_stk·r²/μ0) · 2·Re[ĉ_r^a(n)·ĉ_θ^b(n)* + ĉ_r^b(n)·ĉ_θ^a(n)*]
-
-    with ĉ the complex Fourier coefficients of B_r/B_θ on the circle.
-    At order = n_p between a magnet-only and an armature-only solve this
-    is the synchronous mean torque — the piece that closes to the circuit
-    tier's 1.5·n_p·ψf·i_q. The full static ``maxwell_stress_torque``
-    additionally carries position-locked slot-harmonic ripple (armature
-    comb sidebands at m·n_slots ± n_p meeting magnet space harmonics of
-    the same order), which averages out under rotation.
-
-    The circle must lie in the source-free gap annulus; both solves must
-    share the mesh (same geometry/maxh — the mesh cache guarantees this).
-    Sign convention matches maxwell_stress_torque.
-    """
-    B_r_a, B_t_a = _sample_B_polar(mesh, gfu_a, radius, n_theta)
-    B_r_b, B_t_b = _sample_B_polar(mesh, gfu_b, radius, n_theta)
-    c_r_a = np.fft.rfft(B_r_a)[order] / n_theta
-    c_t_a = np.fft.rfft(B_t_a)[order] / n_theta
-    c_r_b = np.fft.rfft(B_r_b)[order] / n_theta
-    c_t_b = np.fft.rfft(B_t_b)[order] / n_theta
-    cross = 2.0 * np.real(c_r_a * np.conj(c_t_b) + c_r_b * np.conj(c_t_a))
-    return float(2 * pi * L_stk * radius * radius / _MU0 * cross)
-
-
-def sample_magnet_Bm(
-    mesh: Mesh,
-    gfu: GridFunction,
-    geo: Geometry,
-    n_p: int,
-    alpha_p: float = 1.0,
-    rotation: float = 0.0,
-    n_r: int = 8,
-    n_arc: int = 24,
-) -> tuple[NDArray[np.floating], NDArray[np.floating],
-           NDArray[np.floating], NDArray[np.floating]]:
-    """Flux density along the magnetization direction inside the magnets.
-
-    Samples B_m = sign(M_r)·B_r on a cell-centered polar grid over the PM
-    annulus restricted to the magnet arcs (n_r radii × n_arc angles per
-    pole, 2·n_p poles). B_m is the magnet operating point in its own
-    magnetization direction — the quantity a demag criterion compares
-    against the knee B_knee(T): irreversible demagnetization onsets where
-    B_m drops below it. Returns flat arrays ``(r, theta, B_m, w)`` with
-    ``w`` the fractional area weights (∝ r, summing to 1) for
-    volume-fraction statistics.
-
-    Pass the same ``n_p`` / ``alpha_p`` / ``rotation`` the field was
-    solved with — the grid mirrors the solver's arc placement (arcs
-    centered at θ_k = k·π/n_p + rotation, half-width α_p·π/(2·n_p), sign
-    (−1)^k) and cell-centering keeps every point strictly inside the
-    magnet material, away from the pm/pm_gap and annulus interfaces.
-
-    α_p = 1 caveat: with a full-ring square-wave magnet, adjacent
-    opposite poles touch and the ideal (infinitely sharp) magnetization
-    transition drives a locally huge opposing self-field at the
-    pole-boundary corners — the sampled minimum sits there and barely
-    responds to armature current. Real magnets have finite transition
-    zones, so a min-based demag criterion is over-conservative at
-    α_p = 1; with discrete arcs (α_p < 1) the interpole gap removes the
-    corner and the minimum tracks the armature d-axis field as expected.
-    """
-    from ngsolve import grad, sqrt, x, y
-
-    if n_p < 1:
-        raise ValueError("n_p must be >= 1")
-    if not 0.0 < alpha_p <= 1.0:
-        raise ValueError("alpha_p must be in (0, 1]")
-
-    if geo.topology == "inrunner":
-        r_lo, r_hi = geo.r_rotor, geo.r_magnet
-    else:
-        r_lo, r_hi = geo.r_magnet, geo.r_rotor
-
-    r_grid = r_lo + (np.arange(n_r) + 0.5) * (r_hi - r_lo) / n_r
-    arc_half = alpha_p * pi / (2 * n_p)
-    t_local = -arc_half + (np.arange(n_arc) + 0.5) * (2 * arc_half) / n_arc
-
-    r_all, t_all, s_all = [], [], []
-    for k in range(2 * n_p):
-        theta_k = pi * k / n_p + rotation
-        tt, rr = np.meshgrid(theta_k + t_local, r_grid)
-        r_all.append(rr.ravel())
-        t_all.append(tt.ravel())
-        s_all.append(np.full(rr.size, 1.0 if k % 2 == 0 else -1.0))
-    r = np.concatenate(r_all)
-    theta = np.concatenate(t_all)
-    sign = np.concatenate(s_all)
-
-    r_cf = sqrt(x**2 + y**2)
-    B_r_cf = (grad(gfu)[1] * x - grad(gfu)[0] * y) / r_cf
-    mips = mesh(r * np.cos(theta), r * np.sin(theta))
-    B_r = np.asarray(B_r_cf(mips), dtype=float).reshape(-1)
-
-    w = r / np.sum(r)
-    return r, theta, sign * B_r, w
-
-
-def demag_margin(
-    mesh: Mesh,
-    gfu: GridFunction,
-    geo: Geometry,
-    n_p: int,
-    B_knee: float,
-    alpha_p: float = 1.0,
-    rotation: float = 0.0,
-    n_r: int = 8,
-    n_arc: int = 24,
-) -> dict[str, float]:
-    """Worst-point demag margin of the solved field against a knee B_knee.
-
-    Thin statistics layer over :func:`sample_magnet_Bm`: ``B_m_min`` (T,
-    worst magnet operating point), ``margin`` (B_m_min − B_knee, negative
-    means demag onset somewhere), ``frac_below_knee`` (area fraction of
-    magnet cross-section with B_m < B_knee) and the worst point's
-    ``r_min`` / ``theta_min``. The caller supplies B_knee at the magnet
-    operating temperature (grade data — not derived here).
-    """
-    r, theta, B_m, w = sample_magnet_Bm(mesh, gfu, geo, n_p,
-                                        alpha_p=alpha_p, rotation=rotation,
-                                        n_r=n_r, n_arc=n_arc)
-    i = int(np.argmin(B_m))
-    return {
-        "B_m_min": float(B_m[i]),
-        "margin": float(B_m[i] - B_knee),
-        "frac_below_knee": float(np.sum(w[B_m < B_knee])),
-        "r_min": float(r[i]),
-        "theta_min": float(theta[i]),
-    }
-
-
-# ---------------------------------------------------------------------------
-# 3D geometry export
-# ---------------------------------------------------------------------------
-
-def build_cross_section(
-    geo: Geometry,
-    slotted: bool = True,
-    alpha_p: float = 1.0,
-    n_p: int = 0,
-) -> Any:
-    """Build the 2D OCC cross-section shape for a motor geometry."""
-    n_slots = geo.n_slots if slotted else 0
-    return _build_motor_geometry(
-        geo,
-        n_slots=n_slots,
-        slot_width_ratio=geo.slot_width_ratio,
-        slot_depth=geo.slot_depth,
-        slot_opening_ratio=geo.slot_opening_ratio,
-        alpha_p=alpha_p,
-        n_p=n_p,
-    )
-
-
-def geometry_to_step(
-    geo: Geometry,
-    path: str | Path,
-    L_stk: float | None = None,
-    slotted: bool = True,
-    alpha_p: float = 1.0,
-    n_p: int = 0,
-) -> Path:
-    """Export motor geometry as a 3D STEP file (extruded cross-section)."""
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-
-    face = build_cross_section(geo, slotted=slotted, alpha_p=alpha_p, n_p=n_p)
-    if L_stk is not None and L_stk > 0:
-        solid = face.Extrude(L_stk)
-    else:
-        solid = face
-    solid.WriteStep(str(out))
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Rasterisation
-# ---------------------------------------------------------------------------
-
-def rasterise_cross_section(
-    mesh: Mesh,
-    gfu: GridFunction,
-    n_grid: int = 100,
-    r_bound: float = _DEFAULT_GEO.r_outer,
-) -> tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]]:
-    """Evaluate A_z and |B| on a regular Cartesian grid covering the motor disk."""
-    from netgen.libngpy._meshing import NgException
-    from ngsolve import L2, GridFunction, grad, sqrt
-
-    B_mag_cf = sqrt(grad(gfu)[0]**2 + grad(gfu)[1]**2)
-    fes_L2 = L2(mesh, order=3)
-    gfu_Bmag = GridFunction(fes_L2)
-    gfu_Bmag.Set(B_mag_cf)
-
-    coords = np.linspace(-r_bound, r_bound, n_grid)
-    xi, yi = np.meshgrid(coords, coords)
-
-    Az   = np.full((n_grid, n_grid), np.nan)
-    Bmag = np.full((n_grid, n_grid), np.nan)
-
-    r2 = xi**2 + yi**2
-    inside = r2 < r_bound**2
-
-    failed = 0
-    for i in range(n_grid):
-        for j in range(n_grid):
-            if not inside[i, j]:
-                continue
-            try:
-                mp = mesh(xi[i, j], yi[i, j])
-                Az[i, j]   = gfu(mp)
-                Bmag[i, j] = gfu_Bmag(mp)
-            except NgException:
-                failed += 1
-
-    if failed:
-        logging.warning("rasterise: %d points failed evaluation", failed)
-
-    return xi, yi, Az, Bmag

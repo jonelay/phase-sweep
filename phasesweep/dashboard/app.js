@@ -1,5 +1,5 @@
 // Layout glue, panel registry, WS connection management.
-// Adding a visualization = one file in panels/ + one REGISTRY line.
+// Adding a visualization = one file in panels/ + one REGISTRY line (§2.2).
 
 import jobsPanel from "./panels/jobs.js";
 import runHistoryPanel from "./panels/run_history.js";
@@ -402,7 +402,7 @@ let activateTab = null; // set by mountTabs; the keyboard layer drives it
 
 // Derived from registry ORDER, never hand-authored: reordering the
 // registry (or a future drag-to-reorder splice) must move panels
-// without touching this code, and the tiling is meant to be
+// without touching this code, and Phase 4 §7.4 wants the tiling
 // computed. Area names are panel names; a short last row spans.
 const tabPanes = new Map(); // tab id -> { pane, entries: [{panel, hero}] }
 
@@ -620,7 +620,7 @@ function mountPanels() {
     body.className = "panel-body";
     if (slot !== "sidebar") {
       card.style.gridArea = panel.name;
-      // drag-to-reorder: handle starts the drag, the whole card
+      // drag-to-reorder (§2.1, H2): handle starts the drag, the whole card
       // is the drop target — dropping splices this tab's panel order
       const handle = document.createElement("span");
       handle.className = "drag-handle";

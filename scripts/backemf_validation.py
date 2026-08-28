@@ -28,12 +28,10 @@ sys.path.insert(0, str(ROOT))
 
 from phasesweep.machines.configs import load_motor
 from phasesweep.machines.motor import Motor
+from phasesweep.simulation.params import prepare_drive_sim
 from phasesweep.solver_params import (
     derive_psi_f_smooth,
     n_eff,
-    prepare_analytical,
-    prepare_drive_sim,
-    prepare_fem,
     psi_f_carter,
     winding_transfer,
 )
@@ -42,9 +40,12 @@ from phasesweep.solvers.analytical import (
     carter_adjusted_radii,
     end_effect_factor,
     end_effect_factor_pole_pitch,
+    prepare_analytical,
     zhu_howe_Br,
 )
-from phasesweep.solvers.fem_field import sample_Br, solve_field_fem
+from phasesweep.solvers.fem_field import solve_field_fem
+from phasesweep.solvers.fem_runner import prepare_fem
+from phasesweep.solvers.fem_sampling import sample_Br
 from phasesweep.solvers.harmonics import compute_thd, harmonics_1sided
 
 # ── Constants ──────────────────────────────────────────────────────────

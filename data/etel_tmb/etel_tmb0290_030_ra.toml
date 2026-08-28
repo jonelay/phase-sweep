@@ -48,7 +48,7 @@ duty = "S1 continuous at Ic/Tc with water cooling (inlet 20 C, dT_w 5 K, 4.9 l/m
 thermal_time_constant_s = 45.3   # datasheet τth
 P_c_dissipation_W = 1570.0       # datasheet Pc, power dissipation @ Ic
 I_sc_Arms = 9.37                 # datasheet Isc max short-circuit current
-# Torque-speed envelope points (REQ-0814 anchor class; speeds in rpm):
+# Torque-speed envelope points (speeds in rpm):
 envelope_In_Arms = 7.39          # datasheet In rated current
 envelope_nb_rpm = 238.0          # datasheet nb base speed (at In; see notes)
 envelope_nm_rpm = 350.0          # datasheet nm max speed without flux weakening
@@ -59,7 +59,7 @@ copper loss at Ic with R_s(130 C) = 1583 W vs published Pc = 1570 W (+0.8%),
 vs the dT/r_th budget = 1642 W (0.96). Note In ≈ Ic on this winding (7.39 vs
 7.50 A_rms) — the rated point uses nearly the full continuous current, and
 the model base speed lands closest to nb here (-1.1%).
-Torque-speed envelope anchor (REQ-0814): nb = 238 rpm, nm = 350 rpm;
+Torque-speed envelope anchor: nb = 238 rpm, nm = 350 rpm;
 model base_speed at In = 235 rpm (-1.1%), zero-current limit 359 rpm (+2.4%).
 nb,i / nb,p deliberately NOT anchored (saturated-inductance regime; the
 model even lands on the other side of nb,i here, +2.8%).

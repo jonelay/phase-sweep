@@ -1,0 +1,61 @@
+# Starter Radial SPM - INTENTIONALLY HYPOTHETICAL
+#
+# A geometry-led starting point for a new radial-flux surface-PM inrunner.
+# Every value here is a plausible assumption, not a measurement. This motor
+# does not exist; nothing in this file is validated against hardware, and it
+# must never be used as a physical accuracy anchor or promoted into the
+# validation report. See docs/add-a-radial-pmsm.md.
+#
+# Geometry-led evidence path: B_rem is authoritative; psi_f is deliberately
+# omitted so the solver factories derive it from magnet, geometry, and
+# winding inputs.
+#
+# Expected check_motor --fem quick behavior at these values: analytical and
+# FEM air-gap fundamentals agree within ~1%, AND the checker warns about a
+# ~2.2 T localized peak stator |B| at the tooth tips. Both are correct at
+# once: solver agreement is a numerical cross-check, the saturation warning
+# is an engineering concern, and neither is measurement validation. That
+# separation is the point of the staged check.
+
+[motor]
+name = "Starter Radial SPM (hypothetical)"
+type = "SPMSM"
+topology = "inrunner"
+
+[circuit]
+n_p = 4                  # 8 poles
+R_s = 0.05               # Ohm (assumed)
+L_d = 120e-6             # H (assumed; SPM, L_d = L_q)
+L_q = 120e-6             # H
+J = 2.0e-4               # kg*m2 (assumed rotor inertia)
+I_rated_rms = 14.0       # A RMS continuous (assumed)
+
+[winding]
+n_slots = 12
+N = 5                    # turns per coil (sized for a 48 V bus at W_REF)
+coils_series = 4         # 12 slots / 3 phases
+k_w = 0.866              # ideal double-layer 12s/8p
+
+[geometry]
+r_outer = 0.050          # m, stator OD/2
+r_stator = 0.031         # m, stator bore at the airgap
+r_magnet = 0.0305        # m, magnet face (0.5 mm airgap)
+r_rotor = 0.0265         # m, rotor iron (4 mm magnets)
+r_inner = 0.008          # m, shaft
+n_slots = 12
+slot_depth = 0.012       # m (assumed)
+slot_width_ratio = 0.45
+slot_opening_width = 0.002   # m (assumed)
+alpha_p = 0.85
+L_stk = 0.050            # m
+
+[materials]
+magnet_type = "NdFeB (nominal)"
+B_rem = 1.2              # T (assumed grade, 20 C)
+mu_r_pm = 1.05
+mu_r_fe = 3000           # assumed silicon steel
+
+[drive]
+U_DC = 48.0              # V (assumed bus)
+MAX_I_S = 28.0           # A peak (assumed inverter limit)
+W_REF = 314.16           # rad/s mechanical (3000 RPM)

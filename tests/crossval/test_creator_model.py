@@ -8,20 +8,19 @@ Dataset: DOI 10.3217/sns1d-77m43
 """
 
 import math
-from pathlib import Path
 
 import numpy as np
 import pytest
 
 from phasesweep.machines.configs import load_motor
 from phasesweep.models.rated_torque import magnet_torque_constant, mtpa_torque
-from phasesweep.solver_params import prepare_fem
 from phasesweep.solvers.fem_field import solve_field_fem
+from phasesweep.solvers.fem_runner import prepare_fem
 from phasesweep.solvers.harmonics import harmonics_1sided
-from tests.conftest import CREATOR_DATASET_SKIP, requires_fem
+from tests.conftest import CREATOR_DATASET_SKIP, REPO_ROOT, requires_fem
 
-MOTOR_TOML = Path(__file__).parent.parent / "motors" / "creator_case_pmsm.toml"
-DATA_DIR = Path(__file__).parent.parent / "data" / "creator_case_pmsm"
+MOTOR_TOML = REPO_ROOT / "motors" / "creator_case_pmsm.toml"
+DATA_DIR = REPO_ROOT / "data" / "creator_case_pmsm"
 MEAS_DIR = DATA_DIR / "PM_synchronous_motor" / "Measurement_results" / "No_load_tests"
 
 _has_meas = MEAS_DIR.is_dir()
@@ -74,7 +73,7 @@ def creator_slotted_fem(creator):
         n_theta=360, maxh_fraction=0.03 / geo.r_outer,
         n_slots=geo.n_slots, j_s=0.0,
         slot_width_ratio=_slot_width_ratio(creator),
-        alpha_p=params.alpha_p,
+        alpha_p=params.alpha_p, nonlinear=True,
     )
 
 
@@ -96,7 +95,8 @@ def creator_torque_fem(creator):
     kw = dict(geo=geo, n_p=params.n_p, mu_r_pm=params.mu_r_pm,
               mu_r_fe=params.mu_r_fe, n_theta=360,
               maxh_fraction=0.03 / geo.r_outer, n_slots=geo.n_slots,
-              alpha_p=params.alpha_p, k_w=creator.k_w, return_full=True)
+              alpha_p=params.alpha_p, k_w=creator.k_w, return_full=True,
+              nonlinear=True)
     i_peak = creator.I_rated
     j_s = j_s_from_phase_current(creator, i_peak)
     _, Br_mag, mesh, gfu_mag = solve_field_fem(
@@ -125,7 +125,7 @@ def test_fem_torque_constant_crosscheck(creator, creator_torque_fem):
     winding torque ripple into the snapshot (~ −25% at this position).
     """
     from phasesweep.solver_params import winding_transfer
-    from phasesweep.solvers.fem_field import (
+    from phasesweep.solvers.fem_sampling import (
         maxwell_interaction_torque_order,
         maxwell_stress_torque,
     )
@@ -156,6 +156,58 @@ def test_fem_torque_constant_crosscheck(creator, creator_torque_fem):
     assert abs(tau_cogging) < 0.05 * tau_mean
 
 
+@requires_fem
+@pytest.mark.timeout(600)
+def test_inset_fem_closes_psi_f_gap(creator):
+    """Interpole iron closes most of the FEM psi_f over-prediction.
+
+    The CREATOR TOML models the rotor as inset (interpole iron) matching
+    the physical saliency (L_q/L_d = 1.6). A surface-mount FEM
+    (interpole air) over-predicts psi_f by ~+8%, while the inset model
+    lands at ~+3%. Both the absolute band and the surface-vs-inset
+    ordering are the anchor.
+    """
+    import dataclasses
+
+    from phasesweep.solver_params import winding_transfer
+
+    params = prepare_fem(creator)
+    geo = params.geometry
+    kw = dict(
+        n_p=params.n_p, B_rem=params.B_rem,
+        mu_r_pm=params.mu_r_pm, mu_r_fe=params.mu_r_fe,
+        n_theta=360, maxh_fraction=0.03 / geo.r_outer,
+        n_slots=geo.n_slots, j_s=0.0,
+        alpha_p=params.alpha_p, nonlinear=True,
+    )
+    solve_info: dict[str, float] = {}
+    _, Br_inset = solve_field_fem(geo=geo, info=solve_info, **kw)
+    geo_surface = dataclasses.replace(geo, magnet_mount="surface")
+    _, Br_surface = solve_field_fem(geo=geo_surface, **kw)
+
+    # Newton health on the production anchor: a silent Picard fallback
+    # means the default solver stopped covering this case, and an
+    # iteration blowup flags a convergence-quality regression (the
+    # spike measures 2 iterations here; the broken-Jacobian failure
+    # class measures 50+).
+    assert "newton_fell_back" not in solve_info
+    assert solve_info["newton_iterations"] <= 12
+
+    wt = winding_transfer(creator)
+    psi_inset = wt * float(harmonics_1sided(Br_inset)[params.n_p])
+    psi_surface = wt * float(harmonics_1sided(Br_surface)[params.n_p])
+    psi_pub = 0.1144
+
+    assert psi_inset / psi_pub - 1 == pytest.approx(0.03, abs=0.02), (
+        f"inset psi_fem {psi_inset:.5f} vs published {psi_pub} "
+        f"({(psi_inset / psi_pub - 1) * 100:+.1f}%)"
+    )
+    assert abs(psi_inset - psi_pub) < abs(psi_surface - psi_pub), (
+        f"inset {psi_inset:.5f} does not improve on surface "
+        f"{psi_surface:.5f} against published {psi_pub}"
+    )
+
+
 _COGGING_N_PTS = 12
 _COGGING_PERIOD = 2 * math.pi / 12
 
@@ -172,6 +224,7 @@ def creator_cogging(creator):
         motor=creator, model="cogging_torque",
         maxh_fraction=0.03 / geo.r_outer,
         n_theta=360, cogging_points=_COGGING_N_PTS,
+        nonlinear=True,
     )
     return _run_cogging_impl(rc)
 
@@ -350,7 +403,7 @@ def test_fem_fundamental_range(creator):
         mu_r_pm=params.mu_r_pm, mu_r_fe=params.mu_r_fe,
         n_theta=360, maxh_fraction=0.03 / geo.r_outer,
         n_slots=0, j_s=0.0,
-        alpha_p=params.alpha_p,
+        alpha_p=params.alpha_p, nonlinear=True,
     )
     amps = harmonics_1sided(B_r)
     fund = float(amps[params.n_p]) if params.n_p < len(amps) else 0.0
@@ -370,7 +423,7 @@ def test_slotted_vs_smooth_bore_harmonics(creator, creator_slotted_fem):
         mu_r_pm=params.mu_r_pm, mu_r_fe=params.mu_r_fe,
         n_theta=360, maxh_fraction=0.03 / geo.r_outer,
         n_slots=0, j_s=0.0,
-        alpha_p=params.alpha_p,
+        alpha_p=params.alpha_p, nonlinear=True,
     )
 
     theta_sl, Br_sl = creator_slotted_fem

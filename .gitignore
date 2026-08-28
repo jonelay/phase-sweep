@@ -6,7 +6,13 @@ __pycache__/
 
 # Generated output
 results/
-output/
+# /output/* rather than output/ so the reference_br pins below can be
+# re-included — git cannot re-include a file whose parent dir is excluded.
+/output/*
+# Pinned FEM reference arrays: repo content, not build output. CI Tier 1
+# diffs against them (scripts/capture_reference_br.py --verify), so they
+# have to survive a fresh checkout. Recapture + commit on physics changes.
+!/output/reference_br/
 plots/
 user_configs/
 *.png

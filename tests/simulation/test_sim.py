@@ -16,6 +16,7 @@ from motulator.drive.utils import Step
 from phasesweep.machines.configs import load_motor
 from phasesweep.machines.geometry import default_inrunner
 from phasesweep.machines.motor import DriveParams, Motor
+from phasesweep.simulation.params import DriveSimParams, prepare_drive_sim
 from phasesweep.simulation.sim import (
     SimPlan,
     build_sim,
@@ -24,7 +25,6 @@ from phasesweep.simulation.sim import (
     plan_sim,
     plan_torque_sim,
 )
-from phasesweep.solver_params import DriveSimParams, prepare_drive_sim
 
 MOTOR = Motor(
     name="test-SPMSM", geometry=dataclasses.replace(default_inrunner(), n_slots=12),
@@ -41,6 +41,10 @@ def test_build_sim_returns_simulation():
     sim = build_sim(PARAMS, PLAN)
     from motulator.drive.model import Simulation
     assert isinstance(sim, Simulation)
+    # the built machine carries our params, not motulator defaults
+    par = sim.mdl.machine.par
+    assert (par.n_p, par.R_s, par.L_d, par.L_q, par.psi_f) == (
+        PARAMS.n_p, PARAMS.R_s, PARAMS.L_d, PARAMS.L_q, PARAMS.psi_f)
 
 
 def test_build_sim_rejects_reverse_salient():
@@ -49,6 +53,27 @@ def test_build_sim_rejects_reverse_salient():
     params = dataclasses.replace(PARAMS, L_d=8e-3, L_q=4e-3)
     with pytest.raises(ValueError, match="reverse-salient"):
         build_sim(params)
+
+
+def test_build_sim_synrm_requires_ld_gt_lq():
+    """motulator's psi_f = 0 angle search brackets gamma in (0, pi/2),
+    which assumes the L_d > L_q SynRM convention; with L_q > L_d it builds
+    a negative-torque locus and the drive silently produces no torque —
+    build_sim must refuse."""
+    params = dataclasses.replace(PARAMS, psi_f=0.0, L_d=4e-3, L_q=8e-3)
+    with pytest.raises(ValueError, match="L_d > L_q SynRM convention"):
+        build_sim(params)
+
+
+def test_build_sim_synrm_ld_gt_lq_accepted():
+    """psi_f = 0 with L_d > L_q is the convention motulator handles — the
+    reverse-salient guard must not fire for SynRMs."""
+    params = dataclasses.replace(PARAMS, psi_f=0.0, L_d=8e-3, L_q=4e-3)
+    sim = build_sim(params, plan_sim(params))
+    from motulator.drive.model import Simulation
+    assert isinstance(sim, Simulation)
+    par = sim.mdl.machine.par
+    assert (par.psi_f, par.L_d, par.L_q) == (0.0, 8e-3, 4e-3)
 
 
 def test_build_sim_rejects_missing_drive_fields():
@@ -262,6 +287,23 @@ class TestPlanSim:
         assert plan.T_s > 0
         assert np.isfinite(plan.alpha_c)
 
+    def test_plan_sim_synrm_uses_reluctance_torque(self):
+        # psi_f = 0: non-salient k_t is zero; tau_peak must fall back to
+        # the MTPA reluctance torque instead of dividing by zero.
+        from phasesweep.models.rated_torque import mtpa_gamma, mtpa_torque
+        params = dataclasses.replace(PARAMS, psi_f=0.0, L_d=4e-3, L_q=8e-3)
+        plan = plan_sim(params, load_fraction=1.0)
+        g = mtpa_gamma(0.0, 4e-3, 8e-3, 20.0)
+        tau_mtpa = mtpa_torque(2, 0.0, 4e-3, 8e-3, 20.0, g)
+        assert plan.load_torque == pytest.approx(tau_mtpa, rel=1e-12)
+        assert plan.tau_m > 0
+        assert np.isfinite(plan.alpha_s)
+
+    def test_plan_sim_synrm_no_saliency_raises(self):
+        params = dataclasses.replace(PARAMS, psi_f=0.0)
+        with pytest.raises(ValueError, match="cannot produce torque"):
+            plan_sim(params)
+
     def test_plan_sim_load_fraction(self):
         plan_half = plan_sim(PARAMS, load_fraction=0.5)
         plan_full = plan_sim(PARAMS, load_fraction=1.0)
@@ -432,6 +474,28 @@ class TestOutrunnerRegression:
 
 
 # ---------------------------------------------------------------------------
+# SynRM end-to-end: reluctance torque alone must spin the machine
+# ---------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_synrm_end_to_end_settles():
+    """psi_f = 0 (L_d > L_q convention): the drive spins the machine to
+    w_ref on reluctance torque alone with current inside the drive limit.
+    Regression: with the L_q > L_d convention motulator silently produced
+    zero torque (rotor never moved) before build_sim rejected it."""
+    params = dataclasses.replace(PARAMS, psi_f=0.0, L_d=8e-3, L_q=4e-3)
+    plan = plan_sim(params)
+    # 0.9 s covers the speed step + settle window but not the load step
+    assert plan.speed_step_time + 0.5 < 0.9 < plan.load_time
+    sim = build_sim(params, plan)
+    res = sim.simulate(t_stop=0.9)
+    w_M = np.asarray(res.mdl.mechanics.w_M)
+    i_s = np.abs(np.asarray(res.mdl.machine.i_s_ab))
+    assert w_M[-1] == pytest.approx(W_REF, rel=0.05)
+    assert i_s.max() <= params.drive.MAX_I_S * 1.05
+
+
+# ---------------------------------------------------------------------------
 # Torque-control mode
 # ---------------------------------------------------------------------------
 
@@ -473,6 +537,8 @@ class TestBuildSimTorqueMode:
         sim = build_sim(PARAMS, plan, torque_ref=torque_ref)
         from motulator.drive.model import Simulation
         assert isinstance(sim, Simulation)
+        par = sim.mdl.machine.par
+        assert (par.n_p, par.psi_f) == (PARAMS.n_p, PARAMS.psi_f)
 
     def test_torque_mode_runs(self):
         """End-to-end: torque step simulates without crash, produces nonzero current."""

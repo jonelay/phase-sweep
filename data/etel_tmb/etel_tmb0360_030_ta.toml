@@ -48,7 +48,7 @@ duty = "S1 continuous at Ic/Tc with water cooling (inlet 20 C, dT_w 5 K); Di = 4
 thermal_time_constant_s = 93.8   # datasheet τth
 P_c_dissipation_W = 1980.0       # datasheet Pc, power dissipation @ Ic
 I_sc_Arms = 6.65                 # datasheet Isc max short-circuit current
-# Torque-speed envelope points (REQ-0814 anchor class; speeds in rpm):
+# Torque-speed envelope points (speeds in rpm):
 envelope_In_Arms = 8.54          # datasheet In rated current
 envelope_nb_rpm = 119.0          # datasheet nb base speed (at In)
 envelope_nm_rpm = 211.0          # datasheet nm max speed without flux weakening

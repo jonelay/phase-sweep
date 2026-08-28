@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "phasesweep"
-version = "0.4.0"
+version = "0.5.0"
 description = "PMSM simulation for stator/rotor design exploration"
 requires-python = ">=3.12"
 authors = [{name = "Jone Lay", email = "jlay.dev@pm.me"}]
@@ -24,8 +24,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-fem = ["ngsolve"]
-sim = ["motulator>=0.7.3,<0.8"]  # _fix_mtpv_nan patches 0.7.x privates (_psi_s_mtpv)
+fem = ["ngsolve", "mkl; sys_platform == 'linux'"]
+sim = ["motulator==0.7.3"]  # _fix_mtpv_nan patches 0.7.x privates (_psi_s_mtpv);
+                            # 0.7.4+ moved sensorless/T_s into the Cfg dataclass,
+                            # which breaks build_sim's ctor kwargs
 viz = ["matplotlib"]
 server = ["fastapi", "uvicorn[standard]", "structlog", "tomli-w"]
 all = ["phasesweep[fem,sim,viz,server]"]
@@ -47,6 +49,8 @@ phasesweep-server = "phasesweep.server.__main__:main"
 
 [tool.hatch.build.targets.sdist]
 exclude = [
+    "AGENTS.md",
+    "CLAUDE.md",
     ".claude/",
     "notes/",
     "output/",
@@ -60,6 +64,28 @@ exclude = [
     # so it shipped in the sdist. Not ours to redistribute.
     "data/creator_case_pmsm/PM_synchronous_motor.zip",
     "data/creator_case_pmsm/PM_synchronous_motor/",
+    # ... and the dataset-DERIVED files the fetch script regenerates —
+    # gitignored as "Not shipped" but hatchling ignores nested .gitignores,
+    # so they leak into the sdist from a fetched checkout without these.
+    "data/creator_case_pmsm/ferrite_bh.csv",
+    "data/creator_case_pmsm/iron_losses_measured.csv",
+    "data/creator_case_pmsm/m250_35a_bh_50hz.csv",
+    "data/creator_case_pmsm/no_load_torque_measured.csv",
+    "data/creator_case_pmsm/backemf_measured.json",
+    "data/creator_case_pmsm/iron_loss_noload.json",
+    # Same for the IM sibling dataset (10.3217/kh3v7-dhn98, CC BY-NC 4.0)
+    "data/creator_case_im/Induction_motor.zip",
+    "data/creator_case_im/Induction_motor/",
+    "data/creator_case_im/locked_rotor_tests.csv",
+    "data/creator_case_im/no_load_tests.csv",
+    # Elmer harness working dirs — gitignored via nested
+    # scripts/elmer_*/.gitignore files, which hatchling does not honor
+    # (same trap as the CREATOR datasets above), so local solver output
+    # (~23 MB of meshes and logs) leaks into a sdist built from a
+    # working tree without these.
+    "scripts/elmer_radial/cases/",
+    "scripts/elmer_axial/cases/",
+    "scripts/elmer_axial/work*/",
 ]
 
 [tool.ruff]
@@ -81,6 +107,8 @@ ignore = [
     "B905",     # zip-without-strict — noisy, not a bug risk here
     "RUF012",   # mutable class default — test parametrize lists, not a risk
     "RUF015",   # next(iter()) vs [0] — readability preference in tests
+    "RUF043",   # pytest.raises match= metacharacters — match strings are prose fragments;
+                # substring-regex overreach is harmless there, and re.escape at ~19 sites hurts readability
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -106,14 +134,15 @@ ignore_missing_imports = true
 # which mutants actually run with the positional filter above.
 [tool.mutmut]
 source_paths = ["phasesweep"]
-also_copy = ["tests", "motors", "pyproject.toml", "phasesweep/defaults.toml"]
-pytest_add_cli_args_test_selection = ["tests/solvers/test_analytical.py"]
+also_copy = ["tests", "motors", "data", "scripts", "pyproject.toml", "phasesweep/defaults.toml"]
+pytest_add_cli_args_test_selection = ["tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 timeout = 300
 timeout_method = "thread"
 markers = [
-    "req(ids): traces test to requirement IDs (e.g. @pytest.mark.req('REQ-0701'))",
+    "req(ids): traces tests to internal requirement IDs",
     "slow: marks tests as slow (FEM integration, expect >60s)",
+    "fem: needs ngsolve — apply via tests.conftest.requires_fem, never directly",
 ]

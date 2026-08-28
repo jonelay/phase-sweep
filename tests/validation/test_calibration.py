@@ -1,8 +1,12 @@
 """Calibration framework tests.
 
 Acceptance targets:
-1. Recover effective B_rem 1.139 T on the 14 mm outrunner back-EMF data — the
-   earlier manual calibration reproduced automatically.
+1. Recover effective B_rem 1.240 T on the 14 mm outrunner back-EMF data —
+   the earlier manual calibration (1.139 T, raw 2D) reproduced
+   automatically through the k_end-corrected model: with Motor.k_end =
+   0.9185 in the analytical back-EMF path, the fit compensates exactly
+   (1.240 × 0.9185 ≈ 1.139) and the effective B_rem absorbs magnet grade
+   + profile only, no longer 3D end effects.
 2. Negative control — no single-param fit within published-parameter
    bounds closes the 0.92 MTPA/nameplate band.
 3. Round-trip: calibrating against self-generated synthetic data
@@ -112,23 +116,38 @@ class TestRecoverEffectiveBrem:
         )
 
     def test_recovers_1p139(self, result):
-        """The manual calibration, reproduced automatically."""
+        """The manual calibration, reproduced automatically.
+
+        The manual number was 1.139 T against the raw 2D model. With the
+        computed Motor.k_end = 0.9185 now applied in the analytical
+        back-EMF path, the fit compensates exactly:
+        1.240 × 0.9185 ≈ 1.139. The effective B_rem no longer absorbs 3D
+        end effects — 1.24 T is N42-class, consistent with the bench
+        gaussmeter triangulation (~1.30 T) to within the profile residual.
+        """
         fitted = result.record.params[0]
         assert fitted.param == "B_rem"
         assert fitted.initial == pytest.approx(1.45)
-        assert fitted.final == pytest.approx(1.139, abs=0.005)
+        assert fitted.final == pytest.approx(1.240, abs=0.005)
+        # the raw-2D manual value is recovered when k_end is divided out
+        assert fitted.final * 0.918486 == pytest.approx(1.139, abs=0.005)
 
     def test_closed_within_tolerance(self, result):
         assert result.record.closed
         assert all(r["passed"] for r in result.record.residuals_after)
 
-    def test_residual_before_is_the_plus27_gap(self, result):
-        """The raw 2D over-prediction (+27%) is the starting residual."""
+    def test_residual_before_is_the_k_end_corrected_gap(self, result):
+        """The starting residual is the k_end-corrected over-prediction.
+
+        Raw 2D was +27%; with Motor.k_end = 0.9185 applied the model
+        starts ≈ +17% high (1.274 × 0.9185 ≈ 1.17) — magnet grade
+        remains the dominant term.
+        """
         before = result.record.residuals_before[0]
-        assert 24.0 < before["rel_pct"] < 36.0
+        assert 14.0 < before["rel_pct"] < 21.0
 
     def test_calibrated_motor_carries_new_brem(self, result):
-        assert result.motor.B_rem == pytest.approx(1.139, abs=0.005)
+        assert result.motor.B_rem == pytest.approx(1.240, abs=0.005)
         assert result.motor.psi_f is None  # invalidated for re-derivation
 
     def test_config_ids_differ_and_recorded(self, result, outrunner_motor):
@@ -455,15 +474,26 @@ class TestGuards:
 
     def test_auto_models_never_pick_thermal_duty(self, outrunner_motor):
         """thermal_duty needs a duty_profile the calibration loop's
-        RunConfig never carries — auto-selecting it aborted the run."""
+        RunConfig never carries — auto-selecting it aborted the run.
+
+        The motor needs [iron] fields: _auto_models now drops models
+        whose validate fails for the motor, so an iron-less motor would
+        (correctly) select nothing for p_fe.
+        """
+        from dataclasses import replace
+
         from phasesweep.validation.calibration import _auto_models
+        motor = replace(
+            outrunner_motor,
+            k_h=180.0, k_e=0.65, alpha_fe=2.0, m_core=0.05, B_core=1.2,
+        )
         meas = RunResult(
-            config=RunConfig(motor=outrunner_motor, model="backemf_capture",
+            config=RunConfig(motor=motor, model="backemf_capture",
                              dataset_id="d"),
             model="backemf_capture", status="OK",
             metrics={}, elapsed_s=0.0, source="measured",
         )
-        models = _auto_models([meas], ("p_fe",))
+        models = _auto_models(motor, [meas], ("p_fe",))
         assert "thermal_duty" not in models
         assert "iron_loss" in models
 
@@ -626,7 +656,9 @@ class TestCliCalibrate:
         assert "Closed within tolerance: True" in stdout
         assert out.exists()
         assert out.with_suffix(".record.json").exists()
-        assert load_motor(out).B_rem == pytest.approx(1.139, abs=0.005)
+        # 1.240 = the k_end-corrected effective B_rem (was 1.139 raw-2D;
+        # see TestRecoverEffectiveBrem.test_recovers_1p139)
+        assert load_motor(out).B_rem == pytest.approx(1.240, abs=0.005)
 
     def test_refusal_exits_1(self, monkeypatch, capsys, tmp_path, backemf_json):
         with pytest.raises(SystemExit) as exc:

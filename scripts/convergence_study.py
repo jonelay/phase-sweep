@@ -35,7 +35,7 @@ REFINE = math.sqrt(2.0)
 N_THETA_SWEEP = (180, 360, 720, 1440, 2880)
 
 # Real-size arc motors clamp the global maxh to max(interpole_gap/2, 0.5mm)
-# (fem_field._get_or_build_mesh), so maxh_fraction only binds once the
+# (fem_mesh._get_or_build_mesh), so maxh_fraction only binds once the
 # requested maxh drops below that clamp — levels are chosen per case to
 # actually change the mesh. The airgap face maxh (gap/3) stays fixed
 # throughout; it bounds the achievable B1 accuracy independently of these

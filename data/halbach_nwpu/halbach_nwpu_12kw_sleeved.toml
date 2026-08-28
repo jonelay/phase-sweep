@@ -1,0 +1,79 @@
+# NWPU 12 kW Halbach PMSM — IRON RETAINING SLEEVE VARIANT (what-if)
+#
+# NOT A VALIDATION ANCHOR. Derived from halbach_nwpu_12kw.toml (Liu,
+# Shang, Gong 2025, DOI 10.3390/wevj16080413) by adding a 0.5 mm iron
+# retaining sleeve (bridge ring) carved from the outer face of the
+# 3 mm PM annulus. The published prototype has exposed magnet faces;
+# no measured data exists for this variant.
+#
+# PURPOSE: exercises the surface-mount Halbach + bridge_thickness
+# combination — a Halbach array mechanically retained by a magnetic
+# steel sleeve. High-speed Halbach rotors normally use NON-magnetic
+# sleeves (carbon fiber, Inconel, titanium) precisely because a steel
+# sleeve shunts magnet flux; this variant quantifies that penalty.
+# The sleeve saturates by design, so FEM requires nonlinear=True.
+#
+# Fields dropped vs the anchor TOML because they are measured/rated
+# values of the UNSLEEVED prototype and do not transfer:
+#   psi_f (from measured back-EMF), [rated] (speed/torque/power).
+# B_rem and geometry are magnet/laminate properties and carry over.
+
+[motor]
+name = "NWPU Halbach 12 kW (iron sleeve variant)"
+type = "surface-magnet PMSM (20p/24s, 3-segment Halbach, iron retaining sleeve)"
+topology = "inrunner"
+
+[geometry]
+r_outer = 0.0570        # m, as anchor
+r_stator = 0.047        # m, stator inner radius
+r_magnet = 0.046        # m, sleeve outer surface (rotor OD unchanged)
+r_rotor = 0.043         # m, PM inner radius
+r_inner = 0.0           # m, shaft not published
+L_stk = 0.056           # m
+alpha_p = 1.0           # Halbach: segments span full pole pitch
+magnetization = "halbach"
+halbach_segments = 3
+halbach_angles_deg = [0.0, -45.0, -135.0]
+bridge_thickness = 0.0005   # m, 0.5 mm iron sleeve cut from the PM
+                            # annulus (effective PM thickness 2.5 mm)
+slot_depth = 0.0095     # m
+slot_width_ratio = 0.733
+slot_opening_width = 0.003281  # m
+
+[winding]
+n_slots = 24
+N = 12
+
+[circuit]
+n_p = 10                # 20 poles
+# psi_f: intentionally omitted — the anchor value is derived from the
+# measured back-EMF of the unsleeved prototype; the sleeve shunts
+# flux, so it does not apply here. Derive from B_rem via FEM.
+
+[materials]
+B_rem = 1.35            # T, N45UH as anchor
+mu_r_pm = 1.09
+mu_r_fe = 1000.0
+
+[provenance]
+source = "Variant of halbach_nwpu_12kw.toml (Liu, Shang, Gong 2025)"
+doi = "10.3390/wevj16080413"
+institution = "derived in-repo; base data NWPU, Xi'an, China"
+motor_model = "NWPU 12 kW Halbach + hypothetical 0.5 mm steel sleeve"
+duty = "design exploration (not built)"
+notes = """
+What-if variant, not a measured motor. Adds bridge_thickness = 0.5 mm
+to the NWPU Halbach anchor to exercise the surface-mount + Halbach +
+bridge combination: an iron retaining sleeve between the magnet faces
+and the airgap.
+
+Expected physics: the sleeve carries shunt flux and saturates; the
+airgap fundamental B1 drops relative to the exposed-face anchor. FEM
+gates this geometry behind nonlinear=True — a linear solve would
+grossly overestimate the shunt through the sleeve.
+
+Eligible for: geometry validation, FEM field solves (nonlinear).
+NOT eligible for: any crossval against measured data (none exists),
+analytical model (Halbach + bridge both rejected), circuit-tier
+models (psi_f/R_s/L_d/L_q not defined for this variant).
+"""

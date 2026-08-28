@@ -21,8 +21,8 @@ _DEFAULT_TIMEOUT = 60
 
 def _run_sim_impl(config: RunConfig) -> dict[str, Any]:
     """Run motulator simulation from RunConfig. Executes inside subprocess."""
+    from phasesweep.simulation.params import prepare_drive_sim
     from phasesweep.simulation.sim import build_sim, extract_metrics, extract_waveforms
-    from phasesweep.solver_params import prepare_drive_sim
 
     params = prepare_drive_sim(config.motor)
     plan = config.sim_plan

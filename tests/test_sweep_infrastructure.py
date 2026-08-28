@@ -47,8 +47,8 @@ class TestRunConfig:
 
     @requires_sim
     def test_sim_plan_roundtrip(self):
+        from phasesweep.simulation.params import prepare_drive_sim
         from phasesweep.simulation.sim import plan_sim
-        from phasesweep.solver_params import prepare_drive_sim
         plan = plan_sim(prepare_drive_sim(make_motor()))
         rc1 = RunConfig(motor=make_motor(), model="drive_sim", sim_plan=plan)
         d = json.loads(json.dumps(rc1.to_dict()))
@@ -403,8 +403,16 @@ class TestModelVersionStamp:
 
     def test_save_stamps_v1_models_too(self, tmp_path):
         """v1 is omitted from run-ID hashing for backcompat, but MUST be
-        stamped: an unstamped record must not be confusable with a v1 one."""
-        store, _ = self._save_one(tmp_path, model="torque_speed")
+        stamped: an unstamped record must not be confusable with a v1 one.
+
+        Any v1 model proves the point, so pick one out of the registry
+        rather than naming it — a named one only stays v1 until it is
+        bumped, which is how this test previously rotted.
+        """
+        from phasesweep.registry import MODEL_REGISTRY
+        model = next(n for n, m in sorted(MODEL_REGISTRY.items())
+                     if m.version == 1)
+        store, _ = self._save_one(tmp_path, model=model)
         raw = json.loads(store.results_file.read_text())
         assert raw["model_version"] == 1
 
@@ -500,9 +508,9 @@ class TestSimRunner:
 
     @pytest.mark.timeout(30)
     def test_returns_status_not_hang(self):
+        from phasesweep.simulation.params import prepare_drive_sim
         from phasesweep.simulation.sim import plan_sim
         from phasesweep.simulation.sim_runner import run_sim_safe
-        from phasesweep.solver_params import prepare_drive_sim
         motor = make_motor()
         plan = plan_sim(prepare_drive_sim(motor))
         short_plan = dataclasses.replace(plan, t_stop=0.1)
@@ -512,9 +520,9 @@ class TestSimRunner:
 
     @pytest.mark.timeout(60)
     def test_successful_run_returns_metrics(self):
+        from phasesweep.simulation.params import prepare_drive_sim
         from phasesweep.simulation.sim import plan_sim
         from phasesweep.simulation.sim_runner import run_sim_safe
-        from phasesweep.solver_params import prepare_drive_sim
         motor = make_motor()
         plan = plan_sim(prepare_drive_sim(motor))
         rc = RunConfig(motor=motor, model="drive_sim", sim_plan=plan)
@@ -573,3 +581,43 @@ class TestFemRunner:
         from math import pi, sin
         assert B1_part / B1_full == pytest.approx(sin(pi * 0.75 / 2), rel=0.005)
 
+
+def test_n_planes_default_does_not_change_archived_run_ids():
+    """Default-suppressed emission: adding the field must not re-key any
+    existing record, including on the unregistered-model fallback path
+    where compute_run_id hashes every solver param."""
+    from phasesweep.machines.configs import load_motor
+    from phasesweep.sweep_types import RunConfig, compute_run_id
+    from tests.conftest import REPO_ROOT
+
+    motor = load_motor(REPO_ROOT / "motors/lrk_outrunner.toml")
+    rc = RunConfig(motor=motor, model="not_a_registered_model")
+    assert "n_planes" not in rc.to_dict()
+    # pinned before n_planes existed
+    assert compute_run_id(rc) == compute_run_id(RunConfig.from_dict(rc.to_dict()))
+
+
+def test_nonlinear_solver_default_suppressed_and_hashed():
+    """nonlinear_solver follows the rotation/n_planes pattern: the
+    "newton" default is suppressed from to_dict and the run-ID hash
+    (archived IDs unchanged), while a non-default "picard" round-trips
+    through to_dict/from_dict and re-keys fem-family runs."""
+    from phasesweep.machines.configs import load_motor
+    from phasesweep.sweep_types import RunConfig, compute_run_id
+    from tests.conftest import REPO_ROOT
+
+    motor = load_motor(REPO_ROOT / "motors/lrk_outrunner.toml")
+    rc_default = RunConfig(motor=motor, model="fem", nonlinear=True)
+    assert "nonlinear_solver" not in rc_default.to_dict()
+    assert compute_run_id(rc_default) == compute_run_id(
+        RunConfig.from_dict(rc_default.to_dict()))
+
+    rc_picard = RunConfig(motor=motor, model="fem", nonlinear=True,
+                          nonlinear_solver="picard")
+    d = rc_picard.to_dict()
+    assert d["nonlinear_solver"] == "picard"
+    assert RunConfig.from_dict(d).nonlinear_solver == "picard"
+    assert compute_run_id(rc_picard) != compute_run_id(rc_default)
+    # unknown-model fallback path also stays stable at the default
+    rc_unknown = RunConfig(motor=motor, model="not_a_registered_model")
+    assert "nonlinear_solver" not in rc_unknown.to_dict()

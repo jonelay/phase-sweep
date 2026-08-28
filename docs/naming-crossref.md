@@ -117,8 +117,8 @@ and in implementation code throughout.
 The three-tier split (Geometry → Motor → RunConfig) replaces the earlier
 `MotorConfig` TypedDict, `MotorSweepConfig` dataclass, and
 `FullMotorConfig`, aligning with motulator's Pars/Cfg separation. Solver
-param factories (`solver_params.py`) validate Motor fields at the solver
-boundary.
+param factories (`prepare_*`, co-located with each model's run function)
+validate Motor fields at the solver boundary.
 
 ---
 
@@ -171,7 +171,8 @@ topology-agnostic design.
 | Reluctivity function | — | `nu` or `mur` | `_bh_nu(B)`, `nu`, `nu_cf`, `gfu_nu`, `nu_pm` |
 
 Zhu assumes infinite iron permeability (no saturation). The FEM code relaxes
-this via the B-H curve and Picard iteration.
+this via the B-H curve and damped Newton iteration by default, with Picard
+startup/fallback.
 
 ### Forms of `nu` in `solve_field_fem`
 
@@ -180,7 +181,7 @@ this via the B-H curve and Picard iteration.
 | `nu_cf` | `dict[str, float]` | Material name → reluctivity value |
 | `nu` | `CoefficientFunction` | Piecewise reluctivity on mesh (from `mesh.MaterialCF`) |
 | `nu_pm` | `float` | Scalar reluctivity of PM region |
-| `gfu_nu` | `GridFunction` | Element-wise reluctivity (Picard iteration) |
+| `gfu_nu` | `GridFunction` | Element-wise reluctivity used by the nonlinear iteration |
 | `_bh_nu` | function | `ν(|B|)` from B-H curve lookup |
 
 NGSolve convention is minimal: `nu` for the CoefficientFunction, `gfu_*`
@@ -245,4 +246,3 @@ No changes needed in this domain.
 | `SweepResult` for non-sweeps | Renamed to `RunResult` |
 | `p, q, s` abstract radii | Intentionally abstract, should stay |
 | NGSolve naming | Already aligned |
-

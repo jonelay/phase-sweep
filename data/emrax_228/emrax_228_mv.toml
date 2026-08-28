@@ -1,0 +1,107 @@
+# EMRAX 228 Medium Voltage (MV) — axial flux PMSM, 20-pole, WYE
+# First axial-flux motor in the canon. Circuit-tier anchor only (no
+# geometry tier until AxialFluxGeometry and axial-flux solvers exist).
+# Source:
+#   EMRAX 228 datasheet v1.7 (Aug 2026), Medium Voltage column, LC cooling.
+#   https://emrax.com/e-motors/emrax-228/
+#   PDF: https://emrax.com/wp-content/uploads/2026/08/EMRAX_228_datasheet_v1.7.pdf
+#
+# Variant selection: MV (Medium Voltage), LC (Liquid Cooled), standard
+# 3-phase UVW. The MV variant is the middle of the voltage range (630 V
+# DC for peak power) and has the highest peak power (124 kW at 5500 RPM).
+#
+# EMRAX UNIT CONVENTIONS (critical — differ from header labels):
+#   R_s: footnote 5 states "Phase-to-phase resistance measured at 25 °C
+#        and divided by 2", so the tabled 6.95 mΩ IS per-phase.
+#   psi_f: "PM Flux Linkage [Vs]" = 0.04200. Cross-check against Ke
+#        (0.04474) and Kt (0.64) confirms this is PEAK per-phase:
+#        Ke = psi_f·n_p·(2π/60) = 0.04398 (+1.7% of tabled Ke);
+#        Kt = 1.5·n_p·psi_f = 0.630 (-1.6% of tabled Kt).
+#        Scatter is within normal commercial datasheet tolerance.
+#        The Ke header says "Vrms/RPM" and the Kt header says "Nm/Arms"
+#        but the values are consistent with peak conventions — documented,
+#        not "corrected".
+#   L_d/L_q: 75.1/77.3 µH per phase. Mild saliency (L_q > L_d by 2.9%)
+#        — expected for axial-flux concentrated windings. Not SPM-pure
+#        but close; reluctance torque contribution is small.
+#   I_rated: tabled as A_rms; converted to A_peak below for [circuit].
+#   Kt·I cross-check: 0.64·180 = 115.2 Nm vs tabled 118 Nm (-2.4%);
+#        0.64·360 = 230.4 Nm vs tabled 220 Nm (+4.7%). The peak-torque
+#        droop is consistent with magnetic saturation at 360 A_rms.
+#
+# Topology: axial flux, single-stator dual-rotor (YASA-like segmented
+# armature). No [geometry] section — the radial-flux Geometry dataclass
+# does not apply.
+
+[motor]
+name = "EMRAX 228 MV (axial flux PMSM)"
+type = "axial-flux PMSM (single-stator dual-rotor, concentrated winding)"
+topology = "axial"
+
+[circuit]
+n_p = 10               # 20 poles
+R_s = 0.00695          # Ω per-phase at 25 °C (datasheet 6.95 mΩ; fn 5: pp/2)
+L_d = 75.1e-6          # H per-phase (datasheet 75.1 µH)
+L_q = 77.3e-6          # H per-phase (datasheet 77.3 µH)
+psi_f = 0.04200        # Wb, peak per-phase (datasheet "PM Flux Linkage")
+I_rated_rms = 180.0    # A rms continuous (LC cooling, datasheet)
+J = 0.0398             # kg·m² rotor inertia (LC/AC variant)
+
+[drive]
+U_DC = 630.0           # V DC for peak power (datasheet "Voltage required")
+MAX_I_S = 509.12       # A peak = √2 · 360 A_rms (datasheet peak motor current)
+W_REF = 575.96         # rad/s = 2π·5500/60 (peak power speed)
+
+[rated]
+torque_Nm = 118.0      # continuous torque, LC cooling (datasheet)
+speed_rpm = 5500       # peak power speed
+peak_torque_Nm = 220.0 # peak torque (datasheet, all variants)
+peak_power_kW = 124.0  # S2 30s peak power at 5500 RPM (datasheet)
+
+[envelope]
+# Dimensions for future axial-flux geometry work. NOT used by any solver.
+od_mm = 228.0          # outer diameter
+axial_length_mm = 86.0 # total axial length (housing)
+weight_kg = 13.5       # LC variant
+
+[provenance]
+source = "EMRAX 228 datasheet v1.7 (Aug 2026), MV column, LC cooling"
+url = "https://emrax.com/wp-content/uploads/2026/08/EMRAX_228_datasheet_v1.7.pdf"
+motor_model = "EMRAX 228 MV LC (axial flux, liquid cooled)"
+duty = "S1 continuous at LC cooling (min 6 l/min, max 50 °C, T_amb ≤ 30 °C); S2 30s peak"
+Ke_Vrms_per_RPM = 0.04474     # datasheet (likely peak despite header; see notes)
+Kt_Nm_per_Arms = 0.64         # datasheet (likely per A_peak despite header)
+Kv_no_load = 15.53             # RPM/V_DC at no load
+continuous_power_LC_kW = 68.0  # S1 continuous power, LC
+max_speed_rpm = 6500           # limiting speed
+efficiency_peak_pct = 96       # datasheet peak efficiency
+cooling_variants = "AC (air) / LC (liquid) / CC (combined)"
+temp_limit_winding = 100       # °C (integrated sensor)
+temp_limit_rotor = 80          # °C (integrated sensor)
+temp_limit_integrated = 120    # °C (integrated parts absolute)
+notes = """
+First axial-flux anchor in the canon. EMRAX 228 is a compact axial-flux
+PMSM with high power/torque density, widely used in EV and aerospace
+prototyping. The motor is a YASA-like topology: yokeless stator with
+segmented teeth sandwiched between two PM rotor discs.
+
+Circuit-tier only: eligible for rated_torque (Kt cross-check), thermal_duty
+(three cooling variants at the same winding give a thermal scaling anchor),
+torque_speed (peak/continuous envelopes from page 1 curves). NOT eligible
+for any geometry-tier model (analytical field, FEM, cogging) until
+AxialFluxGeometry and corresponding solvers are implemented.
+
+The datasheet publishes six winding variants (HV/MV/LV standard, plus
+LV+43%/LV+100%/HV+42%) on the same stator/rotor hardware — only the
+winding changes. This anchor uses MV as the representative variant; the
+other five can be added as separate anchors to test winding-scaling
+consistency.
+
+Kt·I vs τ check at peak current shows 4.7% saturation droop (230 vs 220
+Nm), consistent with the high current loading of a compact axial-flux
+machine. The continuous-torque cross-check is tighter (-2.4%) because
+the LC continuous current (180 Arms) operates below the saturation knee.
+
+IMPORTANT: EMRAX is transitioning to next-generation motors. The 228 will
+be discontinued, but the datasheet parameters remain valid for validation.
+"""

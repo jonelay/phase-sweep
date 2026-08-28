@@ -4,25 +4,17 @@ Phase-sweep validates its electromagnetic models against published research,
 manufacturer datasheets, and bench measurements across a fleet of motors
 spanning different topologies, pole counts, and magnet grades.
 
-## Summary
-
-| Metric | Count |
-|--------|-------|
-| Reference motors (report) | 8 |
-| Additional motors (test suite only) | 6 |
-| Validation anchors (JSON) | see `data/` |
-| Cross-validation test cases | see `tests/crossval/` |
-| Quantities validated | back-EMF, airgap flux, torque, MTPA angle, Kt |
-| Source types | published papers, datasheets, bench measurements |
+Validation anchors live under `data/`; their executable comparisons live in
+`tests/crossval/`. The tables below summarize the generated results without
+maintaining separate fleet or test counts.
 
 ### Cross-Validation Results
 
-All comparisons from the automated validation report. **11 of 13** comparisons
-pass within tolerance; the two partial results are explained below.
+Comparisons from the automated validation report are summarized below;
+non-passing or qualified results are explained after the table.
 
 | Motor | Quantity | Computed | Reference | Error | Tol | Result | Source |
 |-------|----------|---------|-----------|-------|-----|--------|--------|
-| CREATOR Case PMSM | back-EMF (V) | 47.91 | 47.37 | 1.1% | 5% | PASS | TU Graz CREATOR dataset |
 | CREATOR Case PMSM | MTPA angle at 0.15 A | 12.3° | 10° | 23.0% | 25% | PASS | arXiv:2501.15921 |
 | CREATOR Case PMSM | MTPA angle at 0.30 A | 20.6° | 20° | 3.2% | 15% | PASS | arXiv:2501.15921 |
 | CREATOR Case PMSM | rated torque (Nm) | 0.107 | ≥ 0.10 | +6.8% | bound | PASS | arXiv:2501.15921 |
@@ -33,48 +25,57 @@ pass within tolerance; the two partial results are explained below.
 | Belkhadir ER-PMSM | rated torque (Nm) | 25.1 | ≥ 24 | +4.5% | bound | PASS | IECON 2023 |
 | Deylami Fan | B_ag peak (FEM, T) | 0.408 | 0.49 | 16.7% | 25% | PASS | TechRxiv |
 | Deylami Fan | B_ag peak (analytical, T) | 0.365 | 0.49 | 25.5% | 25% | FAIL | TechRxiv |
-| 14 mm Outrunner (Steel) | back-EMF (V) | 2.14 | 1.68 | 27.3% | 1% | FAIL | bench (ODrive) |
+| 14 mm Outrunner (Steel) | back-EMF (V) | 1.97 | 1.68 | 16.9% | 1% | FAIL | bench (ODrive) |
 
 ### Notes on Partial Results
 
-**Deylami Fan analytical B_ag_peak (25.5% vs 25% tolerance):** The analytical
-model slightly exceeds tolerance for this simplified slot geometry. The FEM
-model passes at 16.7%. The published reference itself is from a simplified 2D
-ANSYS Maxwell model, not a physical measurement — both values are
-model-vs-model comparisons.
+**Deylami Fan analytical B_ag_peak:** The analytical model slightly exceeds
+tolerance for this simplified slot geometry, while the FEM model passes. The
+published reference itself is from a simplified 2D ANSYS Maxwell model, not a
+physical measurement — both values are model-vs-model comparisons.
 
-**14 mm Outrunner (Steel) back-EMF (27.3%):** The linear speed sweep (RTB2004 oscilloscope, 8 points, R² = 0.9999)
-supports measurement consistency. Calibration attributes most of the
-discrepancy to the nominal B_rem (1.45 T) exceeding the effective value
-(~1.14 T). This motor is the framework's flagship calibration case.
+**14 mm Outrunner (Steel) back-EMF:** The measured speed sweep supports
+measurement consistency. Applying the computed end-effect correction reduces
+the discrepancy; calibration attributes most of the remainder to nominal
+remanence exceeding its effective value. This motor is the framework's
+flagship calibration case.
 
 ## Analytical vs FEM Agreement
 
-The analytical (Zhu & Howe subdomain) and nonlinear FEM (NGSolve Picard
-iteration) solvers agree closely on the airgap flux density fundamental across
-all reference motors:
+The analytical (Zhu & Howe subdomain) and nonlinear FEM (NGSolve damped
+Newton by default, with Picard startup/fallback) solvers agree closely on
+the airgap flux density fundamental across the applicable reference
+configurations:
 
-| Motor | Analytical B₁ (T) | FEM B₁ (T) | Delta | Speed ratio |
-|-------|-------------------|------------|-------|-------------|
-| 14 mm Outrunner (Steel) | 1.004 | 0.998 | 0.5% | 14,400× |
-| CREATOR Case PMSM | 0.302 | 0.302 | 0.1% | 27,900× |
-| Belkhadir 22p/24s ER-PMSM | 1.026 | 1.020 | 0.6% | 69,100× |
-| Deylami 8p/12s Cooling Fan | 0.453 | 0.445 | 1.7% | 88,600× |
-| FEMM LRK 14p/12s | 0.950 | 0.945 | 0.6% | 20,800× |
-| Zhu & Howe 8-pole inrunner | 0.565 | 0.564 | 0.2% | 4,500× |
-| Zhu & Howe 8-pole outrunner | 0.552 | 0.552 | 0.0% | 4,400× |
+| Motor | Analytical B₁ (T) | FEM B₁ (T) | Delta |
+|-------|-------------------|------------|-------|
+| 14 mm Outrunner (Steel) | 1.004 | 0.998 | 0.5% |
+| Belkhadir 22p/24s ER-PMSM | 1.026 | 1.020 | 0.6% |
+| Deylami 8p/12s Cooling Fan | 0.453 | 0.445 | 1.7% |
+| FEMM LRK 14p/12s | 0.950 | 0.945 | 0.6% |
+| Zhu & Howe 8-pole inrunner | 0.565 | 0.564 | 0.2% |
+| Zhu & Howe 8-pole outrunner | 0.552 | 0.552 | 0.0% |
 
-The analytical model runs 4,400–89,000× faster than FEM while maintaining
-< 3% error on the fundamental.
+The analytical model is substantially faster than FEM while maintaining
+the stated agreement bounds on the fundamental.
+
+CREATOR Case PMSM is absent from this table: its rotor uses
+`magnet_mount = "inset"` (interpole iron), which the Zhu & Howe
+subdomain model does not support — the analytical solver rejects the
+motor by design, and CREATOR is validated on the nonlinear FEM path
+only.
 
 ## Per-Motor Details
 
 ### CREATOR Case PMSM
 
 4-pole inrunner from the TU Graz CREATOR open dataset (arXiv:2501.15921).
-Validated on back-EMF, MTPA angle, and rated torque. (Iron loss excluded:
-`B_core` was calibrated against the same measured loss curve — see
-CHANGELOG 0.3.0.)
+Validated on MTPA angle and rated torque. The rotor uses inset magnets
+(interpole iron), so only the nonlinear FEM solver applies — the earlier
+analytical back-EMF comparison was retired when the magnet mount was
+corrected; the measured back-EMF capture remains in the anchor set as an
+import gate. (Iron loss excluded: `B_core` was
+calibrated against the same measured loss curve — see CHANGELOG 0.3.0.)
 
 ![Airgap flux density waveform — CREATOR Case PMSM](images/validation/br_waveform_creator_case_pmsm.png)
 
@@ -110,9 +111,8 @@ airgap flux comparison; the analytical model slightly exceeds the tolerance.
 ### 14 mm Outrunner (Steel)
 
 12-pole / 9-slot outrunner (bench-measured with RTB2004 oscilloscope).
-The 27% back-EMF discrepancy reflects the gap between nominal B_rem
-(1.45 T) and the effective value (~1.14 T from calibration), not a
-measurement error.
+The remaining, end-effect-corrected back-EMF discrepancy reflects the gap
+between nominal and calibrated effective remanence, not a measurement error.
 
 ![Airgap flux density waveform — 14 mm Outrunner (Steel)](images/validation/br_waveform_outrunner_14mm_steel.png)
 
@@ -134,6 +134,47 @@ figures above:
 | Rexroth MS2N04 | Bosch Rexroth manual | back-EMF from KE |
 | Tecnotion QTR-A-105 | Tecnotion datasheet | back-EMF from KE |
 | JMT 1806 2400KV | bench measurement | back-EMF speed sweep (8 speeds) |
+| Parviainen 5 kW AFPM | LUT D.Sc. thesis | back-EMF 211 V (`analytical_axial`); `fem_axial` bracket only — see below |
+| NWPU 12 kW Halbach SPM | WEVJ 16(8):413 (2025) | measured back-EMF 75.2 V peak (FEM + analytical) |
+| Jilin 5.5 kW SynRM | PMC11679518 (2024) | reluctance-only MTPA through rated_torque/torque_speed/thermal_duty/drive_sim |
+
+### Axial-Flux FEM (`fem_axial`)
+
+`fem_axial` is verified by code-to-code and limit comparison rather
+than by a measured back-EMF gate:
+
+| Check | Result |
+|---|---|
+| Mirror BC vs true periodic identification | 2–3·10⁻⁵ on B1 |
+| Slotless plane vs analytical layer model | 0.06% |
+| Cross-code vs Elmer (independent solver) | 0.42% |
+| 1D magnetic-circuit limit | 0.06% |
+
+It is **not** gated on the Parviainen E_PM: that anchor does not
+publish its slot opening, and the explicit-slot model spans
+192.6–234.3 V across the plausible slot geometry, so the anchor cannot
+discriminate. The crossval test asserts that the measured value falls
+inside that bracket. `analytical_axial` remains the E_PM-gated axial
+model.
+
+### Radial FEM Cross-Code (Elmer)
+
+The radial `fem` model — the project's primary field solver — is
+cross-checked against ElmerFEM (independent code, mesh, basis, and
+nonlinear linearization) on surface-PM inrunner cases covering
+smooth bore, discrete magnet arcs, nonlinear BH, slots, and armature
+current sheet (`scripts/elmer_radial/`, pinned JSON re-checked by
+`tests/crossval/test_elmer_radial_pinned.py`):
+
+| Check | Result |
+|---|---|
+| Slotless and nonlinear cases, B₁ at r_ag | 0.07–0.11% |
+| Slotted cases (open-circuit and j_s) | 0.17–0.21% |
+| Linear slotless cases vs Zhu/Howe/Chan series | ≤ 0.2% |
+
+Rotation/cogging is excluded from the cross-check: the mean field
+agrees, but the sub-0.1% ripple over a slot pitch is discretization
+noise in both codes at these mesh levels.
 
 ## How Validation Works
 
@@ -146,8 +187,8 @@ published or measured value, its source, tolerance, and comparison method:
   and compare to a published value
 
 The `phasesweep.validation.crossval` module computes deviations, applies
-tolerances, and produces structured pass/fail diagnostics. The crossval
-suite runs in CI on every commit.
+tolerances, and produces structured pass/fail diagnostics. Cross-validation
+tests are assigned to the CI lanes defined by the workflow configuration.
 
 ## Reproducing This Report
 
@@ -156,7 +197,7 @@ pip install -e ".[all]"
 uv run python scripts/validation_report.py --no-sensitivity --workers 4
 ```
 
-The full report with sensitivity analysis takes approximately 45 minutes:
+To include sensitivity analysis, omit `--no-sensitivity`:
 
 ```bash
 uv run python scripts/validation_report.py --workers 4

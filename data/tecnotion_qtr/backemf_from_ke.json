@@ -20,5 +20,5 @@
   "source_file": "Tecnotion Torque QTR 105 series specsheet Ver. 2.0 (2021), column QTR-A-105-25 winding N",
   "source": "published",
   "derived_params": ["psi_f"],
-  "provenance_note": "Unit conversion of the specsheet constant, NOT an independent measurement: the motor TOML psi_f = 0.028118 Wb is DERIVED from this same Ke (psi_f = [Ke/(1000*2*pi/60)]/(sqrt(3)*n_p)), so backemf_fundamental here equals psi_f*n_p*omega by construction. derived_params arms the calibration circularity guard (REQ-0819): fitting psi_f (or interderivable B_rem) against this dataset is an echo, not a calibration, and is refused. Tolerance 10% per sheet remark 'All specifications +-10%'."
+  "provenance_note": "Unit conversion of the specsheet constant, NOT an independent measurement: the motor TOML psi_f = 0.028118 Wb is DERIVED from this same Ke (psi_f = [Ke/(1000*2*pi/60)]/(sqrt(3)*n_p)), so backemf_fundamental here equals psi_f*n_p*omega by construction. derived_params arms the calibration circularity guard: fitting psi_f (or interderivable B_rem) against this dataset is an echo, not a calibration, and is refused. Tolerance 10% per sheet remark 'All specifications +-10%'."
 }

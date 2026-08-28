@@ -64,7 +64,7 @@ skipped automatically when they are not present.
 
 ## Full Dataset (for Tier 2 tests)
 
-Some tests in `tests/test_creator_model.py` additionally require the
+Some tests in `tests/crossval/test_creator_model.py` additionally require the
 full extracted dataset tree (back-EMF and cogging torque waveform CSVs).
 After running the fetch script above, unzip in this directory:
 

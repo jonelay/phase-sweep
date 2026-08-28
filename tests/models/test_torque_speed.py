@@ -3,19 +3,25 @@
 from itertools import pairwise
 from math import pi, sqrt
 
+import numpy as np
 import pytest
 
+import phasesweep.models.torque_speed as ts
 from phasesweep.machines.motor import DriveParams
 from phasesweep.models.rated_torque import mtpa_gamma, mtpa_torque
 from phasesweep.models.torque_speed import (
+    TorqueSpeedParams,
     base_speed,
     dq_voltage,
     envelope_at_speed,
+    envelope_curve,
+    envelope_curve_batch,
     max_speed,
+    prepare_torque_speed,
     run_torque_speed,
+    run_torque_speed_batch,
 )
 from phasesweep.registry import MODEL_REGISTRY
-from phasesweep.solver_params import TorqueSpeedParams, prepare_torque_speed
 from phasesweep.sweep_types import RunConfig, compute_run_id
 from tests.conftest import make_motor
 
@@ -27,6 +33,16 @@ _NP, _PSI, _L, _I, _U = 4, 0.1, 1e-3, 50.0, 100.0
 
 def _spm_args(R_s=0.0):
     return (_NP, _PSI, R_s, _L, _L)
+
+
+def _envelope_at_grid(n_pts, args, I_max, U_max, w):
+    """Envelope torque with the bracketing grid forced to n_pts."""
+    saved = ts._ID_GRID_PTS
+    ts._ID_GRID_PTS = n_pts
+    try:
+        return ts.envelope_curve(*args, I_max, U_max, w)[0]
+    finally:
+        ts._ID_GRID_PTS = saved
 
 
 class TestParams:
@@ -67,6 +83,20 @@ class TestParams:
     def test_registry_validate_wired(self):
         with pytest.raises(ValueError, match="torque_speed needs"):
             MODEL_REGISTRY["torque_speed"].validate(make_motor(L_d=None))
+
+    @pytest.mark.parametrize("field", ["psi_f", "R_s", "L_d", "L_q",
+                                       "I_peak", "U_max", "I_cont"])
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+    def test_non_finite_params_rejected(self, field, bad):
+        """Every range check here is an inequality, and NaN compares False
+        against all of them — so without an explicit finite check a NaN
+        reaches the optimizer, which has no way to signal it and returns a
+        plausible-looking 0 Nm envelope that persists to the store."""
+        kw = dict(n_p=4, psi_f=0.1, R_s=0.0, L_d=1e-3, L_q=1e-3,
+                  I_peak=50.0, U_max=100.0)
+        kw[field] = bad
+        with pytest.raises(ValueError, match=f"non-finite.*{field}"):
+            TorqueSpeedParams(**kw)
 
 
 class TestSpmClosedForm:
@@ -160,6 +190,20 @@ class TestSalient:
         assert i_d > 0
         assert tau == mtpa_torque(n_p, psi_f, L_d, L_q, I_s, g)
 
+    def test_synrm_envelope(self):
+        # psi_f = 0 (SynRM): MTPA torque below base speed is the 45-deg
+        # reluctance value; characteristic current 0 <= I → MTPV branch,
+        # envelope never crosses zero.
+        n_p, psi_f, R_s, L_d, L_q, I_s, U = 2, 0.0, 0.1, 5e-3, 1.05e-2, 10.0, 100.0
+        tau, _, _ = envelope_at_speed(n_p, psi_f, R_s, L_d, L_q, I_s, U, 1.0)
+        assert tau == pytest.approx(0.75 * n_p * (L_q - L_d) * I_s**2, rel=1e-9)
+        assert max_speed(n_p, psi_f, R_s, L_d, L_q, I_s, U) is None
+        w_b = base_speed(n_p, psi_f, R_s, L_d, L_q, I_s, U)
+        assert w_b > 0.0
+        tau_fw, _, _ = envelope_at_speed(n_p, psi_f, R_s, L_d, L_q, I_s, U,
+                                         5.0 * w_b)
+        assert 0.0 < tau_fw < tau
+
     def test_unbounded_cpsr_when_char_current_within_limit(self):
         # psi_f/L_d = 20 A <= I = 50 A → MTPV branch, no zero crossing
         n_p, psi_f, R_s, L_d, L_q, I_s, U = 4, 0.02, 0.0, 1e-3, 2e-3, 50.0, 100.0
@@ -206,6 +250,57 @@ class TestRunner:
         r = MODEL_REGISTRY["torque_speed"].fn(rc)
         assert r["base_speed_peak"] > 0
 
+    def test_synrm_runner_w_end_fallback(self):
+        rc = RunConfig(
+            motor=make_motor(psi_f=0.0, L_d=5e-3, L_q=1.05e-2, I_rated=10.0),
+            model="torque_speed")
+        r = run_torque_speed(rc)
+        assert r["max_speed_peak"] is None
+        assert r["max_speed_cont"] is None
+        w_b = max(r["base_speed_peak"], r["base_speed_cont"])
+        assert r["speed_curve"][-1] == pytest.approx(3.0 * w_b)
+        assert r["p_max_peak"] > 0
+        assert all(t > 0.0 for t in r["tau_curve_peak"][1:])
+
+    def test_synrm_params_no_saliency_raises(self):
+        with pytest.raises(ValueError, match="cannot produce torque"):
+            TorqueSpeedParams(n_p=2, psi_f=0.0, R_s=0.2, L_d=4e-3,
+                              L_q=4e-3, I_peak=20.0, U_max=311.0)
+
+    def test_batch_matches_per_speed(self):
+        """envelope_curve over an array == envelope_at_speed one at a time."""
+        speeds = [0.0, 1.0, 137.0, 400.0, 1500.0, 9000.0]
+        batch = envelope_curve(*_spm_args(0.05), _I, _U,
+                               np.array(speeds, dtype=float))
+        for k, w in enumerate(speeds):
+            one = envelope_at_speed(*_spm_args(0.05), _I, _U, w)
+            assert (batch[0][k], batch[1][k], batch[2][k]) == one
+
+    @pytest.mark.parametrize("args,I_max,U_max", [
+        ((7, 0.3968945864786428, 0.010891186341443423,
+          3.800097770739259e-06, 4.935904065457545e-06),
+         24.5931257427337, 255.5275423019006),
+        ((46, 0.09044695654302622, 0.00018714926744507242,
+          0.00019928386242500342, 0.016195706209843758),
+         0.8106930317983063, 19.57704067183964),
+    ])
+    def test_production_grid_matches_a_much_finer_one(self, args, I_max,
+                                                      U_max):
+        """The production envelope must match a 2001-point reference."""
+        w_end = max_speed(*args, I_max, U_max) or 3.0 * base_speed(
+            *args, I_max, U_max)
+        w = np.linspace(0.0, w_end, ts.N_SPEED_PTS)
+
+        ref = _envelope_at_grid(2001, args, I_max, U_max, w)
+        prod = ts.envelope_curve(*args, I_max, U_max, w)[0]
+        assert np.max(np.abs(ref - prod)) / np.max(ref) < 1e-9
+
+    @pytest.mark.parametrize("w", [float("nan"), float("inf"), 1e160])
+    def test_non_finite_speed_yields_zero_not_nan(self, w):
+        with np.errstate(over="ignore", invalid="ignore"):
+            tau, i_d, i_q = envelope_at_speed(*_spm_args(), _I, _U, w)
+        assert (tau, i_d, i_q) == (0.0, 0.0, 0.0)
+
     def test_hash_sensitive_to_u_dc_not_fem_params(self):
         fields = MODEL_REGISTRY["torque_speed"].hash_fields
         m1 = make_motor()
@@ -216,6 +311,85 @@ class TestRunner:
         assert compute_run_id(rc1, fields) != compute_run_id(rc2, fields)
         rc3 = RunConfig(motor=m1, model="torque_speed", maxh_fraction=0.10)
         assert compute_run_id(rc1, fields) == compute_run_id(rc3, fields)
+
+
+class TestBatch:
+
+    @staticmethod
+    def _case_params():
+        motors = [
+            make_motor(R_s=0.0),
+            make_motor(R_s=0.05),
+            make_motor(L_d=2e-3, L_q=4e-3),
+            make_motor(L_d=25e-3, L_q=20e-3, psi_f=0.2, R_s=1.0),
+            make_motor(psi_f=0.0, L_d=5e-3, L_q=1.05e-2),
+        ]
+        return [prepare_torque_speed(m) for m in motors]
+
+    def test_envelope_curve_batch_matches_serial(self):
+        """envelope_curve_batch over N designs == per-design envelope_curve."""
+        ps = self._case_params()
+        grids = [ts._speed_grid(p)[1] for p in ps]
+        serial = [envelope_curve(p.n_p, p.psi_f, p.R_s, p.L_d, p.L_q,
+                                 p.I_peak, p.U_max, g)
+                  for p, g in zip(ps, grids)]
+        batch = envelope_curve_batch(
+            np.array([p.n_p for p in ps], dtype=float),
+            np.array([p.psi_f for p in ps], dtype=float),
+            np.array([p.R_s for p in ps], dtype=float),
+            np.array([p.L_d for p in ps], dtype=float),
+            np.array([p.L_q for p in ps], dtype=float),
+            np.array([p.I_peak for p in ps], dtype=float),
+            np.array([p.U_max for p in ps], dtype=float),
+            np.stack(grids))
+        assert batch[0].shape == (len(ps), ts.N_SPEED_PTS)
+        for i, one in enumerate(serial):
+            for a in range(3):
+                assert (batch[a][i] == one[a]).all()
+
+    def test_run_batch_single_matches_serial(self):
+        rc = RunConfig(motor=make_motor(I_rated=10.0), model="torque_speed")
+        serial = run_torque_speed(rc)
+        [b] = run_torque_speed_batch([rc])
+        assert b == serial
+
+    def test_run_batch_catalog_motors(self):
+        from phasesweep.machines.configs import load_motor
+        from tests.conftest import REPO_ROOT
+        rcs = [RunConfig(motor=load_motor(REPO_ROOT / toml),
+                         model="torque_speed")
+               for toml, *_ in _ETEL_ENVELOPE_ANCHORS]
+        batch = run_torque_speed_batch(rcs)
+        for b, rc in zip(batch, rcs):
+            s = run_torque_speed(rc)
+            assert set(b) == set(s)
+            for key in s:
+                assert b[key] == s[key]
+
+    def test_bad_design_mid_batch(self):
+        good0 = RunConfig(motor=make_motor(), model="torque_speed")
+        bad = RunConfig(motor=make_motor(L_d=None), model="torque_speed")
+        good2 = RunConfig(motor=make_motor(I_rated=10.0),
+                          model="torque_speed")
+        res = run_torque_speed_batch([good0, bad, good2])
+        assert isinstance(res[1], ValueError)
+        assert "torque_speed needs L_d" in str(res[1])
+        assert res[0] == run_torque_speed(good0)
+        assert res[2] == run_torque_speed(good2)
+
+    def test_mixed_i_rated_presence(self):
+        rcs = [
+            RunConfig(motor=make_motor(), model="torque_speed"),
+            RunConfig(motor=make_motor(I_rated=10.0), model="torque_speed"),
+            RunConfig(motor=make_motor(L_d=2e-3, L_q=4e-3, I_rated=8.0),
+                      model="torque_speed"),
+        ]
+        res = run_torque_speed_batch(rcs)
+        assert "tau_curve_cont" not in res[0]
+        assert "tau_curve_cont" in res[1]
+        assert "tau_curve_cont" in res[2]
+        for b, rc in zip(res, rcs):
+            assert b == run_torque_speed(rc)
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +471,7 @@ def test_etel_rated_point_is_voltage_feasible(toml, in_rms, nb, nm, tn,
 
     nn sits below the model's base speed at In on every frame (ETEL rates
     with speed margin), and the envelope torque at nn exceeds Tn — the
-    feasibility statement this test exists to make. Tn itself is 15-40%
+    feasibility statement the model exists to make. Tn itself is 15-40%
     below the MTPA torque at In (rating margin + saturation), so only the
     inequality is claimed.
     """
@@ -843,3 +1017,36 @@ class TestPriusEnvelope:
         ts = MODEL_REGISTRY["torque_speed"].fn(cfg)
         assert ts["p_max_peak"] / 1000 > 50.0
         assert ts["p_max_peak"] / 1000 == pytest.approx(62.3, abs=1.0)
+
+
+# ---------------------------------------------------------------------------
+# dq energy-balance invariant
+# ---------------------------------------------------------------------------
+
+def test_envelope_energy_balance_and_feasibility():
+    """Every envelope point must (a) respect the current and voltage
+    limits and (b) satisfy the steady-state dq energy balance
+    P_elec - P_cu = tau * w_mech — the identity linking the voltage
+    equations to the torque expression. It fails if either drifts (sign
+    conventions, the 1.5 / n_p factors) or if the FW branch returns a
+    wrong quadratic root (the motulator negative-torque class).
+    Measured residual ~5e-16; 1e-9 bound."""
+    n_p, psi_f, R_s, L_d, L_q = 4, 0.1, 0.05, 2e-3, 4e-3  # salient
+    I_max, U_max = 50.0, 100.0
+    w_b = base_speed(n_p, psi_f, R_s, L_d, L_q, I_max, U_max)
+    w = np.linspace(0.1 * w_b, 3.0 * w_b, 25)
+    tau, i_d, i_q = envelope_curve(n_p, psi_f, R_s, L_d, L_q, I_max,
+                                   U_max, w)
+    live = tau > 1e-9
+    # the sweep must actually exercise the FW branch with torque live
+    assert live.sum() >= 20
+    assert np.any(i_d[live] < -1e-6)
+    assert np.all(np.hypot(i_d, i_q) <= I_max * (1 + 1e-9))
+    w_e = n_p * w
+    u_d = R_s * i_d - w_e * L_q * i_q
+    u_q = R_s * i_q + w_e * (psi_f + L_d * i_d)
+    assert np.all(np.hypot(u_d, u_q)[live] <= U_max * (1 + 1e-9))
+    p_em = (1.5 * (u_d * i_d + u_q * i_q)
+            - 1.5 * R_s * (i_d ** 2 + i_q ** 2))
+    resid = np.abs(p_em - tau * w) / np.maximum(np.abs(tau * w), 1.0)
+    assert np.max(resid[live]) < 1e-9

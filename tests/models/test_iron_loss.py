@@ -11,12 +11,13 @@ import numpy as np
 import pytest
 
 from phasesweep.models.iron_loss import (
+    IronLossParams,
     bertotti_loss_density,
     fit_bertotti,
+    prepare_iron_loss,
     run_iron_loss,
 )
 from phasesweep.registry import MODEL_REGISTRY
-from phasesweep.solver_params import IronLossParams, prepare_iron_loss
 from phasesweep.sweep_types import RunConfig, compute_run_id
 from tests.conftest import REPO_ROOT, STEEL_TABLES_SKIP, make_motor
 
@@ -47,9 +48,14 @@ def _steel_table(b_max=1.5):
 class TestBertottiCore:
 
     def test_loss_density_handcalc(self):
-        # M19 reference coefficients (docs/references.md) at 1 T, 60 Hz
-        p = bertotti_loss_density(60.0, 1.0, 0.0275, 0.00026, 1.7)
-        assert p == pytest.approx(0.0275 * 60 + 0.00026 * 3600, rel=1e-12)
+        # M19 reference coefficients (docs/references.md) at 1.3 T, 60 Hz.
+        # B != 1 keeps the alpha exponent live in the hand-calc — at
+        # B = 1 T every B**alpha collapses to 1 and a wrong exponent
+        # passes invisibly.
+        p = bertotti_loss_density(60.0, 1.3, 0.0275, 0.00026, 1.7)
+        assert p == pytest.approx(
+            0.0275 * 60 * 1.3 ** 1.7 + 0.00026 * 3600 * 1.3 ** 2,
+            rel=1e-12)
 
     def test_fit_recovers_synthetic_coefficients(self):
         rng_f = np.array([50.0, 60, 100, 200, 400, 600, 1000] * 5)
@@ -107,10 +113,6 @@ class TestM250Fit:
             2.15, rel=0.20)
 
 
-@pytest.mark.skipif(not NO_LOAD_CSV.exists(), reason=(
-    "CREATOR-derived CSVs not found — run "
-    "python scripts/fetch_creator_dataset.py"
-))
 class TestCreatorNoLoadCurve:
     """Measured no-load iron loss: mass-free hysteresis/eddy split.
 
@@ -158,10 +160,6 @@ class TestCreatorNoLoadCurve:
             assert share_cat > eddy_share + 0.05, (B, share_cat)
 
 
-@pytest.mark.skipif(not NO_LOAD_CSV.exists(), reason=(
-    "CREATOR-derived CSVs not found — run "
-    "python scripts/fetch_creator_dataset.py"
-))
 class TestCreatorTomlIronBlock:
     """The shipped [iron] block on motors/creator_case_pmsm.toml.
 

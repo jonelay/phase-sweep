@@ -50,4 +50,4 @@ Following the Prius community-standard calibration practice:
 Apache-2.0 — see https://github.com/Eomys/pyleecan/blob/master/LICENSE.
 
 Other data files contain parameter values transcribed from the cited
-publications and are covered by the MIT license.
+publications and are covered by the project's LGPL-2.1 license.

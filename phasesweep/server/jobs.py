@@ -29,6 +29,7 @@ from typing import Any, cast
 import structlog
 
 from phasesweep.geo_parallel import SweepAxis, execute_parallel, generate_grid
+from phasesweep.machines.geometry import Geometry
 from phasesweep.machines.motor import Motor
 from phasesweep.registry import MODEL_REGISTRY, ModelInfo
 from phasesweep.result_store import ResultStore
@@ -41,7 +42,7 @@ log = structlog.get_logger()
 # duty_profile, and load_mech need structured conversion.
 _SCALAR_CONFIG_KEYS = frozenset({
     "maxh_fraction", "n_theta", "nonlinear", "j_s", "i_fault",
-    "rotation", "cogging_points",
+    "rotation", "cogging_points", "n_planes",
 })
 _CONFIG_PARAM_KEYS = _SCALAR_CONFIG_KEYS | {"sim_plan", "duty_profile", "load_mech"}
 
@@ -55,13 +56,44 @@ _PARAM_GATED_FIELDS = frozenset({
 _TERMINAL: frozenset[JobStatus] = frozenset({"completed", "failed", "cancelled"})
 
 
+def _rated_duty_torque(motor: Motor) -> float:
+    """Nameplate torque for the auto-derived S1 duty profile.
+
+    k_T * I_rated for PM machines. For psi_f = 0 (SynRM) that is zero —
+    a zero-torque duty profile would pass the thermal screen vacuously —
+    so fall back to the full MTPA reluctance torque at I_rated (mirrors
+    plan_sim's tau_peak fallback), and raise when there is no saliency
+    to produce torque from.
+    """
+    from phasesweep.models.rated_torque import (
+        magnet_torque_constant,
+        mtpa_gamma,
+        mtpa_torque,
+    )
+    from phasesweep.solver_params import _resolve_psi_f, _salient_pair
+
+    assert motor.I_rated is not None  # callers gate on I_rated
+    psi_f = _resolve_psi_f(motor)
+    tau = magnet_torque_constant(motor.n_p, psi_f) * motor.I_rated
+    if tau > 0.0:
+        return tau
+    L_d, L_q = _salient_pair(motor)
+    if L_d is None or L_q is None or L_d == L_q:
+        raise ValueError(
+            "psi_f = 0 with no saliency (L_d == L_q or unset): "
+            "machine cannot produce torque"
+        )
+    g = mtpa_gamma(psi_f, L_d, L_q, motor.I_rated)
+    return mtpa_torque(motor.n_p, psi_f, L_d, L_q, motor.I_rated, g)
+
+
 def _auto_derive_params(
     params: dict[str, Any], model_key: str, motor: Motor,
 ) -> None:
     """Fill in missing param-gated fields from motor physics."""
     if model_key == "drive_sim" and params.get("sim_plan") is None:
+        from phasesweep.simulation.params import prepare_drive_sim
         from phasesweep.simulation.sim import plan_sim
-        from phasesweep.solver_params import prepare_drive_sim
         params["sim_plan"] = plan_sim(prepare_drive_sim(motor)).to_dict()
     if model_key == "drive_sim_two_mass":
         if params.get("load_mech") is None:
@@ -69,8 +101,8 @@ def _auto_derive_params(
                 "drive_sim_two_mass requires params.load_mech"
             )
         if params.get("sim_plan") is None:
+            from phasesweep.simulation.params import TwoMassLoad, prepare_drive_sim
             from phasesweep.simulation.sim import plan_two_mass_sim
-            from phasesweep.solver_params import TwoMassLoad, prepare_drive_sim
             try:
                 load = TwoMassLoad.from_dict(params["load_mech"])
             except (KeyError, TypeError, ValueError) as e:
@@ -79,8 +111,6 @@ def _auto_derive_params(
                 prepare_drive_sim(motor), load,
             ).to_dict()
     if model_key == "thermal_duty" and params.get("duty_profile") is None:
-        from phasesweep.models.rated_torque import magnet_torque_constant
-        from phasesweep.solver_params import _resolve_psi_f
         if motor.I_rated is None:
             # fail at submit (400) like demag_screen, not at runtime —
             # an r_th-budget motor validates without I_rated
@@ -88,9 +118,7 @@ def _auto_derive_params(
                 "thermal_duty auto-derive needs I_rated for duty_profile; "
                 "set duty_profile explicitly or add I_rated"
             )
-        psi_f = _resolve_psi_f(motor)
-        tau = magnet_torque_constant(motor.n_p, psi_f) * motor.I_rated
-        params["duty_profile"] = [[tau, 3600.0]]
+        params["duty_profile"] = [[_rated_duty_torque(motor), 3600.0]]
     if model_key == "demag_screen" and params.get("i_fault") is None:
         if motor.drive.MAX_I_S is None:
             raise ValueError(
@@ -144,7 +172,7 @@ def _build_config_kw(params: dict[str, Any]) -> dict[str, Any]:
             # bare KeyError would masquerade as an unknown-motor 404
             raise ValueError(f"bad sim_plan: {e}") from e
     if params.get("load_mech") is not None:
-        from phasesweep.solver_params import TwoMassLoad
+        from phasesweep.simulation.params import TwoMassLoad
         try:
             kw["load_mech"] = TwoMassLoad.from_dict(params["load_mech"])
         except (KeyError, TypeError, ValueError) as e:
@@ -153,12 +181,23 @@ def _build_config_kw(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _config_kw_of(rc: RunConfig) -> dict[str, Any]:
-    """RunConfig solver params as the config_kw dict _run_worker rebuilds from."""
+    """RunConfig solver params as the config_kw dict _run_worker rebuilds from.
+
+    Every field that reaches compute_run_id must appear here: the run ID
+    is computed from the submitted RunConfig, but the worker rebuilds
+    from this dict. A field present in one and missing from the other
+    stores a result under an ID that describes a configuration the
+    worker never ran (rotation and cogging_points were silently dropped
+    this way before n_planes was added).
+    """
     kw: dict[str, Any] = {
         "maxh_fraction": rc.maxh_fraction,
         "n_theta": rc.n_theta,
         "nonlinear": rc.nonlinear,
         "j_s": rc.j_s,
+        "rotation": rc.rotation,
+        "cogging_points": rc.cogging_points,
+        "n_planes": rc.n_planes,
     }
     if rc.i_fault is not None:
         kw["i_fault"] = rc.i_fault
@@ -285,12 +324,14 @@ class JobManager:
         workers: int = 4,
         subtask_timeout_s: float = 600.0,
         mesh_cache_dir: str | None = None,
+        batch_size: int = 128,
     ) -> None:
         self.motors = motors
         self.store = store
         self.workers = workers
         self.subtask_timeout_s = subtask_timeout_s
         self.mesh_cache_dir = mesh_cache_dir
+        self.batch_size = batch_size
         self.jobs: dict[str, Job] = {}
         self._queue: asyncio.Queue[Job] = asyncio.Queue()
         self._events: asyncio.Queue[ServerMsg] = asyncio.Queue()
@@ -401,6 +442,8 @@ class JobManager:
         self._check_params(params, allowed_extra=frozenset({"model_keys", "axes"}))
         if motor.geometry is None:
             raise ValueError("sweep requires a motor with a [geometry] section")
+        if not isinstance(motor.geometry, Geometry):
+            raise ValueError("sweep supports radial-flux geometry only")
 
         model_keys = params.get("model_keys") or ["analytical"]
         for mk in model_keys:
@@ -431,7 +474,7 @@ class JobManager:
             for mk in model_keys:
                 kw = _kw_for_model(base_kw, mk)
                 if mk in ("fem", "cogging_torque"):
-                    kw.setdefault("nonlinear", True)  # mirrors geo_sweep.run_sweep
+                    kw.setdefault("nonlinear", True)  # mirrors geo_parallel.run_sweep
                 config = RunConfig(motor=m, model=mk, **kw)
                 subtasks.append(SubTask(
                     run_id=compute_run_id(config), config=config,
@@ -522,7 +565,7 @@ class JobManager:
         t0 = time.perf_counter()
 
         # Re-check the cache at run time: an earlier queued job may have
-        # produced results since submit (partial hits).
+        # produced results since submit (partial cache hits).
         self._apply_cache(job)
         pending = [st for st in job.subtasks if st.status == "pending"]
         log.info("job_started", job_id=job.id, subtasks=job.total,
@@ -587,6 +630,7 @@ class JobManager:
                         worker_jobs, workers=self.workers,
                         cache_dir=self.mesh_cache_dir, on_complete=on_complete,
                         timeout_s=timeout_s, cancel=job.cancel_event,
+                        batch_size=self.batch_size,
                     )
                 finally:
                     with contextlib.suppress(RuntimeError):
@@ -638,13 +682,13 @@ class JobManager:
 
     def validation_summary(self, motor_name: str) -> dict[str, Any]:
         """Crossval rows + diagnosis for everything the store holds on a
-        motor. Feeds the validate-job summary and GET /api/validation.
-        Raises KeyError for an unknown motor.
+        motor. Feeds the validate-job summary and GET /api/validation
+       . Raises KeyError for an unknown motor.
 
         Computed results match by exact motor config_id; measured and
         published results match by Motor NAME — the measurement describes
-        the hardware, so it stays attached while the user edits parameters.
-        derived_params in the payload tags datasets whose
+        the hardware, so it stays attached while the user edits parameters
+       . derived_params in the payload tags datasets whose
         listed Motor params were derived from that same data: agreement
         there is an echo, not independent validation.
 

@@ -33,7 +33,11 @@ _has_sim = find_spec("motulator") is not None
 _has_viz = find_spec("matplotlib") is not None
 _has_server = find_spec("fastapi") is not None
 
-requires_fem = pytest.mark.skipif(not _has_fem, reason=FEM_SKIP)
+# `fem` is a selection marker AND the ngsolve gate: the skip is attached in
+# pytest_collection_modifyitems below rather than composed here, so the two
+# cannot drift apart the way `slow` drifted from its FEM sites. One symbol,
+# usable as a decorator, in `pytestmark`, or in `pytest.param(marks=...)`.
+requires_fem = pytest.mark.fem
 requires_sim = pytest.mark.skipif(not _has_sim, reason=SIM_SKIP)
 requires_viz = pytest.mark.skipif(not _has_viz, reason=VIZ_SKIP)
 requires_server = pytest.mark.skipif(not _has_server, reason=SERVER_SKIP)
@@ -57,9 +61,17 @@ CREATOR_JSON_SKIP = (
     "python scripts/fetch_creator_dataset.py"
 )
 STEEL_TABLES_SKIP = "M250-35A steel loss tables absent (gitignored dataset)"
+CREATOR_IM_SKIP = (
+    "CREATOR IM dataset not found — run "
+    "python scripts/fetch_creator_im_dataset.py"
+)
 # Lab capture CSVs are tracked on main but excluded from the public release
 # branch, where their absence is by design rather than a broken checkout.
 CAPTURES_SKIP = "lab capture CSVs absent (not on the public release branch)"
+# Deliberately NOT in ALLOWED_SKIP_SUBSTRINGS: the pinned Elmer JSONs are
+# committed repo files (scripts/elmer_*/pinned/), so their absence means a
+# broken checkout and must fail a strict-skip run.
+ELMER_PINNED_SKIP = "pinned Elmer comparison JSON not present"
 
 _CORE_LANE = bool(os.environ.get("PHASESWEEP_CORE_LANE"))
 
@@ -68,6 +80,7 @@ ALLOWED_SKIP_SUBSTRINGS = (
     CREATOR_CSV_SKIP,
     CREATOR_JSON_SKIP,
     STEEL_TABLES_SKIP,
+    CREATOR_IM_SKIP,
     CAPTURES_SKIP,
     FEM_SKIP,
 )
@@ -78,12 +91,37 @@ if _CORE_LANE:
     )
 
 
+def pytest_collection_modifyitems(config, items):
+    """Attach the ngsolve gate to every `fem`-marked test."""
+    if _has_fem:
+        return
+    skip = pytest.mark.skip(reason=FEM_SKIP)
+    for item in items:
+        if item.get_closest_marker("fem"):
+            item.add_marker(skip)
+
+
+def _skip_label(reason: str) -> str:
+    """Bucket a skip reason to the allowlist constant that permits it."""
+    for allowed in ALLOWED_SKIP_SUBSTRINGS:
+        if allowed in reason:
+            return allowed
+    return "UNEXPECTED"
+
+
 def pytest_sessionfinish(session, exitstatus):
     """Fail the session on any unexpected skip when PHASESWEEP_STRICT_SKIP=1.
 
     CI ran without the `server` extra for months, so `importorskip
     ("fastapi")` silently dropped all 41 API tests and the suite still
     reported success.
+
+    PHASESWEEP_EXPECTED_SKIPS=<n> additionally pins the *total* skip count.
+    An allowlisted reason only says a skip is a legitimate kind, not that it
+    was legitimate to grow: a newly added dataset-gated anchor skips under a
+    reason already on the allowlist and would otherwise never be noticed.
+    The per-reason tally below is printed on every strict run so the number
+    to pin for a lane is readable straight out of its log.
     """
     if not os.environ.get("PHASESWEEP_STRICT_SKIP"):
         return
@@ -91,16 +129,37 @@ def pytest_sessionfinish(session, exitstatus):
     if reporter is None:
         return
     unexpected = []
-    for report in reporter.stats.get("skipped", []):
+    tally: dict[str, int] = {}
+    skipped = reporter.stats.get("skipped", [])
+    for report in skipped:
         reason = str(getattr(report, "longrepr", ""))
-        if not any(a in reason for a in ALLOWED_SKIP_SUBSTRINGS):
+        label = _skip_label(reason)
+        tally[label] = tally.get(label, 0) + 1
+        if label == "UNEXPECTED":
             unexpected.append(f"{report.nodeid}: {reason}")
-    if not unexpected:
-        return
-    reporter.write_sep("=", "unexpected skips (PHASESWEEP_STRICT_SKIP)", red=True)
-    for line in unexpected:
-        reporter.write_line(line)
-    session.exitstatus = session.exitstatus or 1
+
+    reporter.write_sep("=", f"skip tally: {len(skipped)} total (PHASESWEEP_STRICT_SKIP)")
+    for label, count in sorted(tally.items(), key=lambda kv: (-kv[1], kv[0])):
+        reporter.write_line(f"  {count:>4}  {label}")
+
+    failures = []
+    if unexpected:
+        failures.append("unexpected skips")
+        reporter.write_sep("=", "unexpected skips (PHASESWEEP_STRICT_SKIP)", red=True)
+        for line in unexpected:
+            reporter.write_line(line)
+
+    expected = os.environ.get("PHASESWEEP_EXPECTED_SKIPS")
+    if expected is not None and len(skipped) != int(expected):
+        failures.append("skip count")
+        reporter.write_sep("=", "skip count off manifest", red=True)
+        reporter.write_line(
+            f"expected {int(expected)} skips (PHASESWEEP_EXPECTED_SKIPS), got {len(skipped)}"
+        )
+
+    if failures:
+        session.exitstatus = session.exitstatus or 1
+
 
 def make_motor(**overrides):
     """Build a Motor with sensible defaults for testing.
@@ -118,11 +177,6 @@ def make_motor(**overrides):
 
 
 @pytest.fixture
-def default_geometry():
-    return default_inrunner()
-
-
-@pytest.fixture
 def paper_geometry_8pole():
     """Zhu & Howe 2002 paper geometry: 2p=8, Rs=48mm, Rm=40mm, Rr=30mm."""
     return inrunner(
@@ -131,8 +185,8 @@ def paper_geometry_8pole():
 
 
 @pytest.fixture
-def default_motor(default_geometry):
-    return make_motor(name="test_default", geometry=default_geometry)
+def default_motor():
+    return make_motor(name="test_default", geometry=default_inrunner())
 
 
 @pytest.fixture
@@ -158,11 +212,3 @@ def paper_motor_8pole(paper_geometry_8pole):
     )
 
 
-@pytest.fixture
-def paper_motor_8pole_outrunner(paper_geometry_8pole_outrunner):
-    return Motor(
-        name="paper_8pole_outrunner",
-        geometry=paper_geometry_8pole_outrunner,
-        n_p=4,
-        B_rem=1.2, mu_r_pm=1.05,
-    )

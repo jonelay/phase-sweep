@@ -1,0 +1,92 @@
+# Uppsala 5 kW Marine Current Generator — 120-pole cable-wound SPM
+# Direct-drive permanent magnet synchronous generator for hydrokinetic
+# (tidal/marine current) energy conversion. 2-meter stator diameter,
+# 10 rpm nominal, 10.5 mm airgap (cable-wound constraint).
+#
+# This is the most extreme design point in the validation set: 60 pole
+# pairs, ~1 m bore radius, ultra-low speed. Completely different design
+# space from industrial servos and automotive traction motors.
+#
+# Sources (both open-access):
+#   [1] K. Thomas, M. Grabbe, K. Yuen, M. Leijon, "A Permanent Magnet
+#       Generator for Energy Conversion from Marine Currents: No Load
+#       and Load Experiments," ISRN Renewable Energy, 2012, Art. 489379.
+#       DOI: 10.5402/2012/489379
+#   [2] M. Grabbe, S. Eriksson, M. Leijon, "On the Stator Slot Geometry
+#       of a Cable Wound Generator for Hydrokinetic Energy Conversion,"
+#       The Scientific World Journal, 2015, Art. 812149.
+#       PMC: https://pmc.ncbi.nlm.nih.gov/articles/PMC4386604/
+#
+# Geometry from [2] Table 1 (reference machine):
+#   Stator OD 2000 mm, bore (ID) 1835 mm, stack 270 mm, airgap 10.5 mm.
+#   Slot: opening 4 mm, width 8 mm, depth 58 mm, 6 cables/slot (7 mm dia).
+#   Magnet: Nd2Fe14B, height 13 mm, width 32 mm, Br = 1.22 T.
+#
+# Electrical from [1]:
+#   R = 0.475 Ohm/phase, L = 11.5 mH/phase (SPM, so L_d = L_q = L).
+#   Nominal load: 4.44 Ohm/phase at 10 rpm.
+#   Measured-vs-simulated: <1% rms voltage at load, <5% peak both.
+#
+# UNIT/BOOKKEEPING FLAGS:
+# - "Rated voltage 150 V" is the line-to-line terminal voltage at
+#   nominal load (4.44 Ohm/phase). Phase voltage at load = 150/sqrt(3)
+#   = 86.6 V rms. No-load phase EMF ≈ 96.9 V rms (computed from circuit).
+# - psi_f derived from circuit analysis: I = V_phase/R_load = 19.5 A,
+#   E_phase = I * |Z_total| = 96.9 V rms, psi_f = sqrt(2)*96.9/omega_e
+#   = 2.181 Wb. Cross-check: total losses 798 W vs published 785 W.
+# - Efficiency 86.4% at nominal (reference design, [2]).
+#   Loss breakdown ([2]): hysteresis 149 W, eddy 37 W in teeth,
+#   remainder is copper + stray. Total losses 785 W.
+# - Number of stator slots: not explicitly published in the accessible
+#   text. The 7/5 fractional wave winding with 120 poles and 6 cables
+#   per slot constrains the slot count but the exact number is not
+#   confirmed from open-access sources. NOT included in [geometry].
+
+[motor]
+name = "Uppsala 5 kW Marine Current Generator"
+type = "surface-magnet PMSG (120-pole cable-wound direct-drive)"
+
+[circuit]
+n_p = 60               # 120 poles (60 pole pairs), 10 Hz at 10 rpm
+R_s = 0.475            # Ohm per-phase ([1])
+L_d = 0.0115           # H per-phase, 11.5 mH ([1]); SPM so L_d = L_q
+L_q = 0.0115           # H per-phase (surface magnets, no saliency)
+psi_f = 2.181          # Wb peak per-phase, derived from circuit analysis
+                       # at nominal load (4.44 Ohm, 10 rpm, 150 V L-L)
+# J: not published (2-meter diameter rotating assembly)
+
+[drive]
+# Generator operating point (load resistance, not inverter-driven)
+W_REF = 1.0472         # rad/s mechanical, 2*pi*10/60 (10 rpm)
+
+[rated]
+speed_rpm = 10
+power_kW = 5.0
+frequency_Hz = 10
+
+[provenance]
+source = "Thomas et al. (2012), ISRN Renewable Energy Art. 489379; Grabbe et al. (2015), Scientific World Journal Art. 812149, PMC4386604"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC4386604/"
+motor_model = "Uppsala University 5 kW cable-wound PMSG for marine current energy conversion"
+duty = "direct-drive hydrokinetic generator, nominal 10 rpm"
+notes = """
+The most extreme design point in the validation set: 2-meter stator
+diameter, 120 poles, 10.5 mm airgap (cable-wound), 10 rpm. Surface-
+mounted Nd2Fe14B magnets (Br 1.22 T, height 13 mm, width 32 mm).
+Stator: OD 2000 mm, bore 1835 mm, stack 270 mm.
+Slot geometry: opening 4 mm, width 8 mm, depth 58 mm, 6 cables/slot.
+Stator weight 598 kg. 7/5 fractional wave winding.
+
+Measured-vs-FEM agreement: <1% rms voltage at load, <5% peak voltage
+at both no-load and load ([1]). Efficiency 86.4% at nominal ([2]).
+
+psi_f = 2.181 Wb derived from circuit analysis (not directly published):
+  V_phase_load = 150/sqrt(3) = 86.6 V rms
+  I = 86.6/4.44 = 19.5 A rms
+  E_phase = I * sqrt((R_s+R_load)^2 + (omega_e*L)^2) = 96.9 V rms
+  psi_f = sqrt(2)*96.9 / (60*2*pi*10/60) = 2.181 Wb
+
+Eligible for: rated_torque (circuit params, SPM).
+Not eligible for: analytical, FEM (stator slot count not confirmed
+  from open-access sources; geometry not encoded).
+"""

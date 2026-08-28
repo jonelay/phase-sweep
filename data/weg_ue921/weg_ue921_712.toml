@@ -1,0 +1,52 @@
+# WEG UE 921/712 — 4-pole PMSM synchronous motor (bench DUT / dyno)
+# IEC frame-80 housing, electrical twin of the UE 921/662 B.
+# The "golden anchor" unit: LCR-measured 2026-06-11.
+#
+# Source: WEG motor nameplate (electrical twin of 662 B).
+#   Nameplate: same as 662 B — Y 187 V, 2.9 A, 50 Hz, 1500 rpm, 4.8 Nm.
+#   J = 0.0011 kg.m2 (shared frame-80 housing), 8 kg.
+#
+# Same cross-vendor R_s caveat as the 662 B: R_s = 2.60 Ohm is imported
+# from the NORD 80T1/4 datasheet, not independently published. The 712
+# has LCR bench measurements, but those are proprietary test data, not
+# published values — they cannot be encoded here.
+#
+# This TOML captures only published/nameplate data. When bench L_d, L_q,
+# psi_f measurements are cleared for publication, they should be added
+# to the [circuit] section to enable the full d-q solver suite.
+
+[motor]
+name = "WEG UE 921/712"
+type = "PMSM (4-pole IEC frame-80, bench DUT)"
+
+[circuit]
+n_p = 2                # 4 poles: 50 Hz / (1500 rpm / 60) = 2
+R_s = 2.60             # Ohm per-phase — CROSS-VENDOR IMPORT from NORD 80T1/4.
+                       # CONTESTED.
+I_rated_rms = 2.9      # A rms (nameplate, Y connection at 187 V)
+J = 0.0011             # kg.m2 (frame-80 housing)
+
+[drive]
+W_REF = 157.080        # rad/s mechanical, 2*pi*1500/60
+
+[rated]
+speed_rpm = 1500
+torque_Nm = 4.8
+frequency_Hz = 50
+
+[provenance]
+source = "WEG motor nameplate, UE 921/712 (electrical twin of 662 B)"
+motor_model = "WEG UE 921/712 (IEC frame 80, bench DUT)"
+duty = "S1 continuous, Y 187 V, 50 Hz"
+notes = """
+The bench unit — LCR-measured (2026-06-11) but measurements are
+proprietary and not encoded here. Electrically identical nameplate
+to the 662 B production part.
+
+Same R_s cross-vendor caveat: 2.60 Ohm is from the NORD 80T1/4 datasheet.
+Same winding/psi_f unknowns. The 662 B file carries a rewind-scaling
+estimate (~1.1 Ohm, i.e. the import is plausibly ~2x high) from the
+Resolution still needs this unit's bench R_s cleared for publication.
+
+Eligible for: nameplate reference only (no d-q model from published data).
+"""

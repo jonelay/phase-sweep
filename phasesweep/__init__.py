@@ -7,28 +7,27 @@ interfaces may change between minor versions.
 """
 
 from phasesweep.machines.configs import load_motor, load_motors
-from phasesweep.machines.geometry import Geometry, inrunner, outrunner
-from phasesweep.machines.motor import DriveParams, Motor
-from phasesweep.registry import MODEL_REGISTRY, ModelInfo
-from phasesweep.result_store import ResultStore
-from phasesweep.solver_params import (
-    AnalyticalParams,
-    DriveSimParams,
-    FemParams,
+from phasesweep.machines.geometry import AxialFluxGeometry, Geometry, axial_flux, inrunner, outrunner
+from phasesweep.machines.motor import DriveParams, InductionParams, Motor
+from phasesweep.models.rated_torque import (
     RatedTorqueParams,
     StallTorqueParams,
-    ThermalDutyParams,
-    TwoMassLoad,
-    prepare_analytical,
-    prepare_drive_sim,
-    prepare_fem,
     prepare_rated_torque,
     prepare_stall_torque,
-    prepare_thermal_duty,
 )
+from phasesweep.models.thermal_duty import ThermalDutyParams, prepare_thermal_duty
+from phasesweep.registry import MODEL_REGISTRY, ModelInfo
+from phasesweep.result_store import ResultStore
+from phasesweep.simulation.params import (
+    DriveSimParams,
+    TwoMassLoad,
+    prepare_drive_sim,
+)
+from phasesweep.solvers.analytical import AnalyticalParams, prepare_analytical
+from phasesweep.solvers.fem_runner import FemParams, prepare_fem
 from phasesweep.sweep_types import RunConfig, RunResult, compute_run_id
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 _DEBUG_DEPS = ("numpy", "scipy", "ngsolve", "motulator", "matplotlib", "fastapi", "cupy")
 
@@ -59,10 +58,12 @@ def debug_info() -> None:
 __all__ = [
     "MODEL_REGISTRY",
     "AnalyticalParams",
+    "AxialFluxGeometry",
     "DriveParams",
     "DriveSimParams",
     "FemParams",
     "Geometry",
+    "InductionParams",
     "ModelInfo",
     "Motor",
     "RatedTorqueParams",
@@ -73,6 +74,7 @@ __all__ = [
     "ThermalDutyParams",
     "TwoMassLoad",
     "__version__",
+    "axial_flux",
     "compute_run_id",
     "debug_info",
     "inrunner",

@@ -49,7 +49,7 @@ duty = "S1 continuous at Ic/Tc with water cooling (inlet 20 C, dT_w 5 K, 2.0 l/m
 thermal_time_constant_s = 72.9   # datasheet τth
 P_c_dissipation_W = 652.0        # datasheet Pc, power dissipation @ Ic
 I_sc_Arms = 4.67                 # datasheet Isc max short-circuit current
-# Torque-speed envelope points (REQ-0814 anchor class; speeds in rpm):
+# Torque-speed envelope points (speeds in rpm):
 envelope_In_Arms = 3.32          # datasheet In rated current
 envelope_nb_rpm = 1280.0         # datasheet nb base speed (at In; see notes)
 envelope_nm_rpm = 1570.0         # datasheet nm max speed without flux weakening
@@ -58,7 +58,7 @@ notes = """
 Smallest TMB frame — extends the water-cooled thermal_resistance-path family
 to n=3+: copper loss at Ic with R_s(130 C) = 656 W vs
 published Pc = 652 W (+0.7%), and vs the dT/r_th budget = 675 W (0.97).
-Torque-speed envelope anchor (REQ-0814): datasheet publishes base speed
+Torque-speed envelope anchor: datasheet publishes base speed
 nb = 1280 rpm (voltage-limit corner at In) and no-FW max speed nm = 1570 rpm.
 Model base_speed at In = 1247 rpm (-2.6%); zero-current limit
 U_max/(n_p psi_f) = 1608 rpm (+2.4% vs nm — ETEL applies a ~2% voltage/EMF

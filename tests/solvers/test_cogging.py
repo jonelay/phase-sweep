@@ -204,12 +204,9 @@ def test_rejects_low_cogging_points():
 def test_arkkio_is_radial_average_of_maxwell():
     """Arkkio torque equals the manually computed radial average of
     single-contour Maxwell-stress integrals at the same radii."""
-    from phasesweep.solver_params import prepare_fem
-    from phasesweep.solvers.fem_field import (
-        arkkio_torque,
-        maxwell_stress_torque,
-        solve_field_fem,
-    )
+    from phasesweep.solvers.fem_field import solve_field_fem
+    from phasesweep.solvers.fem_runner import prepare_fem
+    from phasesweep.solvers.fem_sampling import arkkio_torque, maxwell_stress_torque
 
     geo = inrunner(
         r_outer=0.060, r_stator=0.048, r_magnet=0.040, r_rotor=0.030,
@@ -318,8 +315,9 @@ def test_cogging_offset_shift_stability():
     The dominant-order Fourier amplitude should agree within a few percent;
     the difference is the per-angle remeshing noise floor.
     """
-    from phasesweep.solver_params import prepare_fem
-    from phasesweep.solvers.fem_field import arkkio_torque, solve_field_fem
+    from phasesweep.solvers.fem_field import solve_field_fem
+    from phasesweep.solvers.fem_runner import prepare_fem
+    from phasesweep.solvers.fem_sampling import arkkio_torque
     from phasesweep.solvers.harmonics import cogging_angles, harmonics_1sided
 
     motor = _slotted_motor()
@@ -361,8 +359,8 @@ def test_cogging_offset_shift_stability():
     assert dom_base > 0, "zero cogging amplitude — geometry has no slots?"
     # Coarse mesh (maxh_fraction=0.08) gives ~30% drift; production mesh
     # (maxh_fraction ~ 0.03/r_outer) gives <5%. The bound here catches
-    # catastrophic errors; the absolute noise level is a documented finding,
-    # not a pass/fail gate.
+    # catastrophic errors; the absolute noise level is a documented finding
+    #, not a pass/fail gate.
     assert dom_shifted == pytest.approx(dom_base, rel=0.40), (
         f"offset-shift dominant amplitude {dom_shifted:.4e} vs "
         f"baseline {dom_base:.4e} (>{40}% drift = excessive remeshing noise)"
@@ -387,3 +385,25 @@ def test_cogging_outrunner_runs_and_sign_flips():
     tau = np.array(result["tau_cogging_list"])
     assert len(tau) == 12
     assert abs(np.mean(tau)) < 0.1 * (tau.max() - tau.min() + 1e-15)
+
+
+@requires_fem
+def test_halbach_cogging_smoke():
+    """Halbach cogging sweep completes and produces non-negative p-p."""
+    from phasesweep.solvers.cogging import _run_cogging_impl
+
+    halbach_geo = inrunner(
+        r_outer=0.060, r_stator=0.048, r_magnet=0.040, r_rotor=0.030,
+        n_slots=6, slot_depth=0.005, slot_opening_width=0.003,
+    )
+    motor = make_motor(
+        name="halbach_cogging", geometry=halbach_geo,
+        n_p=2, B_rem=1.2, psi_f=None, mu_r_pm=1.05,
+        magnetization="halbach", halbach_segments=3,
+    )
+    rc = RunConfig(motor=motor, model="cogging_torque", **_COARSE)
+    result = _run_cogging_impl(rc)
+
+    assert result["tau_cogging_pp"] >= 0
+    tau = np.array(result["tau_cogging_list"])
+    assert len(tau) == 12

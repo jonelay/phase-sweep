@@ -6,10 +6,14 @@ saliency signs), with k_T * I_rated fallback for non-salient.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from math import asin, cos, degrees, sin, sqrt
 from typing import TYPE_CHECKING, Any
 
+from phasesweep.solver_params import _reject_induction, _resolve_psi_f, _salient_pair
+
 if TYPE_CHECKING:
+    from phasesweep.machines.motor import Motor
     from phasesweep.sweep_types import RunConfig
 
 
@@ -36,7 +40,7 @@ def mtpa_gamma(psi_f: float, L_d: float, L_q: float, I_s: float) -> float:
     return asin(sin_g)
 
 
-def mtpa_torque(n_p: int, psi_f: float, L_d: float, L_q: float,
+def mtpa_torque(n_p: float, psi_f: float, L_d: float, L_q: float,
                 I_s: float, gamma: float) -> float:
     """Torque in Nm at given current magnitude and MTPA angle."""
     i_d = -I_s * sin(gamma)
@@ -95,6 +99,11 @@ def _mtpa_result(
     k_T = magnet_torque_constant(n_p, psi_f)
 
     if L_d is None or L_q is None or L_q == L_d:
+        if psi_f == 0.0:
+            raise ValueError(
+                "psi_f = 0 with no saliency (L_d == L_q or unset): "
+                "machine cannot produce torque"
+            )
         tau = k_T * I_s
         gamma_opt = 0.0
         Ld = L_d if L_d is not None else 0.0
@@ -121,7 +130,6 @@ def _mtpa_result(
 
 def run_rated_torque(config: RunConfig) -> dict[str, Any]:
     """Rated torque computation. Returns scalars + curves."""
-    from phasesweep.solver_params import prepare_rated_torque
 
     p = prepare_rated_torque(config.motor)
     r = _mtpa_result(p.n_p, p.psi_f, p.I_rated, p.L_d, p.L_q)
@@ -142,7 +150,6 @@ def run_stall_torque(config: RunConfig) -> dict[str, Any]:
     Emits both current-limited (tau_stall, I_stall) and electromagnetic
     (tau_stall_electromagnetic, I_stall_electromagnetic) values.
     """
-    from phasesweep.solver_params import prepare_stall_torque
 
     p = prepare_stall_torque(config.motor)
     r = _mtpa_result(p.n_p, p.psi_f, p.I_stall, p.L_d, p.L_q)
@@ -172,3 +179,125 @@ def run_stall_torque(config: RunConfig) -> dict[str, Any]:
         result["I_stall_electromagnetic"] = p.I_stall_em
 
     return result
+
+
+@dataclass(frozen=True)
+class RatedTorqueParams:
+    """Validated inputs for rated torque (MTPA at I_rated) computation.
+
+    psi_f — PM flux linkage (Wb, peak); I_rated — rated current (A, peak);
+    L_d / L_q — inductances (H), both required for the salient form.
+    """
+
+    n_p: int
+    psi_f: float
+    I_rated: float
+    L_d: float | None = None
+    L_q: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.n_p < 2:
+            raise ValueError(f"n_p must be >= 2, got {self.n_p}")
+        if self.psi_f < 0:
+            raise ValueError(f"psi_f must be >= 0, got {self.psi_f}")
+        if self.I_rated <= 0:
+            raise ValueError(f"I_rated must be > 0, got {self.I_rated}")
+        if self.L_d is not None and self.L_d <= 0:
+            raise ValueError(f"L_d must be > 0, got {self.L_d}")
+        if self.L_q is not None and self.L_q <= 0:
+            raise ValueError(f"L_q must be > 0, got {self.L_q}")
+
+
+@dataclass(frozen=True)
+class StallTorqueParams:
+    """Validated inputs for stall torque (MTPA at I_stall) computation.
+
+    psi_f — PM flux linkage (Wb, peak); L_d / L_q — inductances (H).
+    I_stall: drive current limit, I_LIMIT or MAX_I_S (A, peak).
+    I_stall_em: electromagnetic stall current U_DC / (sqrt(3) * R_s)
+        (A, peak), None when R_s = 0.
+    """
+
+    n_p: int
+    psi_f: float
+    I_stall: float
+    I_stall_em: float | None = None
+    L_d: float | None = None
+    L_q: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.n_p < 2:
+            raise ValueError(f"n_p must be >= 2, got {self.n_p}")
+        if self.psi_f < 0:
+            raise ValueError(f"psi_f must be >= 0, got {self.psi_f}")
+        if self.I_stall <= 0:
+            raise ValueError(f"I_stall must be > 0, got {self.I_stall}")
+        if self.I_stall_em is not None and self.I_stall_em <= 0:
+            raise ValueError(f"I_stall_em must be > 0, got {self.I_stall_em}")
+        if self.L_d is not None and self.L_d <= 0:
+            raise ValueError(f"L_d must be > 0, got {self.L_d}")
+        if self.L_q is not None and self.L_q <= 0:
+            raise ValueError(f"L_q must be > 0, got {self.L_q}")
+
+
+def prepare_rated_torque(motor: Motor) -> RatedTorqueParams:
+    """Derive, validate, and extract rated torque params from a Motor."""
+    _reject_induction(motor, "rated_torque")
+    psi_f = _resolve_psi_f(motor)
+
+    if motor.I_rated is None:
+        raise ValueError(
+            f"Motor '{motor.name}': rated_torque needs I_rated"
+        )
+
+    L_d, L_q = _salient_pair(motor)
+
+    return RatedTorqueParams(
+        n_p=motor.n_p,
+        psi_f=psi_f,
+        I_rated=motor.I_rated,
+        L_d=L_d,
+        L_q=L_q,
+    )
+
+
+def prepare_stall_torque(motor: Motor) -> StallTorqueParams:
+    """Derive, validate, and extract stall torque params from a Motor.
+
+    I_stall = I_LIMIT (or MAX_I_S when I_LIMIT is not set).
+    I_stall_em = U_DC / (sqrt(3) * R_s) — electromagnetic stall (no drive limit).
+    """
+    from math import sqrt
+
+    _reject_induction(motor, "stall_torque")
+    psi_f = _resolve_psi_f(motor)
+
+    if motor.R_s is None:
+        raise ValueError(
+            f"Motor '{motor.name}': stall_torque needs R_s"
+        )
+
+    drive = motor.drive
+    if drive.I_LIMIT is None and drive.MAX_I_S is None:
+        raise ValueError(
+            f"Motor '{motor.name}': stall_torque needs [drive] "
+            f"MAX_I_S (or I_LIMIT)"
+        )
+    I_stall = drive.I_LIMIT if drive.I_LIMIT is not None else drive.MAX_I_S
+    assert I_stall is not None  # narrowed above
+    if drive.U_DC is None:
+        raise ValueError(
+            f"Motor '{motor.name}': stall_torque needs [drive] U_DC"
+        )
+    I_stall_em = drive.U_DC / (sqrt(3) * motor.R_s) if motor.R_s > 0 else None
+
+    L_d, L_q = _salient_pair(motor)
+
+    return StallTorqueParams(
+        n_p=motor.n_p,
+        psi_f=psi_f,
+        I_stall=I_stall,
+        I_stall_em=I_stall_em,
+        L_d=L_d,
+        L_q=L_q,
+    )

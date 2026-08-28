@@ -1,5 +1,6 @@
 """Integration tests for fem_field.py — use coarse meshes to keep runtime low."""
 
+import dataclasses as _dc
 from importlib.util import find_spec
 
 import pytest
@@ -7,174 +8,55 @@ import pytest
 if not find_spec("ngsolve"):
     pytest.skip("requires phasesweep[fem] (ngsolve not installed)", allow_module_level=True)
 try:
-    from ngsolve import H1, L2, GridFunction, Mesh, grad, sqrt
+    from ngsolve import L2, GridFunction, Mesh, grad, sqrt
 except ImportError:
     pytest.skip("requires phasesweep[fem] (ngsolve not installed)", allow_module_level=True)
 
 import numpy as np
-from netgen.occ import OCCGeometry
 
 from phasesweep.machines.geometry import default_inrunner, inrunner, outrunner
-from phasesweep.solvers import fem_field
+from phasesweep.solvers import fem_mesh
 from phasesweep.solvers.analytical import (
     _derive_B_rem,
-    carter_adjusted_radii,
-    carter_factor,
     end_effect_factor,
     end_effect_factor_pole_pitch,
     zhu_howe_Br,
 )
-from phasesweep.solvers.fem_field import (
-    _BH_B,
-    _BH_H,
-    _DEFAULT_GEO,
-    _MU0,
-    _bh_nu,
-    _build_annular_regions,
-    _build_geometry,
-    _build_motor_geometry,
-    _build_slotted_geometry,
-    _circle_spec,
-    _mesh_cache,
-    clear_mesh_cache,
-    set_disk_cache_dir,
-    solve_field_fem,
-)
+from phasesweep.solvers.fem_field import solve_field_fem
+from phasesweep.solvers.fem_mesh import _DEFAULT_GEO, clear_mesh_cache
 from phasesweep.solvers.harmonics import batch_harmonics, harmonics_1sided
+from tests.conftest import requires_fem
+from tests.solvers.fem_shared import (
+    _GEO,
+    _GEO_OUT,
+    _GEO_SMALL,
+    _H_FAST,
+    _HALBACH_GEO,
+    _RADII,
+    _SLOTTED_GEO_KW,
+    _TORQUE_FAST,
+    FAST,
+    _gap_radii,
+    _solve,
+    _torque_geo,
+)
 
-FAST = dict(n_theta=60, maxh_fraction=0.08)
-_GEO = default_inrunner()
-# zhu_howe_Br radii are required keywords
-_RADII = dict(r_stator=_GEO.r_stator, r_magnet=_GEO.r_magnet,
-              r_rotor=_GEO.r_rotor)
-
-
-def _solve(n_p=2, psi_f=0.1, N=50, k_w=0.966, L_stk=0.10,
-           n_slots=0, j_s=0.0, nonlinear=False, geo=None, **kw):
-    """Helper: legacy-style call via new Geometry-based solve_field_fem."""
-    _geo = geo or _GEO
-    B_rem = _derive_B_rem(psi_f, n_p, N, k_w, L_stk,
-                          r_stator=_geo.r_stator, r_magnet=_geo.r_magnet,
-                          r_rotor=_geo.r_rotor)
-    merged = {**FAST, **kw}
-    return solve_field_fem(
-        geo=_geo, n_p=n_p, B_rem=B_rem,
-        mu_r_pm=1.05, mu_r_fe=1000.0,
-        n_slots=n_slots, j_s=j_s, nonlinear=nonlinear,
-        **merged,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Geometry
-# ---------------------------------------------------------------------------
-
-def test_smooth_geometry_materials():
-    shape = _build_geometry(_GEO)
-    mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.08))
-    mats = set(mesh.GetMaterials())
-    assert {"stator", "airgap", "pm", "shaft"} <= mats
-    assert "slot" not in mats
-
-
-def test_circle_spec_inrunner_regions():
-    geo = default_inrunner()
-    specs = _circle_spec(geo)
-    assert len(specs) == 4
-    names = [n for _, n in specs]
-    assert set(names) == {"stator", "airgap", "pm", "shaft"}
-    radii = [r for r, _ in specs]
-    assert radii == sorted(radii, reverse=True)
-
-
-def test_circle_spec_outrunner_regions():
-    geo = outrunner(r_outer=0.10, r_stator=0.04, r_magnet=0.06,
-                    r_rotor=0.08, r_inner=0.02)
-    specs = _circle_spec(geo)
-    assert len(specs) == 5
-    names = [n for _, n in specs]
-    assert set(names) == {"stator", "airgap", "pm", "yoke", "air"}
-    radii = [r for r, _ in specs]
-    assert radii == sorted(radii, reverse=True)
-    # Verify name-to-radius mapping (not just the set)
-    spec_dict = dict(specs)
-    assert spec_dict[geo.r_outer] == "yoke"
-    assert spec_dict[geo.r_rotor] == "pm"
-    assert spec_dict[geo.r_magnet] == "airgap"
-    assert spec_dict[geo.r_stator] == "stator"
-    assert spec_dict[geo.r_inner] == "air"
-
-
-def test_build_geometry_from_geo_materials():
-    geo = default_inrunner()
-    shape = _build_geometry(geo)
-    mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.08))
-    mats = set(mesh.GetMaterials())
-    expected = {n for _, n in _circle_spec(geo)}
-    assert expected <= mats
-
-
-def test_slotted_geometry_materials():
-    geo = inrunner(r_outer=1.0, r_stator=0.70, r_magnet=0.64, r_rotor=0.30,
-                   r_inner=0.0, n_slots=12, slot_depth=0.05)
-    shape = _build_slotted_geometry(geo, n_slots=12)
-    mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.08))
-    mats = set(mesh.GetMaterials())
-    assert {"stator", "slot", "airgap", "pm", "shaft"} <= mats
-
-
-@pytest.mark.parametrize("n_slots", [6, 12, 24])
-def test_slotted_geometry_slot_count(n_slots):
-    geo = inrunner(r_outer=1.0, r_stator=0.70, r_magnet=0.64, r_rotor=0.30,
-                   r_inner=0.0, n_slots=n_slots, slot_depth=0.05)
-    shape = _build_slotted_geometry(geo, n_slots=n_slots)
-    mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.08))
-    slot_count = sum(1 for m in mesh.GetMaterials() if m == "slot")
-    assert slot_count == n_slots
-
-
-_SLOTTED_GEO_KW = dict(r_outer=1.0, r_stator=0.70, r_magnet=0.64, r_rotor=0.30,
-                       r_inner=0.0, n_slots=12, slot_depth=0.05)
-_SLOTTED_OUT_GEO_KW = dict(r_outer=0.10, r_rotor=0.08, r_magnet=0.06,
-                           r_stator=0.04, r_inner=0.02, n_slots=6,
-                           slot_depth=0.005)
-
-
-@pytest.mark.parametrize("topology,slotted", [
-    ("inrunner", False), ("inrunner", True),
-    ("outrunner", False), ("outrunner", True),
-])
-def test_outer_boundary_named_and_constrained(topology, slotted):
-    """Glued shape keeps a named outer boundary that constrains DOFs."""
-    if topology == "inrunner":
-        geo = inrunner(**_SLOTTED_GEO_KW)
-    else:
-        geo = outrunner(**_SLOTTED_OUT_GEO_KW)
-    shape = _build_motor_geometry(
-        geo,
-        n_slots=geo.n_slots if slotted else 0,
-        slot_width_ratio=geo.slot_width_ratio,
-        slot_depth=geo.slot_depth if slotted else 0.0,
-        slot_opening_ratio=geo.slot_opening_ratio,
-    )
-    mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.08 * geo.r_outer))
-    assert "outer" in set(mesh.GetBoundaries())
-    fes = H1(mesh, order=1, dirichlet="outer")
-    n_constrained = fes.ndof - sum(fes.FreeDofs())
-    assert n_constrained > 0
+# Module-level guard covers missing ngsolve; the marker makes the module
+# selectable by lane.
+pytestmark = requires_fem
 
 
 def _spy_build_geometry(monkeypatch):
     """Capture kwargs passed to _build_motor_geometry, bypassing caches."""
     captured = {}
-    orig = fem_field._build_motor_geometry
+    orig = fem_mesh._build_motor_geometry
 
     def spy(g, **kw):
         captured.update(kw)
         return orig(g, **kw)
 
-    monkeypatch.setattr(fem_field, "_build_motor_geometry", spy)
-    monkeypatch.setattr(fem_field, "_disk_cache_dir", None)
+    monkeypatch.setattr(fem_mesh, "_build_motor_geometry", spy)
+    monkeypatch.setattr(fem_mesh, "_disk_cache_dir", None)
     clear_mesh_cache()
     return captured
 
@@ -196,87 +78,6 @@ def test_solve_field_fem_explicit_zero_overrides_geometry(monkeypatch):
     solve_field_fem(geo=geo, n_p=2, B_rem=1.0, mu_r_pm=1.05, mu_r_fe=1000.0,
                     n_slots=0, **FAST)
     assert captured["n_slots"] == 0
-
-
-def _fake_raster(mesh, gfu, n_grid, r_bound):
-    grid = np.full((n_grid, n_grid), np.nan)
-    return grid, grid, grid, grid
-
-
-def test_fem_runner_defers_slot_params_to_geometry(monkeypatch):
-    """Production FEM path passes no slot kwargs — geometry governs."""
-    from phasesweep.solvers.fem_runner import _run_fem_impl
-    from phasesweep.sweep_types import RunConfig
-    from tests.conftest import make_motor
-
-    captured = {}
-
-    def fake_solve(*args, **kw):
-        captured.update(kw)
-        th = np.linspace(0, 2 * np.pi, 60, endpoint=False)
-        # runner always requests return_full=True for the raster
-        return th, np.cos(2 * th), None, None
-
-    monkeypatch.setattr(fem_field, "solve_field_fem", fake_solve)
-    monkeypatch.setattr(fem_field, "rasterise_cross_section", _fake_raster)
-    motor = make_motor(B_rem=1.2, psi_f=None)
-    _run_fem_impl(RunConfig(motor=motor, model="fem"))
-    assert "n_slots" not in captured
-    assert "slot_width_ratio" not in captured
-
-
-def test_fem_runner_j_s_requires_k_w():
-    from phasesweep.solvers.fem_runner import _run_fem_impl
-    from phasesweep.sweep_types import RunConfig
-    from tests.conftest import make_motor
-
-    motor = make_motor(B_rem=1.2, psi_f=None, k_w=None)
-    with pytest.raises(ValueError, match="k_w"):
-        _run_fem_impl(RunConfig(motor=motor, model="fem", j_s=1.0))
-
-
-def test_fem_runner_reports_both_slot_harmonic_sidebands(monkeypatch):
-    """Slot harmonics come in pairs Q ± n_p; both sidebands are reported."""
-    from phasesweep.machines.geometry import inrunner
-    from phasesweep.solvers.fem_runner import _run_fem_impl
-    from phasesweep.sweep_types import RunConfig
-    from tests.conftest import make_motor
-
-    def fake_solve(*args, **kw):
-        th = np.linspace(0, 2 * np.pi, 120, endpoint=False)
-        # fundamental at n_p=2; sidebands at Q-n_p=10 and Q+n_p=14
-        return th, (np.cos(2 * th) + 0.20 * np.cos(10 * th)
-                    + 0.10 * np.cos(14 * th)), None, None
-
-    monkeypatch.setattr(fem_field, "solve_field_fem", fake_solve)
-    monkeypatch.setattr(fem_field, "rasterise_cross_section", _fake_raster)
-    motor = make_motor(geometry=inrunner(**_SLOTTED_GEO_KW), B_rem=1.2, psi_f=None)
-    metrics = _run_fem_impl(RunConfig(motor=motor, model="fem"))
-    assert metrics["sh_pct"] == pytest.approx(20.0, rel=1e-6)
-    assert metrics["sh_upper_pct"] == pytest.approx(10.0, rel=1e-6)
-
-
-def test_fem_runner_emits_cross_section_raster():
-    """Dashboard heatmap raster: |B| on a shared-axis grid,
-    None outside the motor domain, additive alongside existing metrics."""
-    from phasesweep.solvers.fem_runner import _RASTER_N_GRID, _run_fem_impl
-    from phasesweep.sweep_types import RunConfig
-    from tests.conftest import make_motor
-
-    motor = make_motor(B_rem=1.2, psi_f=None)
-    metrics = _run_fem_impl(RunConfig(motor=motor, model="fem", **FAST))
-    grid = metrics["B_mag_grid"]
-    coords = metrics["grid_coords_list"]
-    assert len(grid) == _RASTER_N_GRID
-    assert all(len(row) == _RASTER_N_GRID for row in grid)
-    assert len(coords) == _RASTER_N_GRID
-    assert coords[-1] == pytest.approx(motor.geometry.r_outer)
-    assert coords[0] == pytest.approx(-motor.geometry.r_outer)
-    # corners of the square are outside the motor disk
-    assert grid[0][0] is None and grid[-1][-1] is None
-    vals = [v for row in grid for v in row if v is not None]
-    assert vals and max(vals) > 0.1
-    assert "fundamental" in metrics and "B_r_list" in metrics
 
 
 # ---------------------------------------------------------------------------
@@ -568,33 +369,6 @@ def test_compute_thd_square_wave_textbook_value():
 
 
 # ---------------------------------------------------------------------------
-# B-H curve and _bh_nu (Issue 1)
-# ---------------------------------------------------------------------------
-
-def test_bh_table_monotonic():
-    assert np.all(np.diff(_BH_H) > 0)
-
-
-def test_bh_nu_at_zero():
-    nu = _bh_nu(np.array([0.0]))
-    assert np.isfinite(nu[0])
-    assert nu[0] > 0
-
-
-def test_bh_nu_at_saturation():
-    nu = _bh_nu(np.array([2.5]))
-    nu_linear = _BH_H[1] / _BH_B[1]
-    assert nu[0] > 10 * nu_linear
-
-
-def test_bh_nu_linear_regime():
-    nu = _bh_nu(np.array([0.1]))
-    mu_r_initial = _BH_B[1] / (_MU0 * _BH_H[1])
-    expected_nu = 1 / (_MU0 * mu_r_initial)
-    np.testing.assert_allclose(nu[0], expected_nu, rtol=0.10)
-
-
-# ---------------------------------------------------------------------------
 # Nonlinear Picard iteration (Issue 2)
 # ---------------------------------------------------------------------------
 
@@ -621,27 +395,183 @@ def test_nonlinear_changes_field_at_high_flux():
 
 def test_nonlinear_raises_on_non_convergence():
     with pytest.raises(RuntimeError, match="Picard iteration did not converge"):
-        _solve(nonlinear=True, max_picard=1, picard_tol=1e-15)
+        _solve(nonlinear=True, nonlinear_solver="picard",
+               max_picard=1, picard_tol=1e-15)
+
+
+def test_picard_zero_budget_reports_inf_residual():
+    """max_picard=0 skips the loop entirely, so the residual sentinel is
+    what reaches the error message — it has to stay a formattable float.
+    """
+    with pytest.raises(RuntimeError, match=r"in 0 iterations \(residual: inf"):
+        _solve(nonlinear=True, nonlinear_solver="picard",
+               max_picard=0, picard_tol=1e-15)
+
+
+def test_picard_damps_relax_on_divergence():
+    """Pin the adaptive-relaxation trajectory.
+
+    Fixed relaxation at >= 0.35 diverges on this saturating geometry
+    (~3.5 T in iron); the damping branch is what makes it converge, and
+    running without it is what silently produced non-converged nonlinear
+    solves in the wedge k_end study. No other test enters the branch, so
+    its arithmetic was free to be wrong.
+
+    picard_iterations and picard_relax_final are trajectory pins — they
+    move if the damping schedule changes, which is the point. Re-measure
+    them deliberately on a solver change rather than loosening them.
+    """
+    info: dict[str, float] = {}
+    _, B_r = _solve(psi_f=0.3, geo=_GEO_SMALL, nonlinear=True,
+                    maxh_fraction=0.04, nonlinear_solver="picard",
+                    picard_relax=0.5, picard_tol=0.02, max_picard=60,
+                    info=info)
+    assert np.all(np.isfinite(B_r))
+    # Damping engaged: relax ended well below where it started.
+    assert info["picard_relax_final"] < 0.5
+    assert info["picard_relax_final"] == pytest.approx(0.08447027, rel=1e-6)
+    assert info["picard_iterations"] == 26.0
+    assert info["picard_residual"] < 0.02
+
+
+def test_picard_fixed_point_independent_of_starting_relax():
+    """Relaxation is a path parameter, not a physical one: the converged
+    field must not depend on where the damping schedule starts. Robust
+    where the trajectory pin above is deliberately brittle.
+    """
+    kw = dict(psi_f=0.3, geo=_GEO_SMALL, nonlinear=True, maxh_fraction=0.04,
+              nonlinear_solver="picard", picard_tol=0.02, max_picard=60)
+    _, B_a = _solve(picard_relax=0.35, **kw)
+    _, B_b = _solve(picard_relax=0.8, **kw)
+    assert np.nanmax(np.abs(B_a - B_b)) < 5e-3 * np.nanmax(np.abs(B_a))
+
+
+def test_newton_matches_picard_at_high_flux():
+    small = inrunner(r_outer=0.05, r_stator=0.035, r_magnet=0.032,
+                     r_rotor=0.015, r_inner=0.0)
+    info_n: dict[str, float] = {}
+    # picard_tol tightened to 1e-4 so the comparison measures solver
+    # agreement at the shared fixed point, not Picard's shipping-tol
+    # error (dominant at this saturation level, ~3.5 T in iron).
+    _, B_p = _solve(psi_f=0.3, geo=small, nonlinear=True, maxh_fraction=0.04,
+                    nonlinear_solver="picard", picard_tol=1e-4)
+    _, B_n = _solve(psi_f=0.3, geo=small, nonlinear=True, maxh_fraction=0.04,
+                    nonlinear_solver="newton", info=info_n)
+    assert "newton_fell_back" not in info_n
+    assert info_n["newton_iterations"] >= 1
+    # Iteration ceiling: convergence-quality regressions (bad Jacobian,
+    # broken line search, indefinite spline correction) surface as
+    # iteration blowups long before wrong answers — the un-normalized
+    # Jacobian regression measured ~2.7x the SPD tangent count (51 vs
+    # 19 on the saturating spike case). This config measures 27, so the
+    # failure class lands ~70+; 40 leaves version-jitter headroom while
+    # staying far under it.
+    assert info_n["newton_iterations"] <= 40
+    assert info_n["newton_startup_iterations"] == 2.0
+    assert np.max(np.abs(B_n - B_p)) < 1e-3 * np.max(np.abs(B_p))
+
+
+def test_newton_falls_back_to_picard(monkeypatch):
+    import phasesweep.solvers.fem_field as ff
+
+    def _stall(*args, **kwargs):
+        raise RuntimeError("forced stall")
+
+    monkeypatch.setattr(ff, "_newton_solve", _stall)
+    info: dict[str, float] = {}
+    _, B_r = _solve(nonlinear=True, nonlinear_solver="newton", info=info)
+    assert info.get("newton_fell_back") == 1.0
+    assert "picard_iterations" in info
+    assert np.all(np.isfinite(B_r))
+
+
+def test_unknown_nonlinear_solver_raises():
+    with pytest.raises(ValueError, match="nonlinear_solver"):
+        _solve(nonlinear=True, nonlinear_solver="broyden")
+
+
+def test_nonlinear_result_insensitive_to_mu_r_fe_seed():
+    """Under nonlinear=True the iron follows the BH table and mu_r_fe
+    merely seeds iteration 0 (docstring contract). A regression that let
+    the seed leak into the converged field would silently skew every
+    nonlinear run fed a datasheet mu_r_fe. Measured: a 25x seed spread
+    moves the field < 5e-5 relative; 1e-3 leaves headroom."""
+    fields = {}
+    for mu_seed in (200.0, 5000.0):
+        info: dict[str, float] = {}
+        _, B_r = solve_field_fem(
+            geo=_GEO_OUT, n_p=4, B_rem=1.0,
+            mu_r_pm=1.05, mu_r_fe=mu_seed,
+            nonlinear=True, info=info, **FAST,
+        )
+        assert "newton_fell_back" not in info
+        fields[mu_seed] = np.asarray(B_r)
+    delta = np.max(np.abs(fields[5000.0] - fields[200.0]))
+    assert delta < 1e-3 * np.max(np.abs(fields[200.0]))
 
 
 # ---------------------------------------------------------------------------
-# Nonlinear API threading (Issue 3)
+# Inset magnets (interpole iron + optional bridge ring)
 # ---------------------------------------------------------------------------
+
+
+def _solve_inset(geo, alpha_p=0.7, nonlinear=True, **kw):
+    merged = {**FAST, **kw}
+    return solve_field_fem(
+        geo=geo, n_p=2, B_rem=0.4, mu_r_pm=1.1, mu_r_fe=1000.0,
+        alpha_p=alpha_p, nonlinear=nonlinear, **merged,
+    )
+
+
+def test_inset_requires_nonlinear():
+    geo = _dc.replace(_GEO_SMALL, magnet_mount="inset")
+    with pytest.raises(ValueError, match="requires nonlinear=True"):
+        _solve_inset(geo, nonlinear=False)
+
+
+def test_inset_requires_arcs():
+    geo = _dc.replace(_GEO_SMALL, magnet_mount="inset")
+    with pytest.raises(ValueError, match="alpha_p=1.0 builds none"):
+        _solve_inset(geo, alpha_p=1.0)
+    # gap (1-0.99)*pi/2*0.015 = 0.24 mm < 0.5 mm OCC limit
+    with pytest.raises(ValueError, match="silently collapse"):
+        _solve_inset(geo, alpha_p=0.99)
+
+
+def test_inset_interpole_iron_lowers_fundamental():
+    _, B_surface = _solve_inset(_GEO_SMALL)
+    _, B_inset = _solve_inset(_dc.replace(_GEO_SMALL, magnet_mount="inset"))
+    f_surface = harmonics_1sided(B_surface)[2]
+    f_inset = harmonics_1sided(B_inset)[2]
+    # interpole iron shunts magnet flux — a real reduction, but the
+    # machine still works
+    assert f_inset < 0.99 * f_surface
+    assert f_inset > 0.5 * f_surface
+
+
+def test_bridge_ring_lowers_fundamental_further():
+    geo_inset = _dc.replace(_GEO_SMALL, magnet_mount="inset")
+    geo_bridge = _dc.replace(_GEO_SMALL, magnet_mount="inset",
+                             bridge_thickness=2e-3)
+    _, B_inset = _solve_inset(geo_inset)
+    _, B_bridge = _solve_inset(geo_bridge)
+    f_inset = harmonics_1sided(B_inset)[2]
+    f_bridge = harmonics_1sided(B_bridge)[2]
+    assert f_bridge < f_inset
+
+
+def test_surface_bridge_requires_nonlinear():
+    geo = _dc.replace(_GEO_SMALL, bridge_thickness=2e-3)
+    with pytest.raises(ValueError, match="bridge_thickness requires nonlinear"):
+        solve_field_fem(
+            geo=geo, n_p=2, B_rem=0.4, mu_r_pm=1.1, mu_r_fe=1000.0,
+            alpha_p=1.0, nonlinear=False,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Outrunner FEM
 # ---------------------------------------------------------------------------
-
-_GEO_OUT = outrunner(r_outer=0.10, r_rotor=0.08, r_magnet=0.06,
-                     r_stator=0.04, r_inner=0.02)
-
-
-def test_outrunner_smooth_geometry_materials():
-    shape = _build_geometry(_GEO_OUT)
-    mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.01))
-    mats = set(mesh.GetMaterials())
-    assert {"stator", "airgap", "pm", "yoke", "air"} <= mats
-    assert "shaft" not in mats
 
 
 def test_outrunner_smooth_bore_solve():
@@ -653,17 +583,6 @@ def test_outrunner_smooth_bore_solve():
     assert B_r.shape == (FAST["n_theta"],)
     assert np.all(np.isfinite(B_r))
     assert np.nanmax(np.abs(B_r)) > 1e-4
-
-
-def test_outrunner_back_iron_split_materials():
-    """back_iron_thickness splits the yoke into back_iron + shell regions."""
-    geo = outrunner(r_outer=0.10, r_rotor=0.08, r_magnet=0.06,
-                    r_stator=0.04, r_inner=0.02, back_iron_thickness=0.01)
-    shape = _build_geometry(geo)
-    mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.01))
-    mats = set(mesh.GetMaterials())
-    assert {"stator", "airgap", "pm", "back_iron", "shell", "air"} <= mats
-    assert "yoke" not in mats
 
 
 def test_outrunner_back_iron_split_matches_solid_when_linear():
@@ -705,16 +624,6 @@ def test_outrunner_fem_matches_analytical():
     assert fem_fund == pytest.approx(an_fund, rel=0.02)
 
 
-def test_outrunner_slotted_geometry_materials():
-    geo = outrunner(r_outer=0.10, r_rotor=0.08, r_magnet=0.06,
-                    r_stator=0.04, r_inner=0.02, n_slots=6, slot_depth=0.005)
-    shape = _build_slotted_geometry(geo, n_slots=6)
-    mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.005))
-    mats = set(mesh.GetMaterials())
-    assert {"stator", "slot", "airgap", "pm", "yoke", "air"} <= mats
-    assert "shaft" not in mats
-
-
 def test_outrunner_slotted_solve():
     """Outrunner slotted FEM solve completes."""
     geo = outrunner(r_outer=0.10, r_rotor=0.08, r_magnet=0.06,
@@ -730,13 +639,25 @@ def test_outrunner_slotted_solve():
 
 
 def test_outrunner_nonlinear_solve():
-    """Outrunner nonlinear Picard converges."""
+    """Outrunner nonlinear solve at the BH knee — third iteration-ceiling
+    geometry: _GEO_SMALL guards deep saturation (~3.5 T iron, measures
+    27 Newton iterations), CREATOR the inset-bridge regime (measures 2);
+    this config sits on the knee itself, where the differential
+    permeability swings fastest per step."""
+    info: dict[str, float] = {}
     theta, B_r = solve_field_fem(
-        geo=_GEO_OUT, n_p=4, B_rem=1.0,
+        geo=_GEO_OUT, n_p=4, B_rem=1.4,
         mu_r_pm=1.05, mu_r_fe=1000.0,
-        nonlinear=True, **FAST,
+        nonlinear=True, info=info, **FAST,
     )
     assert np.all(np.isfinite(B_r))
+    assert "newton_fell_back" not in info
+    # Regime check: iron peak stays in the knee band — if geometry or
+    # B_rem edits drift it out, this stops guarding the knee regime.
+    assert 1.3 < info["b_iron_max"] < 1.7
+    # Ceiling: this config measures 7; the broken-Jacobian failure class
+    # runs ~2.7x that (~19). 12 leaves version-jitter headroom under it.
+    assert info["newton_iterations"] <= 12
 
 
 # ---------------------------------------------------------------------------
@@ -797,27 +718,6 @@ def test_paper_outrunner_fem_vs_analytical(paper_geometry_8pole_outrunner):
     assert fem_fund == pytest.approx(an_fund, rel=0.01), (
         f"FEM fundamental {fem_fund:.6f} vs analytical {an_fund:.6f}"
     )
-
-
-def test_config_id_differs_for_nonlinear():
-    from phasesweep.machines.motor import Motor
-    from phasesweep.sweep_types import RunConfig, compute_run_id
-    motor = Motor(name="test", geometry=_GEO, n_p=2, R_s=3.6,
-                  L_d=4e-3, L_q=4e-3, psi_f=0.1, J=1.5e-3)
-    rc1 = RunConfig(motor=motor, model="fem", nonlinear=False)
-    rc2 = RunConfig(motor=motor, model="fem", nonlinear=True)
-    assert compute_run_id(rc1) != compute_run_id(rc2)
-
-
-def test_config_roundtrip_nonlinear():
-    from phasesweep.machines.motor import Motor
-    from phasesweep.sweep_types import RunConfig, compute_run_id
-    motor = Motor(name="test", geometry=_GEO, n_p=2, R_s=3.6,
-                  L_d=4e-3, L_q=4e-3, psi_f=0.1, J=1.5e-3)
-    rc = RunConfig(motor=motor, model="fem", nonlinear=True)
-    rc2 = RunConfig.from_dict(rc.to_dict())
-    assert rc2.nonlinear is True
-    assert compute_run_id(rc2) == compute_run_id(rc)
 
 
 # ---------------------------------------------------------------------------
@@ -906,105 +806,6 @@ def test_nonlinear_scaling_sublinear_at_high_flux():
         f"High-flux ratio ({ratio_high:.4f}) should be < low-flux ({ratio_low:.4f}) "
         f"due to iron saturation"
     )
-
-
-# ---------------------------------------------------------------------------
-# Mesh caching
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(autouse=False)
-def _clean_mesh_cache():
-    """Ensure mesh cache is empty before and after cache tests."""
-    clear_mesh_cache()
-    yield
-    clear_mesh_cache()
-
-
-def test_mesh_cache_hit_same_geometry(_clean_mesh_cache):
-    """Same geometry + maxh_fraction reuses cached mesh."""
-    geo = default_inrunner()
-    _solve(geo=geo, **FAST)
-    assert len(_mesh_cache) == 1
-
-    _solve(geo=geo, psi_f=0.2, **FAST)
-    assert len(_mesh_cache) == 1  # no new entry
-
-
-def test_mesh_cache_miss_different_geometry(_clean_mesh_cache):
-    """Different geometry produces a new cache entry."""
-    geo1 = inrunner(r_outer=0.05, r_stator=0.035, r_magnet=0.030,
-                    r_rotor=0.015)
-    geo2 = inrunner(r_outer=0.06, r_stator=0.040, r_magnet=0.035,
-                    r_rotor=0.018)
-    _solve(geo=geo1, **FAST)
-    _solve(geo=geo2, **FAST)
-    assert len(_mesh_cache) == 2
-
-
-def test_mesh_cache_miss_different_maxh(_clean_mesh_cache):
-    """Different maxh_fraction on same geometry creates separate entry."""
-    geo = default_inrunner()
-    _solve(geo=geo, maxh_fraction=0.08)
-    _solve(geo=geo, maxh_fraction=0.04)
-    assert len(_mesh_cache) == 2
-
-
-def test_mesh_cache_miss_different_alpha_p(_clean_mesh_cache):
-    """Same geometry, different alpha_p creates separate mesh-cache entries."""
-    _solve(alpha_p=1.0)
-    _solve(alpha_p=0.75)
-    assert len(_mesh_cache) == 2
-
-
-def test_clear_mesh_cache():
-    """clear_mesh_cache() empties the cache."""
-    _solve(**FAST)
-    assert len(_mesh_cache) >= 1
-    clear_mesh_cache()
-    assert len(_mesh_cache) == 0
-
-
-def test_disk_cache_save_and_load(_clean_mesh_cache, tmp_path):
-    """Mesh saved to disk is reloaded on cache miss."""
-    set_disk_cache_dir(tmp_path)
-    try:
-        geo = default_inrunner()
-        _solve(geo=geo, **FAST)
-        assert len(_mesh_cache) == 1
-
-        # Clear in-memory, disk file should exist
-        clear_mesh_cache()
-        assert len(_mesh_cache) == 0
-        disk_files = list(tmp_path.glob("mesh_*.vol.gz"))
-        assert len(disk_files) == 1
-
-        # Re-solve: should load from disk, not regenerate
-        _solve(geo=geo, **FAST)
-        assert len(_mesh_cache) == 1
-    finally:
-        set_disk_cache_dir(None)
-
-
-def test_disk_cache_skips_rotated_mesh(_clean_mesh_cache, tmp_path):
-    """Rotated meshes (cogging sweeps) are cached in-memory only — one disk
-    file per angle would grow the cache without bound."""
-    set_disk_cache_dir(tmp_path)
-    try:
-        geo = default_inrunner()
-        _solve(geo=geo, n_p=4, alpha_p=0.75, rotation=0.1, **FAST)
-        assert len(_mesh_cache) == 1
-        assert list(tmp_path.glob("mesh_*.vol.gz")) == []
-        _solve(geo=geo, n_p=4, alpha_p=0.75, **FAST)
-        assert len(list(tmp_path.glob("mesh_*.vol.gz"))) == 1
-    finally:
-        set_disk_cache_dir(None)
-
-
-def test_disk_cache_disabled_by_default(_clean_mesh_cache, tmp_path):
-    """No disk files created when disk cache is not enabled."""
-    set_disk_cache_dir(None)
-    _solve(**FAST)
-    assert len(list(tmp_path.glob("mesh_*"))) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1171,7 +972,8 @@ def test_picard_relax_recovery_and_raw_criterion():
     solve_field_fem(
         geo=geo, n_p=2, B_rem=1.5, mu_r_pm=1.05, mu_r_fe=1000.0,
         n_theta=180, maxh_fraction=0.03,
-        nonlinear=True, max_picard=60, picard_tol=0.005, picard_relax=0.5,
+        nonlinear=True, nonlinear_solver="picard",
+        max_picard=60, picard_tol=0.005, picard_relax=0.5,
         info=info,
     )
     assert info["picard_residual"] < 0.005, (
@@ -1203,7 +1005,8 @@ def test_picard_relaxation_independence():
         geo=geo, n_p=n_p, B_rem=B_rem,
         mu_r_pm=1.05, mu_r_fe=1000.0,
         n_theta=180, maxh_fraction=0.03,
-        nonlinear=True, max_picard=60, picard_tol=0.005,
+        nonlinear=True, nonlinear_solver="picard",
+        max_picard=60, picard_tol=0.005,
         return_full=True,
     )
 
@@ -1229,64 +1032,6 @@ def test_picard_relaxation_independence():
             f"Relaxation 0.10 fundamental {fund_a:.6f} vs "
             f"relaxation {label} fundamental {fund:.6f}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Composable geometry builder tests
-# ---------------------------------------------------------------------------
-
-class TestBuildAnnularRegions:
-    """Unit tests for _build_annular_regions."""
-
-    def test_inrunner_face_count(self):
-        geo = default_inrunner()
-        faces, innermost, named = _build_annular_regions(geo)
-        assert len(faces) == 4  # stator, airgap, pm, shaft
-        assert innermost is not None
-        assert set(named.keys()) == {"stator", "airgap", "pm", "shaft"}
-
-    def test_outrunner_face_count(self):
-        geo = outrunner(r_outer=0.050, r_rotor=0.045, r_magnet=0.040,
-                        r_stator=0.035, r_inner=0.015)
-        faces, innermost, named = _build_annular_regions(geo)
-        assert len(faces) == 5  # yoke, pm, airgap, stator, air
-        assert innermost is not None
-        assert set(named.keys()) == {"yoke", "pm", "airgap", "stator", "air"}
-
-
-class TestBuildMotorGeometry:
-    """Verify _build_motor_geometry produces meshable shapes."""
-
-    def test_smooth_bore_meshable(self):
-        geo = default_inrunner()
-        shape = _build_motor_geometry(geo)
-        mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.01))
-        assert mesh.ne > 0
-
-    def test_slotted_meshable(self):
-        geo = inrunner(r_outer=0.050, r_stator=0.030, r_magnet=0.025,
-                       r_rotor=0.015, n_slots=6, slot_depth=0.005,
-                       slot_width_ratio=0.5)
-        shape = _build_motor_geometry(
-            geo, n_slots=6, slot_width_ratio=0.5, slot_depth=0.005)
-        mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.005))
-        assert mesh.ne > 0
-
-    @pytest.mark.slow
-    def test_magnet_arcs_meshable(self):
-        geo = default_inrunner()
-        shape = _build_motor_geometry(geo, alpha_p=0.75, n_p=4)
-        mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.005))
-        assert mesh.ne > 0
-
-    def test_full_pitch_no_arcs(self):
-        """alpha_p=1.0 should produce same result as smooth bore."""
-        geo = default_inrunner()
-        shape_plain = _build_motor_geometry(geo)
-        shape_full = _build_motor_geometry(geo, alpha_p=1.0, n_p=4)
-        m1 = Mesh(OCCGeometry(shape_plain, dim=2).GenerateMesh(maxh=0.01))
-        m2 = Mesh(OCCGeometry(shape_full, dim=2).GenerateMesh(maxh=0.01))
-        assert abs(m1.ne - m2.ne) < 5
 
 
 # ---------------------------------------------------------------------------
@@ -1446,172 +1191,11 @@ class TestDiscreteArcs:
         assert gap_area / n_gap_els <= 2.5 * eq_area
 
 
-# ---------------------------------------------------------------------------
-# Carter factor tests
-# ---------------------------------------------------------------------------
-
-class TestCarterFactor:
-
-    def test_no_slots(self):
-        assert carter_factor(0.030, 0, 0.6, 0.001) == 1.0
-
-    def test_increases_with_slot_opening(self):
-        k1 = carter_factor(0.030, 12, 0.3, 0.005)
-        k2 = carter_factor(0.030, 12, 0.6, 0.005)
-        k3 = carter_factor(0.030, 12, 0.9, 0.005)
-        assert 1.0 < k1 < k2 < k3
-
-    def test_approaches_unity_large_g_prime(self):
-        """Very thick magnets (large g') → slot openings negligible → k_c → 1."""
-        k = carter_factor(0.030, 12, 0.6, 0.100)  # 100mm g'
-        assert k == pytest.approx(1.0, abs=0.01)
-
-    def test_known_value(self):
-        """Verify against hand-calculated value for CREATOR-like geometry."""
-        # CREATOR: r_stator=0.0239, n_slots=6, swr≈0.6, g'≈4.4mm
-        k = carter_factor(0.0239, 6, 0.6, 0.0044)
-        assert 1.2 < k < 1.5
-
-class TestCarterAdjustedRadii:
-
-    def test_smooth_bore_identity(self):
-        geo = default_inrunner()
-        r_s, r_m, k_c = carter_adjusted_radii(geo, 1.05)
-        assert (r_s, r_m, k_c) == (geo.r_stator, geo.r_magnet, 1.0)
-
-    def test_inrunner_widens_gap_keeps_magnet(self):
-        geo = inrunner(**_SLOTTED_GEO_KW, slot_opening_width=0.055)  # ratio ~0.15
-        r_s, r_m, k_c = carter_adjusted_radii(geo, 1.05)
-        assert k_c > 1.0
-        assert r_s > geo.r_stator
-        assert r_m == geo.r_magnet
-
-    def test_outrunner_widens_gap_keeps_magnet(self):
-        geo = outrunner(**_SLOTTED_OUT_GEO_KW, slot_opening_width=0.0063)  # ratio ~0.15
-        r_s, r_m, k_c = carter_adjusted_radii(geo, 1.05)
-        assert k_c > 1.0
-        assert r_s < geo.r_stator
-        assert r_m == geo.r_magnet
-
-
-# ---------------------------------------------------------------------------
-# Maxwell-stress torque + j_s mapping closure
-# ---------------------------------------------------------------------------
-# First FEM torque output: tau = (L_stk r^2/mu0) * closed-circle integral of
-# B_r*B_theta from the solved A_z, on a circle in the source-free air gap.
-# Contour independence there is the correctness check. The j_s -> phase
-# current mapping (solver_params.j_s_from_phase_current) closes the
-# loop: the order-n_p interaction torque between magnet-only and
-# armature-only solves reproduces the winding formula 3*k_w*N_eff*I*B1*r*L
-# (equivalently 1.5*n_p*psi_f*i_q); the CREATOR anchor version lives in
-# test_creator_model.py.
-
-_TORQUE_FAST = dict(n_p=2, B_rem=1.0, mu_r_pm=1.05, mu_r_fe=1000.0,
-                    k_w=0.966, n_theta=60, maxh_fraction=0.08,
-                    return_full=True)
-
-
-def _torque_geo():
-    return inrunner(**_SLOTTED_GEO_KW)
-
-
-def _gap_radii(geo, fractions=(0.25, 0.5, 0.75)):
-    g = geo.r_stator - geo.r_magnet
-    return [geo.r_magnet + f * g for f in fractions]
-
-
-def test_maxwell_torque_contour_independent_and_above_noise():
-    """The stress integral is contour-independent in the source-free gap
-    (< 5% spread across three radii at this mesh), and the zero-current
-    solve's residual torque (cogging + discretization noise) sits well
-    below the interaction torque."""
-    from phasesweep.solvers.fem_field import maxwell_stress_torque
-    geo = _torque_geo()
-    radii = _gap_radii(geo)
-    _, _, mesh, gfu = solve_field_fem(geo=geo, j_s=1e5, **_TORQUE_FAST)
-    taus = [maxwell_stress_torque(mesh, gfu, r) for r in radii]
-    mean = sum(taus) / len(taus)
-    assert (max(taus) - min(taus)) / abs(mean) < 0.05
-    _, _, mesh0, gfu0 = solve_field_fem(geo=geo, j_s=0.0, **_TORQUE_FAST)
-    tau0 = maxwell_stress_torque(mesh0, gfu0, radii[1])
-    assert abs(tau0) < 0.05 * abs(mean)
-
-
-def test_maxwell_torque_affine_in_j_s():
-    """Linear solve -> torque is affine in j_s: doubling the sheet doubles
-    the interaction torque; flipping its sign flips it."""
-    from phasesweep.solvers.fem_field import maxwell_stress_torque
-    geo = _torque_geo()
-    r = _gap_radii(geo)[1]
-    taus = {}
-    for j in (0.0, 1e5, 2e5, -1e5):
-        _, _, mesh, gfu = solve_field_fem(geo=geo, j_s=j, **_TORQUE_FAST)
-        taus[j] = maxwell_stress_torque(mesh, gfu, r)
-    base = taus[1e5] - taus[0.0]
-    assert (taus[2e5] - taus[0.0]) / base == pytest.approx(2.0, rel=1e-4)
-    assert (taus[-1e5] - taus[0.0]) / base == pytest.approx(-1.0, rel=1e-4)
-
-
 def test_j_s_without_slot_faces_raises():
     """n_slots > 0 with slot_depth = 0 builds no slot faces; j_s must not
     be silently ignored (this passed quietly before)."""
     with pytest.raises(ValueError, match="no slot regions"):
         solve_field_fem(geo=_GEO, n_slots=12, j_s=1e5, **_TORQUE_FAST)
-
-
-def test_maxwell_interaction_closes_to_winding_formula():
-    """The order-n_p interaction torque between magnet-only and
-    armature-only solves matches tau = pi*r_bore^2*K_eff*B1 with
-    K_eff = j_s*k_w*S/r_bore from the slot source moment — the identity
-    behind j_s_from_phase_current. The FEM lands a few percent BELOW the
-    ideal-sheet value (slot openings Carter-widen the armature gap;
-    finite mu_r_fe), so the band is one-sided.
-
-    The full static maxwell_stress_torque is NOT the comparison target:
-    it adds position-locked ripple from armature comb sidebands
-    (m*n_slots ± n_p) meeting magnet space harmonics of the same order.
-    """
-    from phasesweep.solvers.fem_field import (
-        maxwell_interaction_torque_order,
-        slot_source_moment,
-    )
-    geo = _torque_geo()
-    kw = dict(geo=geo, n_p=2, mu_r_pm=1.05, mu_r_fe=1000.0,
-              k_w=0.966, n_theta=360, maxh_fraction=0.05, return_full=True)
-    j_s = 1e5
-    _, Br_mag, mesh, gfu_mag = solve_field_fem(j_s=0.0, B_rem=1.0, **kw)
-    _, _, _, gfu_arm = solve_field_fem(j_s=j_s, B_rem=1e-30, **kw)
-    B1 = float(harmonics_1sided(Br_mag)[2])
-    K_eff = j_s * 0.966 * slot_source_moment(geo) / geo.r_stator
-    r_mid = _gap_radii(geo)[1]
-    tau_fem = maxwell_interaction_torque_order(mesh, gfu_mag, gfu_arm,
-                                               r_mid, order=2)
-    tau_winding = np.pi * geo.r_stator**2 * K_eff * B1
-    assert 0.90 < tau_fem / tau_winding < 1.02, (
-        f"order-2 interaction {tau_fem:.1f} vs winding formula "
-        f"{tau_winding:.1f} (ratio {tau_fem/tau_winding:.3f})"
-    )
-
-
-def test_fem_runner_reports_maxwell_torque():
-    """_run_fem_impl emits tau_maxwell_per_m (and tau_maxwell with L_stk)
-    when j_s != 0; no torque keys on open-circuit runs."""
-    from phasesweep.machines.motor import Motor
-    from phasesweep.solvers.fem_runner import _run_fem_impl
-    from phasesweep.sweep_types import RunConfig
-    motor = Motor(name="torque-test", geometry=_torque_geo(), n_p=2,
-                  B_rem=1.0, k_w=0.966, L_stk=0.10)
-    rc = RunConfig(motor=motor, model="fem", j_s=1e5,
-                   n_theta=60, maxh_fraction=0.08)
-    m = _run_fem_impl(rc)
-    assert m["tau_maxwell"] == pytest.approx(
-        0.10 * m["tau_maxwell_per_m"], rel=1e-12)
-    assert m["tau_maxwell_per_m"] > 0.0  # motoring sign for the q-axis sheet
-    rc0 = RunConfig(motor=motor, model="fem",
-                    n_theta=60, maxh_fraction=0.08)
-    m0 = _run_fem_impl(rc0)
-    assert "tau_maxwell_per_m" not in m0
-    assert "tau_maxwell" not in m0
 
 
 # ---------------------------------------------------------------------------
@@ -1675,7 +1259,7 @@ class TestSheetPhase:
         """At sheet_phase = +/-pi/2 the order-n_p interaction torque with
         the magnet field vanishes (measured ~1e-4 of the q-axis torque —
         pure d-axis MMF; the sign/axis invariant behind the demag screen)."""
-        from phasesweep.solvers.fem_field import maxwell_interaction_torque_order
+        from phasesweep.solvers.fem_sampling import maxwell_interaction_torque_order
         geo = _torque_geo()
         kw = dict(geo=geo, n_p=2, mu_r_pm=1.05, mu_r_fe=1000.0, k_w=0.966,
                   n_theta=60, maxh_fraction=0.08, return_full=True)
@@ -1712,86 +1296,349 @@ class TestSheetPhase:
 
 
 # ---------------------------------------------------------------------------
-# Magnet operating-point sampler — demag screen step 2
+# Halbach Phase 3 — source CF: per-segment magnetization direction
 # ---------------------------------------------------------------------------
-# B_m = sign(M_r)*B_r on a cell-centered polar grid inside the magnet arcs;
-# demag_margin is the statistics layer (min, margin vs B_knee, area fraction
-# below knee). The knee schema + registry model are step 3.
-
-_BM_FAST = dict(n_p=2, B_rem=1.0, mu_r_pm=1.05, mu_r_fe=1000.0,
-                n_theta=60, maxh_fraction=0.08, alpha_p=0.5,
-                return_full=True)
 
 
-class TestMagnetBmSampler:
+class TestHalbachSourceCF:
 
-    def test_open_circuit_positive_and_weights(self):
-        """Open-circuit operating point is positive throughout the magnet
-        on both topologies; area weights sum to 1."""
-        from phasesweep.solvers.fem_field import sample_magnet_Bm
-        geo = _torque_geo()
-        _, _, mesh, gfu = solve_field_fem(geo=geo, **_BM_FAST)
-        _, _, B_m, w = sample_magnet_Bm(mesh, gfu, geo, n_p=2, alpha_p=0.5)
-        assert np.all(B_m > 0)
-        assert np.sum(w) == pytest.approx(1.0, abs=1e-12)
-        geo_out = outrunner(**_SLOTTED_OUT_GEO_KW)
-        _, _, mesh_o, gfu_o = solve_field_fem(
-            geo=geo_out, n_p=2, B_rem=1.0, mu_r_pm=1.05, mu_r_fe=1000.0,
-            n_theta=60, maxh_fraction=0.08, return_full=True)
-        _, _, B_m_o, _ = sample_magnet_Bm(mesh_o, gfu_o, geo_out, n_p=2)
-        assert np.all(B_m_o > 0)
+    def test_radial_bit_identical(self):
+        """Default call vs explicit magnetization='radial' is bit-identical."""
+        t1, Br1 = solve_field_fem(
+            _HALBACH_GEO, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            **_H_FAST,
+        )
+        t2, Br2 = solve_field_fem(
+            _HALBACH_GEO, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            magnetization="radial", **_H_FAST,
+        )
+        np.testing.assert_allclose(Br1, Br2, atol=1e-12)
 
-    def test_demag_sheet_lowers_operating_point(self):
-        """At fault-level current the demag sheet (+pi/2) lowers both the
-        worst-point and mean operating point; the magnetizing sheet
-        raises them; the mean shifts are exactly symmetric (linear
-        superposition, sheet CFs at +/-pi/2 are exact negations)."""
-        from phasesweep.solvers.fem_field import sample_magnet_Bm
-        geo = _torque_geo()
-        stats = {}
-        for tag, j, beta in [("open", 0.0, 0.0), ("demag", 1e6, np.pi / 2),
-                             ("magn", 1e6, -np.pi / 2)]:
-            _, _, mesh, gfu = solve_field_fem(
-                geo=geo, j_s=j, sheet_phase=beta, **_BM_FAST)
-            _, _, B_m, _ = sample_magnet_Bm(mesh, gfu, geo, n_p=2,
-                                            alpha_p=0.5)
-            stats[tag] = (float(B_m.min()), float(B_m.mean()))
-        assert stats["demag"][0] < stats["open"][0] < stats["magn"][0]
-        assert stats["demag"][1] < stats["open"][1] < stats["magn"][1]
-        drop = stats["open"][1] - stats["demag"][1]
-        gain = stats["magn"][1] - stats["open"][1]
-        assert gain == pytest.approx(drop, rel=1e-6)
+    def test_halbach_phase_aligned_with_radial(self):
+        """Halbach fundamental phase matches radial convention (d-axis at
+        theta=0). A consistent placement offset would corrupt sheet_phase
+        d-axis conventions (demag screen, armature torque)."""
+        n_p = 4
+        _, Br_rad = solve_field_fem(
+            _HALBACH_GEO, n_p=n_p, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            **_H_FAST,
+        )
+        _, Br_h = solve_field_fem(
+            _HALBACH_GEO, n_p=n_p, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            magnetization="halbach", halbach_segments=4, **_H_FAST,
+        )
+        phase_rad = np.angle(np.fft.rfft(Br_rad)[n_p])
+        phase_h = np.angle(np.fft.rfft(Br_h)[n_p])
+        delta = phase_h - phase_rad
+        while delta > np.pi:
+            delta -= 2 * np.pi
+        while delta < -np.pi:
+            delta += 2 * np.pi
+        assert abs(delta) < 0.05, (
+            f"Halbach fundamental phase offset {np.degrees(delta):.1f} deg "
+            f"from radial — d-axis alignment broken"
+        )
 
-    def test_rotation_equivalence(self):
-        """Sampling a rotated solve with the matching rotation reproduces
-        the unrotated B_m distribution (rotationally equivalent problem;
-        rotated arcs build a different mesh -> mesh-scatter tolerance)."""
-        from phasesweep.solvers.fem_field import sample_magnet_Bm
-        geo = _torque_geo()
-        phi = float(np.deg2rad(7.0))
-        _, _, m0, g0 = solve_field_fem(geo=geo, **_BM_FAST)
-        _, _, B0, _ = sample_magnet_Bm(m0, g0, geo, n_p=2, alpha_p=0.5)
-        _, _, m1, g1 = solve_field_fem(geo=geo, rotation=phi, **_BM_FAST)
-        _, _, B1, _ = sample_magnet_Bm(m1, g1, geo, n_p=2, alpha_p=0.5,
-                                       rotation=phi)
-        assert B1.min() == pytest.approx(B0.min(), rel=0.02)
-        assert B1.mean() == pytest.approx(B0.mean(), rel=0.02)
+    def test_explicit_angles_match_ideal_rule(self):
+        """Passing halbach_angles_rad equal to the ideal-rule values
+        produces bit-identical Br — pins indexing, mirror convention,
+        and entry-0-is-d-axis."""
+        from math import pi as _pi
+        n_p = 4
+        kappa_m = 3
+        seg_pitch = _pi / (n_p * kappa_m)
+        sign = -1.0  # inrunner
+        ideal_angles = tuple(
+            sign * n_p * j * seg_pitch for j in range(kappa_m)
+        )
+        _, Br_ideal = solve_field_fem(
+            _HALBACH_GEO, n_p=n_p, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            magnetization="halbach", halbach_segments=kappa_m, **_H_FAST,
+        )
+        _, Br_explicit = solve_field_fem(
+            _HALBACH_GEO, n_p=n_p, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            magnetization="halbach", halbach_segments=kappa_m,
+            halbach_angles_rad=ideal_angles, **_H_FAST,
+        )
+        np.testing.assert_allclose(Br_explicit, Br_ideal, atol=1e-12)
+        # Guard the vacuous twin: if halbach_angles_rad were silently
+        # dropped, explicit == ideal would hold trivially. A perturbed
+        # middle segment must move the field (measures 23% here).
+        perturbed = tuple(a + (0.5 if j == 1 else 0.0)
+                          for j, a in enumerate(ideal_angles))
+        _, Br_pert = solve_field_fem(
+            _HALBACH_GEO, n_p=n_p, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            magnetization="halbach", halbach_segments=kappa_m,
+            halbach_angles_rad=perturbed, **_H_FAST,
+        )
+        Br_pert, Br_ideal = np.asarray(Br_pert), np.asarray(Br_ideal)
+        assert (np.max(np.abs(Br_pert - Br_ideal))
+                > 0.05 * np.max(np.abs(Br_ideal)))
 
-    def test_demag_margin_dict(self):
-        """margin = B_m_min - B_knee; frac_below_knee hits 0/1 for a knee
-        below the min / above the max; worst point lies in the magnet
-        annulus."""
-        from phasesweep.solvers.fem_field import demag_margin, sample_magnet_Bm
-        geo = _torque_geo()
-        _, _, mesh, gfu = solve_field_fem(
-            geo=geo, j_s=1e6, sheet_phase=np.pi / 2, **_BM_FAST)
-        _, _, B_m, _ = sample_magnet_Bm(mesh, gfu, geo, n_p=2, alpha_p=0.5)
-        lo = demag_margin(mesh, gfu, geo, n_p=2, B_knee=float(B_m.min()) - 0.1,
-                          alpha_p=0.5)
-        hi = demag_margin(mesh, gfu, geo, n_p=2, B_knee=float(B_m.max()) + 0.1,
-                          alpha_p=0.5)
-        assert lo["B_m_min"] == pytest.approx(float(B_m.min()))
-        assert lo["margin"] == pytest.approx(0.1)
-        assert lo["frac_below_knee"] == 0.0
-        assert hi["frac_below_knee"] == pytest.approx(1.0)
-        assert geo.r_rotor < lo["r_min"] < geo.r_magnet
+    def test_kappa1_near_radial(self):
+        """kappa_m=1 ideal Halbach is close to radial but not identical:
+        each segment carries a constant M at its center angle, while
+        radial has M = B_rem * rhat(theta) varying continuously. The
+        tangential component within each segment shifts the fundamental
+        by ~10-15%."""
+        t_rad, Br_rad = solve_field_fem(
+            _HALBACH_GEO, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            **_H_FAST,
+        )
+        t_h, Br_h = solve_field_fem(
+            _HALBACH_GEO, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            magnetization="halbach", halbach_segments=1, **_H_FAST,
+        )
+        h_rad = harmonics_1sided(Br_rad)
+        h_h = harmonics_1sided(Br_h)
+        assert h_h[4] == pytest.approx(h_rad[4], rel=0.15)
+
+    def test_flux_concentration_inrunner(self):
+        """Halbach kappa_m=4: airgap B1 higher AND rotor-side B1 lower
+        than radial — pins the (1-p) concentration direction."""
+        from phasesweep.solvers.fem_sampling import sample_Br
+        _, _, m_rad, g_rad = solve_field_fem(
+            _HALBACH_GEO, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            return_full=True, **_H_FAST,
+        )
+        _, _, m_h, g_h = solve_field_fem(
+            _HALBACH_GEO, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            magnetization="halbach", halbach_segments=4,
+            return_full=True, **_H_FAST,
+        )
+        r_ag = _HALBACH_GEO.r_ag
+        r_back = _HALBACH_GEO.r_rotor + 0.001
+        _, Br_ag_rad = sample_Br(m_rad, g_rad, r_ag, 120)
+        _, Br_ag_h = sample_Br(m_h, g_h, r_ag, 120)
+        _, Br_back_rad = sample_Br(m_rad, g_rad, r_back, 120)
+        _, Br_back_h = sample_Br(m_h, g_h, r_back, 120)
+        h_ag_rad = harmonics_1sided(Br_ag_rad)
+        h_ag_h = harmonics_1sided(Br_ag_h)
+        h_back_rad = harmonics_1sided(Br_back_rad)
+        h_back_h = harmonics_1sided(Br_back_h)
+        assert h_ag_h[4] > h_ag_rad[4] * 1.05
+        assert h_back_h[4] < h_back_rad[4] * 0.95
+
+    def test_flux_concentration_outrunner(self):
+        """Outrunner Halbach concentrates field inward: airgap B1 at
+        least as high as radial, AND outer-shell field reduced."""
+        from phasesweep.solvers.fem_sampling import sample_Br
+        geo = outrunner(
+            r_outer=0.060, r_rotor=0.048, r_magnet=0.040,
+            r_stator=0.030, r_inner=0.020,
+        )
+        _, _, m_rad, g_rad = solve_field_fem(
+            geo, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            return_full=True, **_H_FAST,
+        )
+        _, _, m_h, g_h = solve_field_fem(
+            geo, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            magnetization="halbach", halbach_segments=4,
+            return_full=True, **_H_FAST,
+        )
+        r_ag = geo.r_ag
+        r_back = geo.r_rotor - 0.001
+        _, Br_ag_rad = sample_Br(m_rad, g_rad, r_ag, 120)
+        _, Br_ag_h = sample_Br(m_h, g_h, r_ag, 120)
+        _, Br_back_rad = sample_Br(m_rad, g_rad, r_back, 120)
+        _, Br_back_h = sample_Br(m_h, g_h, r_back, 120)
+        h_ag_rad = harmonics_1sided(Br_ag_rad)
+        h_ag_h = harmonics_1sided(Br_ag_h)
+        h_back_rad = harmonics_1sided(Br_back_rad)
+        h_back_h = harmonics_1sided(Br_back_h)
+        assert h_ag_h[4] >= h_ag_rad[4] * 0.99
+        assert h_back_h[4] < h_back_rad[4]
+
+    def test_rotation_preserves_amplitude_and_shifts_phase(self):
+        """Halbach rotated by phi: amplitude preserved, fundamental
+        phase shifted by -n_p*phi (mechanical-to-electrical)."""
+        n_p = 4
+        phi = 0.15
+        t0, Br0 = solve_field_fem(
+            _HALBACH_GEO, n_p=n_p, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            magnetization="halbach", halbach_segments=3, **_H_FAST,
+        )
+        t1, Br1 = solve_field_fem(
+            _HALBACH_GEO, n_p=n_p, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            magnetization="halbach", halbach_segments=3,
+            rotation=phi, **_H_FAST,
+        )
+        h0 = harmonics_1sided(Br0)
+        h1 = harmonics_1sided(Br1)
+        assert h1[n_p] == pytest.approx(h0[n_p], rel=0.02)
+        fft0 = np.fft.rfft(Br0)
+        fft1 = np.fft.rfft(Br1)
+        phase0 = np.angle(fft0[n_p])
+        phase1 = np.angle(fft1[n_p])
+        expected_shift = -n_p * phi
+        actual_shift = phase1 - phase0
+        while actual_shift > np.pi:
+            actual_shift -= 2 * np.pi
+        while actual_shift < -np.pi:
+            actual_shift += 2 * np.pi
+        assert actual_shift == pytest.approx(expected_shift, abs=0.05)
+
+    def test_halbach_b1_ratio_regression(self):
+        """Pin the Halbach/radial B1 ratio as a regression literal.
+        kappa_m=4 ideal Halbach concentrates flux ~19% above radial
+        for this geometry (the curl-of-M source involves both M_r and
+        M_theta; a simple M_r Fourier ratio doesn't predict B1 — the
+        full BVP is needed, validated in Phase 5 against Zhang 2021)."""
+        n_p = 4
+        kappa_m = 4
+        t_rad, Br_rad = solve_field_fem(
+            _HALBACH_GEO, n_p=n_p, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            **_H_FAST,
+        )
+        t_h, Br_h = solve_field_fem(
+            _HALBACH_GEO, n_p=n_p, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            magnetization="halbach", halbach_segments=kappa_m, **_H_FAST,
+        )
+        h_rad = harmonics_1sided(Br_rad)
+        h_h = harmonics_1sided(Br_h)
+        ratio = h_h[n_p] / h_rad[n_p]
+        assert ratio == pytest.approx(1.19, rel=0.03)
+
+    def test_bad_magnetization_string_raises(self):
+        with pytest.raises(ValueError, match="magnetization"):
+            solve_field_fem(
+                _HALBACH_GEO, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+                magnetization="Halbach", **_H_FAST,
+            )
+
+    def test_halbach_without_segments_raises(self):
+        with pytest.raises(ValueError, match="halbach_segments"):
+            solve_field_fem(
+                _HALBACH_GEO, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+                magnetization="halbach", **_H_FAST,
+            )
+
+    def test_halbach_alpha_p_not_one_raises(self):
+        with pytest.raises(ValueError, match="alpha_p"):
+            solve_field_fem(
+                _HALBACH_GEO, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+                magnetization="halbach", halbach_segments=3, alpha_p=0.8,
+                **_H_FAST,
+            )
+
+    def test_halbach_angles_length_mismatch_raises(self):
+        with pytest.raises(ValueError, match="length"):
+            solve_field_fem(
+                _HALBACH_GEO, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+                magnetization="halbach", halbach_segments=3,
+                halbach_angles_rad=(0.0, -0.7), **_H_FAST,
+            )
+
+    def test_nonlinear_halbach_converges(self):
+        """Nonlinear Picard solve completes on a Halbach geometry."""
+        _, Br = solve_field_fem(
+            _HALBACH_GEO, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=1000,
+            magnetization="halbach", halbach_segments=3,
+            nonlinear=True, **_H_FAST,
+        )
+        h = harmonics_1sided(Br)
+        assert h[4] > 0
+
+
+# ---------------------------------------------------------------------------
+# Model-free field invariants — these fail no matter which
+# solver path silently ran, so they backstop the whole silent-fallback class.
+# ---------------------------------------------------------------------------
+
+class TestAirgapFieldInvariants:
+
+    # divisible by 2*n_p (half-wave shift) and by the 12-slot/4-pole-pair
+    # common period
+    N_T = 80
+    N_P = 4
+
+    @pytest.fixture(scope="class")
+    def arc_solution(self):
+        geo = default_inrunner()
+        theta, B_r, mesh, gfu = solve_field_fem(
+            geo=geo, n_p=self.N_P, B_rem=1.0, mu_r_pm=1.05, mu_r_fe=1000.0,
+            alpha_p=0.75, return_full=True, n_theta=self.N_T,
+            maxh_fraction=0.08,
+        )
+        return geo, np.asarray(B_r), mesh, gfu
+
+    def _gap_radii(self, geo):
+        g = geo.r_stator - geo.r_magnet
+        return [geo.r_magnet + f * g for f in (0.15, 0.5, 0.85)]
+
+    def test_net_radial_flux_zero_across_gap(self, arc_solution):
+        """No net flux crosses any closed circle in the airgap (div B = 0,
+        no monopoles): the mean of B_r on a uniform grid vanishes relative
+        to the waveform scale. Measured <= 9.2e-5 at this config."""
+        from phasesweep.solvers.fem_sampling import sample_Br
+
+        geo, _, mesh, gfu = arc_solution
+        for r in self._gap_radii(geo):
+            _, br = sample_Br(mesh, gfu, r, n_theta=self.N_T)
+            assert abs(np.mean(br)) < 1e-3 * np.max(np.abs(br))
+
+    def test_fundamental_obeys_laplace_radial_decay(self, arc_solution):
+        """In the current-free airgap each harmonic of B_r follows
+        a*r^(n-1) + b*r^(-n-1) (Laplace) regardless of the boundary
+        conditions that produced it. Fit (a, b) on the inner and outer
+        sampling circles and predict the middle one — a wrong-radius
+        sampling regression (the historical midgap/bore class) breaks
+        this while leaving each single-radius waveform plausible.
+        Measured residual 4.1e-3 (FEM discretization); 2e-2 bound."""
+        from phasesweep.solvers.fem_sampling import sample_Br
+
+        geo, _, mesh, gfu = arc_solution
+        n = self.N_P
+        r1, r2, r3 = self._gap_radii(geo)
+        c = []
+        for r in (r1, r2, r3):
+            _, br = sample_Br(mesh, gfu, r, n_theta=self.N_T)
+            c.append(np.fft.rfft(br)[n] / self.N_T)
+        A = np.array([[r1 ** (n - 1), r1 ** (-n - 1)],
+                      [r3 ** (n - 1), r3 ** (-n - 1)]])
+        scale = max(abs(x) for x in c)
+        for part in (np.real, np.imag):
+            a, b = np.linalg.solve(A, np.array([part(c[0]), part(c[2])]))
+            pred = a * r2 ** (n - 1) + b * r2 ** (-n - 1)
+            assert abs(pred - part(c[1])) < 2e-2 * scale
+
+    def test_pole_pair_periodicity_and_antisymmetry(self, arc_solution):
+        """The smooth-bore waveform repeats every 2*pi/n_p and flips sign
+        every pi/n_p (alternating pole signs). The unstructured mesh is
+        not n_p-fold symmetric, so the residual is discretization-level:
+        measured 1.3e-3 / 1.6e-3; 1e-2 bound."""
+        _, B_r, _, _ = arc_solution
+        peak = np.max(np.abs(B_r))
+        s_pp = self.N_T // self.N_P
+        s_hp = self.N_T // (2 * self.N_P)
+        assert np.max(np.abs(np.roll(B_r, s_pp) - B_r)) < 1e-2 * peak
+        assert np.max(np.abs(np.roll(B_r, s_hp) + B_r)) < 1e-2 * peak
+
+    def test_slotted_pole_pair_periodicity(self):
+        """Periodicity survives slotting when the slot count shares the
+        pole-pair period (12 slots / 4 pole pairs = 3 slots per period).
+        Measured 5.8e-3 (slot-edge sampling noise); 3e-2 bound."""
+        geo = inrunner(**_SLOTTED_GEO_KW)
+        _, B_r = solve_field_fem(
+            geo=geo, n_p=self.N_P, B_rem=1.0, mu_r_pm=1.05, mu_r_fe=1000.0,
+            alpha_p=0.75, n_theta=self.N_T, maxh_fraction=0.08,
+        )
+        B_r = np.asarray(B_r)
+        s_pp = self.N_T // self.N_P
+        assert (np.max(np.abs(np.roll(B_r, s_pp) - B_r))
+                < 3e-2 * np.max(np.abs(B_r)))
+
+    def test_rotation_by_pole_pair_is_identity(self, arc_solution):
+        """Rotating the magnet pattern by a full pole-pair pitch maps the
+        arc set and sign pattern onto themselves. The rotated build meshes
+        the geometrically identical arc set, so the solve reproduces the
+        rotation=0 field to near round-off (measured 6.2e-7; 1e-4 leaves
+        meshing-nondeterminism headroom)."""
+        geo, B_0, _, _ = arc_solution
+        _, B_rot = solve_field_fem(
+            geo=geo, n_p=self.N_P, B_rem=1.0, mu_r_pm=1.05, mu_r_fe=1000.0,
+            alpha_p=0.75, rotation=2 * np.pi / self.N_P,
+            n_theta=self.N_T, maxh_fraction=0.08,
+        )
+        assert (np.max(np.abs(np.asarray(B_rot) - B_0))
+                < 1e-4 * np.max(np.abs(B_0)))

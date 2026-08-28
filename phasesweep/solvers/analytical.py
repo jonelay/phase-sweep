@@ -7,12 +7,22 @@ Primary reference: Zhu, Howe & Chan (2002) improved analytical model
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
 from math import atan, exp, log, pi, sin, sqrt, tanh
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
 
 from phasesweep.machines.geometry import Geometry
+from phasesweep.solver_params import (
+    _reject_induction,
+    _require_geometry,
+    _resolve_b_rem,
+)
+
+if TYPE_CHECKING:
+    from phasesweep.machines.motor import Motor
 
 
 def zhu_howe_Br(
@@ -271,3 +281,68 @@ def _derive_B_rem(
     )[0]
     B_ag_peak = psi_f * n_p / (2 * N * k_w * r_stator * L_stk)
     return B_ag_peak / tr
+
+
+@dataclass(frozen=True)
+class AnalyticalParams:
+    """Validated inputs for Zhu & Howe analytical air-gap field solver.
+
+    geometry in meters; B_rem — magnet remanence (T); mu_r_pm / mu_r_fe —
+    relative permeabilities (dimensionless); alpha_p — pole-arc ratio ((0, 1]).
+
+    mu_r_fe is validated and hashed but does not enter the analytical
+    solution — Zhu & Howe assumes infinitely permeable iron. It is kept for
+    parity with FemParams (where it enters the linear solve) and config_id
+    stability.
+    """
+
+    geometry: Geometry
+    n_p: int
+    B_rem: float
+    mu_r_pm: float
+    mu_r_fe: float
+    alpha_p: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.n_p < 2:
+            raise ValueError(f"n_p must be >= 2, got {self.n_p}")
+        if self.B_rem <= 0:
+            raise ValueError(f"B_rem must be > 0, got {self.B_rem}")
+        if self.mu_r_pm <= 0:
+            raise ValueError(f"mu_r_pm must be > 0, got {self.mu_r_pm}")
+        if self.mu_r_fe <= 0:
+            raise ValueError(f"mu_r_fe must be > 0, got {self.mu_r_fe}")
+        if not (0 < self.alpha_p <= 1):
+            raise ValueError(f"alpha_p must be in (0, 1], got {self.alpha_p}")
+
+
+def prepare_analytical(motor: Motor) -> AnalyticalParams:
+    """Derive, validate, and extract analytical solver params from a Motor."""
+    _reject_induction(motor, "analytical")
+    if motor.magnetization == "halbach":
+        raise ValueError(
+            f"Motor '{motor.name}': the analytical solver (Zhu & Howe) assumes "
+            f"radial magnetization only — Halbach arrays are not supported. "
+            f"Use the FEM solver instead."
+        )
+    geo = _require_geometry(motor, "analytical")
+    if geo.magnet_mount == "inset":
+        raise ValueError(
+            f"Motor '{motor.name}': the analytical solver (Zhu & Howe) assumes "
+            f"air between magnet arcs — inset rotors (interpole iron) are not "
+            f"supported. Use the FEM solver instead."
+        )
+    if geo.bridge_thickness is not None:
+        raise ValueError(
+            f"Motor '{motor.name}': the analytical solver (Zhu & Howe) does "
+            f"not model a bridge ring — use the FEM solver instead."
+        )
+    b_rem = _resolve_b_rem(motor)
+    return AnalyticalParams(
+        geometry=geo,
+        n_p=motor.n_p,
+        B_rem=b_rem,
+        mu_r_pm=motor.mu_r_pm,
+        mu_r_fe=motor.mu_r_fe,
+        alpha_p=motor.alpha_p,
+    )

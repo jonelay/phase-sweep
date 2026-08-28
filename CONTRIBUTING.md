@@ -34,19 +34,33 @@ Tests that depend on this dataset are skipped automatically when it is
 absent. FEM tests require NGSolve, which is installed via the `all`
 extra above. They are skipped automatically if NGSolve is not available.
 
+The FEM solvers are also cross-checked against ElmerFEM. Those tests
+(`tests/crossval/test_elmer_*_pinned.py`) validate committed comparison
+JSONs and need no Elmer install — they always run. Only regenerating
+the JSONs requires ElmerSolver; see `scripts/elmer_radial/README.md`
+and `scripts/elmer_axial/README.md`.
+
 ## Running tests
+
+Start with the core lane - the same selector the merge-request CI lane
+uses. It completes in a few minutes:
+
+```bash
+uv run pytest -m "not fem and not slow" --tb=short -q
+```
+
+The full suite is the FEM/release gate:
 
 ```bash
 uv run pytest
 ```
 
-The full suite includes FEM solves and takes ~20 minutes. For a faster
-feedback loop during development, run the non-slow tier (this is what
-CI runs):
-
-```bash
-uv run pytest -m "not slow" --tb=short -q
-```
+Expect it to run an order of magnitude longer than the core lane. The
+FEM solver families (`tests/fem*`, crossval FEM cases) dominate the
+runtime (`-m fem`-marked tests under `tests/solvers/` and
+`tests/crossval/`) and can be silent for minutes per test while a solve
+converges -
+a quiet interval is not necessarily a hang.
 
 ## Linting and type checking
 
@@ -55,14 +69,14 @@ import sorting, and [mypy](https://mypy-lang.org/) for type checking.
 CI gates on both — check before submitting:
 
 ```bash
-uv run ruff check .
+uv run ruff check phasesweep/ scripts/ tests/
 uv run mypy
 ```
 
 Auto-fix safe lint violations:
 
 ```bash
-uv run ruff check --fix .
+uv run ruff check --fix phasesweep/ scripts/ tests/
 ```
 
 ## Submitting changes
@@ -71,15 +85,26 @@ uv run ruff check --fix .
    wasted effort on changes that don't fit the project's direction.
 2. Fork the repo and create a branch from `main`.
 3. Make your changes, add or update tests as needed.
-4. Ensure `uv run ruff check .`, `uv run mypy`, and `uv run pytest`
-   all pass.
+4. Ensure `uv run ruff check phasesweep/ scripts/ tests/`,
+   `uv run mypy`, and `uv run pytest` all pass.
 5. Open a pull request against `main`.
 
 Keep PRs focused — one logical change per PR.
 
+## AI-assisted development
+
+Contributors may use AI tools provided they review, understand, and accept
+responsibility for the resulting contribution. Material assistance should be
+disclosed in the pull-request description or with a non-authorship commit
+trailer, which records tool use without assigning authorship:
+
+```text
+Assisted-by: <tool>
+```
+
 ## Scope
 
-phase-sweep is a PMSM simulation toolkit for stator/rotor design
+phase-sweep is a synchronous-machine simulation toolkit for stator/rotor design
 exploration — field solvers (analytical and 2D FEM), drive simulation,
 thermal-duty screening, torque and iron-loss models, sensitivity sweeps,
 and a cross-validation CLI. Contributions that extend these capabilities

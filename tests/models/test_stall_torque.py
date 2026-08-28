@@ -17,9 +17,8 @@ import pytest
 
 from phasesweep.machines.geometry import default_inrunner
 from phasesweep.machines.motor import DriveParams, Motor
-from phasesweep.models.rated_torque import mtpa_gamma, mtpa_torque
+from phasesweep.models.rated_torque import mtpa_gamma, mtpa_torque, prepare_stall_torque
 from phasesweep.registry import MODEL_REGISTRY
-from phasesweep.solver_params import prepare_stall_torque
 from tests.conftest import REPO_ROOT
 from tests.conftest import make_motor as _make_motor
 
@@ -84,6 +83,32 @@ def test_salient_handcalc():
     tau_expected = mtpa_torque(2, 0.1144, 0.2055, 0.3320, p.I_stall, g)
     result = MODEL_REGISTRY["stall_torque"].fn(_make_config(m))
     assert abs(result["tau_stall"] - tau_expected) < 1e-10
+
+
+# --- SynRM (psi_f = 0) ---
+
+def test_synrm_handcalc():
+    # Reluctance-only stall: MTPA at 45 deg, tau = 0.75*n_p*|dL|*I_stall^2,
+    # at both the drive-limited and electromagnetic stall currents.
+    m = _make_motor(
+        psi_f=0.0, L_d=8e-3, L_q=4e-3, R_s=10.0,
+        drive=DriveParams(U_DC=540.0, MAX_I_S=20.0),
+    )
+    p = prepare_stall_torque(m)
+    result = MODEL_REGISTRY["stall_torque"].fn(_make_config(m))
+    expected = 0.75 * 2 * 4e-3 * p.I_stall**2
+    assert result["tau_stall"] == pytest.approx(expected, rel=1e-9)
+    assert result["k_T"] == 0.0
+    expected_em = 0.75 * 2 * 4e-3 * p.I_stall_em**2
+    assert result["tau_stall_electromagnetic"] == pytest.approx(
+        expected_em, rel=1e-9)
+
+
+def test_synrm_no_saliency_raises():
+    m = _make_motor(psi_f=0.0, L_d=None, L_q=None, R_s=1.0,
+                    drive=DriveParams(U_DC=540.0, MAX_I_S=20.0))
+    with pytest.raises(ValueError, match="cannot produce torque"):
+        MODEL_REGISTRY["stall_torque"].fn(_make_config(m))
 
 
 # --- tau_stall >= tau_rated ---

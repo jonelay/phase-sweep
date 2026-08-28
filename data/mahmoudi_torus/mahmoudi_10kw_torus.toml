@@ -1,0 +1,128 @@
+# Mahmoudi 10 kW TORUS AFPM — double-sided slotted, 18s/6p, FEA-only
+# Fourth axial-flux anchor. FEA-only (no prototype built), but the most
+# complete cross-section geometry of any axial-flux motor in the canon —
+# full slot profile, yoke thicknesses, magnet dimensions, and 3D-FEA
+# flux density maps. Primary target for future axial-flux FEA solver
+# cross-validation.
+# Source:
+#   A. Mahmoudi, N. A. Rahim, H. W. Ping, "Axial-Flux Permanent-Magnet
+#   Motor Design for Electric Vehicle Direct Drive Using Sizing Equation
+#   and Finite Element Analysis," Progress In Electromagnetics Research,
+#   Vol. 122, pp. 467–496, 2012.
+#   OA: https://www.jpier.org/ac_api/download.php?id=11090402
+#
+# Topology: double-sided slotted TORUS (1-stator 2-rotors, north-north
+# magnet configuration). Phase winding wound around the stator core
+# (back-to-back wrapped). B_r = 1.3 T (Table 2 constraint, NdFeB).
+# Stator: spiral-laminated 0.1 mm silicon steel.
+#
+# CIRCUIT PARAMETERS — DERIVED, NOT MEASURED:
+#   psi_f derived from FEA back-EMF: E_rms = 74 V per phase at 1000 rpm
+#     (Fig. 11, 7° skew optimized design, THD = 3.1%).
+#     psi_f = √2 · 74 / (3 · 2π·1000/60) = 0.3331 Wb peak per-phase.
+#   No R_s, L_d, L_q published — the paper does not report these.
+#   I_rated derived from power balance: P/(τ·ω) with Kt = 1.5·n_p·psi_f·√2
+#     → I_rated ≈ 45 A rms. This is an estimate, not measured.
+#
+# GEOMETRY (Table 4, complete cross-section):
+#   The slot profile (Fig. 2b) is trapezoidal with stepped top:
+#     W_sb = 6 mm (bottom), W_s = 3 mm (top/opening),
+#     D_s = 11 mm (main depth), d1 = d2 = 3 mm (top step depths).
+#   Stator yoke: 2×L_cs = 41 mm total (the stator carries flux from both
+#     rotor sides; Table 4 gives "stator-yoke thickness" as 2×L_cs).
+#   Rotor back-iron: L_cr = 9 mm.
+#   Magnet pole pitch: γ_p = 117° electrical → α_p = 117/180 = 0.65.
+#
+# FEA RESULTS for cross-validation:
+#   - Back-EMF: 74 V_rms phase at 1000 rpm, THD 3.1% with 7° skew (Fig. 11-12)
+#   - Cogging: 3.3 Nm peak without skew, 2.1 Nm with 7° skew (Fig. 13)
+#   - Air-gap B: avg 0.71 T, max 0.95 T (Fig. 5, Table 5)
+#   - Stator yoke B: avg 0.67 T, max 0.95 T; teeth 1.5 T max (Fig. 6)
+#   - Rotor yoke B: avg 0.82 T, max 1.15 T (Fig. 7, Table 5)
+#   - Efficiency: 91.5% at full load, 1000 rpm (FEA with core loss, §4.3)
+#   - Core loss: 63 W (FE-AC analysis, spiral lamination 0.1 mm)
+
+[motor]
+name = "Mahmoudi 10 kW TORUS AFPM (FEA design)"
+type = "axial-flux SPM (1-stator 2-rotors TORUS-NN, slotted, back-to-back wound)"
+topology = "axial"
+
+[circuit]
+n_p = 3                # 6 poles (Table 4: P = 3 pole pairs)
+psi_f = 0.3331         # Wb, peak per-phase — derived from FEA back-EMF 74 Vrms
+I_rated_rms = 45.0     # A rms (estimated from power balance, not measured)
+
+[winding]
+n_slots = 18           # Table 4
+connection = "wye"     # star (implicit — 3-phase, V_nom = 130 V LL)
+turns_per_phase = 60   # Table 4: N_ph = (18 × 10)/3
+
+[rated]
+torque_Nm = 95.5       # P/ω = 10000/(2π·1000/60)
+speed_rpm = 1000       # Table 4: f=50 Hz, p=3 → 1000 rpm
+power_kW = 10.0        # Table 4
+
+[magnets]
+B_r = 1.3              # T (Table 2 constraint; NdFeB)
+
+[geometry]
+D_out_mm = 240.0       # Table 4
+D_in_mm = 139.0        # Table 4
+airgap_mm = 2.0        # per rotor side (Table 4)
+magnet_thickness_mm = 12.0   # L_pm (Table 4)
+rotor_yoke_mm = 9.0    # L_cr per rotor (Table 4)
+stator_yoke_mm = 41.0  # 2×L_cs total (Table 4; carries flux from both sides)
+variant = "2R1S-NN"    # double-sided TORUS, north-north
+n_slots = 18           # Table 4
+slot_depth_mm = 11.0   # D_s (Table 4)
+slot_width_ratio = 0.5 # estimated from W_sb/pitch at r_mean
+slot_opening_width_mm = 3.0  # W_s = slot opening (Table 4)
+alpha_p = 0.65         # 117/180 (γ_p = 117° electrical)
+
+[envelope]
+magnet_pole_pitch_deg = 117  # γ_p electrical degrees (Table 4)
+magnet_skew_deg = 7.0  # θ_i optimized (Table 4)
+slot_bottom_width_mm = 6.0   # W_sb (Table 4)
+slot_top_width_mm = 3.0      # W_s (Table 4, also the slot opening)
+slot_top_depth_1_mm = 3.0    # d1 (Table 4)
+slot_top_depth_2_mm = 3.0    # d2 (Table 4)
+stator_lamination = "spiral, 0.1 mm silicon steel"
+
+[provenance]
+source = "Mahmoudi, Rahim, Ping, PIER Vol. 122, pp. 467-496, 2012. Table 4, Figs. 5-13"
+url = "https://www.jpier.org/ac_api/download.php?id=11090402"
+motor_model = "Mahmoudi 10 kW TORUS-NN AFPM (FEA design, no prototype)"
+duty = "FEA design point: 10 kW, 1000 rpm, 130 V LL, η=91.5%"
+V_nom_LL_V = 130               # rated line-line voltage RMS
+frequency_Hz = 50              # electrical frequency at rated
+B_g_avg_T = 0.71               # air-gap B average (FEA, Table 5)
+B_g_max_T = 0.95               # air-gap B peak (FEA, Table 5)
+back_emf_rms_V = 74.0          # per-phase at 1000 rpm (FEA, Fig. 11)
+back_emf_THD_pct = 3.1         # with 7° skew (Fig. 12)
+cogging_peak_Nm = 2.1          # with 7° skew (Fig. 13)
+cogging_no_skew_Nm = 3.3       # without skew
+core_loss_W = 63               # FE-AC, spiral lamination (§4.3)
+efficiency_pct = 91.5          # FEA at full load (Table 4)
+notes = """
+Fourth axial-flux anchor — FEA-only (no prototype) but the most
+geometrically complete axial-flux motor in the canon. Every cross-section
+dimension needed to build a mesh is published in Table 4, including the
+full trapezoidal slot profile (Fig. 2b). Primary target for axial-flux
+FEA solver cross-validation: air-gap flux density, back-EMF waveform,
+cogging torque, and efficiency can all be compared against the paper's
+Opera-3D results.
+
+Topology is TORUS-NN (north-north magnet config, single stator between
+two rotors). Different from Parviainen (which is 1R2S — one rotor
+between two stators). The TORUS-NN has a thick stator yoke (41 mm)
+because flux from both rotors passes through it. Back-to-back winding
+gives short end-windings.
+
+Circuit parameters (psi_f, I_rated) are DERIVED from FEA results, not
+measured. No R_s, L_d, L_q published. This anchor is therefore eligible
+for geometry-tier validation only (when the axial-flux FEA solver is
+built), NOT for circuit-tier cross-checks (rated_torque, thermal_duty).
+
+The paper's companion (Mahmoudi et al., IET EPA Vol. 7(5), 2013) adds
+experimental results but is paywalled.
+"""

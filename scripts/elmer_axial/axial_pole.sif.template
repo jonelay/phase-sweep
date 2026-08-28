@@ -1,0 +1,128 @@
+! Elmer SIF template — axial-flux one-pole plane, 2D magnetostatics (A_z).
+! Filled by run_elmer_axial.py via str.format; brace fields are the
+! placeholders — no other braces may appear in this file.
+! Solver choice: MagnetoDynamics2D (steady state) — the maintained 2D A_z
+! solver; StatMagSolver is legacy. Justification in README.md.
+!
+! Units: SI throughout — metres, A/m (magnetization), T (output B).
+! Bodies (from mesh_writer.py):
+!   1 rotor_yoke  2 pm_n  3 air_interpole  4 pm_s  5 airgap  6 stator_yoke
+! Boundary 1 = whole outer rectangle: Dirichlet A_z = 0 (magnet-center
+! mirror planes + outer yoke backs), per the shared physics contract.
+
+Header
+  CHECK KEYWORDS Warn
+  Mesh DB "." "mesh"
+End
+
+Simulation
+  Coordinate System = Cartesian 2D
+  Simulation Type = Steady State
+  Steady State Max Iterations = 1
+  Output Intervals = 0
+  Max Output Level = 5
+End
+
+Constants
+  Permeability of Vacuum = 1.25663706143592e-6
+End
+
+Body 1
+  Name = "rotor_yoke"
+  Equation = 1
+  Material = 1
+End
+
+Body 2
+  Name = "pm_n"
+  Equation = 1
+  Material = 2
+End
+
+Body 3
+  Name = "air_interpole"
+  Equation = 1
+  Material = 3
+End
+
+Body 4
+  Name = "pm_s"
+  Equation = 1
+  Material = 4
+End
+
+Body 5
+  Name = "airgap"
+  Equation = 1
+  Material = 3
+End
+
+Body 6
+  Name = "stator_yoke"
+  Equation = 1
+  Material = 1
+End
+
+Equation 1
+  Active Solvers(3) = 1 2 3
+End
+
+Solver 1
+  Equation = MgDyn2D
+  Procedure = "MagnetoDynamics2D" "MagnetoDynamics2D"
+  Variable = A
+  Linear System Solver = Direct
+  Linear System Direct Method = umfpack
+  Steady State Convergence Tolerance = 1e-9
+  Nonlinear System Max Iterations = 1
+End
+
+Solver 2
+  Equation = CalcFields
+  Procedure = "MagnetoDynamics" "MagnetoDynamicsCalcFields"
+  Potential Variable = "A"
+  Calculate Magnetic Flux Density = Logical True
+  Linear System Solver = Iterative
+  Linear System Iterative Method = CG
+  Linear System Max Iterations = 1000
+  Linear System Convergence Tolerance = 1e-10
+End
+
+Solver 3
+  Equation = SaveLine
+  Procedure = "SaveData" "SaveLine"
+  Exec Solver = After All
+  Filename = "gapline.dat"
+  Polyline Coordinates(2,2) = 0.0 {y_mid_gap:.12e} {tau_p:.12e} {y_mid_gap:.12e}
+  Polyline Divisions(1) = {n_line:d}
+End
+
+! Material 1: yoke iron (linear)
+Material 1
+  Relative Permeability = {mu_r_fe:.6e}
+End
+
+! Materials 2/4: PM recoil permeability with axial (+y/-y)
+! magnetization. In Elmer MagnetoDynamics(2D) "Magnetization i" is a
+! MATERIAL keyword (a Body Force magnetization is silently ignored and
+! yields a trivially-zero solution — verified the hard way).
+Material 2
+  Relative Permeability = {mu_r_pm:.6e}
+  Magnetization 2 = Real {M_y:.10e}
+End
+
+Material 4
+  Relative Permeability = {mu_r_pm:.6e}
+  Magnetization 2 = Real {M_y_neg:.10e}
+End
+
+! Material 3: air
+Material 3
+  Relative Permeability = 1.0
+End
+
+Boundary Condition 1
+  Name = "outer_dirichlet"
+  Target Boundaries(1) = 1
+  A = Real 0.0
+End

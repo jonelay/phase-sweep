@@ -30,8 +30,8 @@ from phasesweep.machines.geometry import inrunner, outrunner
 from phasesweep.machines.motor import Motor
 from phasesweep.machines.perturbation import perturb_motor as _perturb_motor
 from phasesweep.registry import MODEL_REGISTRY
+from phasesweep.simulation.params import prepare_drive_sim
 from phasesweep.simulation.sim import plan_sim
-from phasesweep.solver_params import prepare_drive_sim
 from phasesweep.solvers.harmonics import harmonics_1sided
 from phasesweep.sweep_types import RunConfig, RunResult
 from phasesweep.validation.crossval import (
@@ -247,7 +247,7 @@ SENSITIVITY_PARAMS = {
     "L_stk": {"label": "Stack length", "deltas": [-0.10, -0.05, 0.0, 0.05, 0.10]},
     "B_rem": {"label": "Magnet grade (B_rem)", "deltas": [-0.10, -0.05, 0.0, 0.05, 0.10]},
     # k_w: motors without k_w are skipped. L_d/L_q not scaled (leakage not
-    # decomposed — see documented limitations). Back-EMF/torque
+    # decomposed — a documented model limitation). Back-EMF/torque
     # sensitivity is correct; current-loop dynamics sensitivity is not.
     "k_w": {"label": "Winding factor (k_w)", "deltas": [-0.05, -0.025, 0.0, 0.025, 0.05]},
 }
@@ -501,9 +501,9 @@ def _field_map_worker(job: dict) -> dict:
         import numpy as _np
 
         from phasesweep.machines.motor import Motor as _Motor
-        from phasesweep.solver_params import prepare_fem as _prepare_fem
-        from phasesweep.solvers.fem_field import rasterise_cross_section as _raster
         from phasesweep.solvers.fem_field import solve_field_fem as _solve
+        from phasesweep.solvers.fem_runner import prepare_fem as _prepare_fem
+        from phasesweep.solvers.fem_sampling import rasterise_cross_section as _raster
 
         motor = _Motor.from_dict(job["motor_dict"])
         params = _prepare_fem(motor)
@@ -1472,7 +1472,7 @@ def generate_report(fig_dir: Path | None = None, workers: int = 1, skip_sensitiv
         _cache_path = fig_dir.parent / ".mesh_cache"
         _cache_path.mkdir(parents=True, exist_ok=True)
         cache_dir = str(_cache_path)
-        from phasesweep.solvers.fem_field import set_disk_cache_dir
+        from phasesweep.solvers.fem_mesh import set_disk_cache_dir
         set_disk_cache_dir(cache_dir)
 
     now = datetime.now()

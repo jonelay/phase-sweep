@@ -1,0 +1,79 @@
+# Mirrors .github/workflows/ci.yml — keep the two in sync.
+#
+# Test tiers:
+#   Tier 0 — every push/MR, `test` + `core` below. FEM-free by policy:
+#            `-m "not fem"` is explicit, not an artifact of ngsolve
+#            failing to load.
+#   Tier 1 — scheduled pipeline, the `fem` job below.
+#   Tier 2 — release gate, the release-cut checklist. Not automated here.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+image: ghcr.io/astral-sh/uv:python3.12-bookworm
+
+variables:
+  UV_CACHE_DIR: .uv-cache
+  UV_LINK_MODE: copy
+
+cache:
+  key:
+    files:
+      - uv.lock
+  paths:
+    - .uv-cache
+
+test:
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "schedule"
+  variables:
+    PHASESWEEP_STRICT_SKIP: "1"
+  script:
+    - uv sync --extra all --extra test --extra dev
+    - uv run ruff check phasesweep/ scripts/ tests/
+    - uv run mypy
+    # STRICT_SKIP fails the run on any skip whose reason is not in the
+    # conftest allowlist — an optional dependency dropping out of the CI
+    # environment must not read as a green suite.
+    - uv run pytest -m "not fem and not slow" -q -rs
+
+core:
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "schedule"
+  variables:
+    PHASESWEEP_STRICT_SKIP: "1"
+    PHASESWEEP_CORE_LANE: "1"
+  script:
+    - uv sync --extra test
+    - uv run python -c "import phasesweep"
+    - uv run pytest -m "not fem and not slow" -q -rs
+
+fem:
+  # Too slow for every push (~10 min of solves). Scheduled or run-pipeline
+  # only — "web" is GitLab's equivalent of GitHub's workflow_dispatch.
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  timeout: 60m
+  variables:
+    PHASESWEEP_STRICT_SKIP: "1"
+    # EXPECTED_SKIPS pins the total: the CREATOR datasets are gitignored
+    # third-party downloads absent on a runner, so their anchors skip
+    # legitimately — but under a reason already on the allowlist, which
+    # means a NEW silently-skipping anchor would otherwise go unseen.
+    # 4 = the CREATOR_DATASET_SKIP anchors, measured in a clean worktree.
+    PHASESWEEP_EXPECTED_SKIPS: "4"
+  script:
+    - uv sync --extra all --extra test
+    # The whole point of this tier. ngsolve failing to load makes every FEM
+    # test skip under an allowlisted reason, which is how CI went FEM-blind
+    # for ~20 sessions. Fail here instead, loudly.
+    - uv run python -c "import ngsolve; print('ngsolve', ngsolve.__version__)"
+    - uv run pytest -m "fem and not slow" -q -rs
+    # output/reference_br/*.npz are committed repo content for this step.
+    # Nothing else diffs them, so a physics change that forgets to recapture
+    # is invisible until someone regenerates a README figure.
+    - uv run python scripts/capture_reference_br.py --verify

@@ -33,11 +33,21 @@ import json
 import subprocess
 import sys
 import time
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from phasesweep.solver_params import (
+    _reject_induction,
+    _require_geometry,
+    _resolve_b_rem,
+)
 from phasesweep.sweep_types import RunConfig, RunResult
+
+if TYPE_CHECKING:
+    from phasesweep.machines.geometry import Geometry
+    from phasesweep.machines.motor import Motor
 
 _DEFAULT_TIMEOUT = 300
 _RASTER_N_GRID = 120
@@ -45,7 +55,6 @@ _RASTER_N_GRID = 120
 
 def _run_fem_impl(config: RunConfig) -> dict[str, Any]:
     """Run NGSolve FEM solve from RunConfig. Executes inside subprocess."""
-    from phasesweep.solver_params import prepare_fem
     from phasesweep.solvers.fem_field import solve_field_fem
     from phasesweep.solvers.harmonics import compute_thd, harmonics_1sided
 
@@ -70,16 +79,20 @@ def _run_fem_impl(config: RunConfig) -> dict[str, Any]:
         mu_r_pm=params.mu_r_pm, mu_r_fe=params.mu_r_fe,
         maxh_fraction=config.maxh_fraction,
         n_theta=config.n_theta, nonlinear=config.nonlinear,
+        nonlinear_solver=config.nonlinear_solver,
         j_s=config.j_s,
         k_w=config.motor.k_w if config.motor.k_w is not None else 0.966,
         alpha_p=params.alpha_p,
         rotation=config.rotation,
         info=solve_info,
         return_full=True,
+        magnetization=params.magnetization,
+        halbach_segments=params.halbach_segments,
+        halbach_angles_rad=params.halbach_angles_rad,
     )
     torque_info: dict[str, float] = {}
     if config.j_s != 0.0:
-        from phasesweep.solvers.fem_field import maxwell_stress_torque
+        from phasesweep.solvers.fem_sampling import maxwell_stress_torque
         # Torque on the region enclosed by the mid-gap circle = the rotor
         # for an inrunner; sign-flip for an outrunner (rotor outside).
         rotor_sign = 1.0 if geo.topology == "inrunner" else -1.0
@@ -88,7 +101,7 @@ def _run_fem_impl(config: RunConfig) -> dict[str, Any]:
         if config.motor.L_stk is not None:
             torque_info["tau_maxwell"] = tau_per_m * config.motor.L_stk
 
-    from phasesweep.solvers.fem_field import rasterise_cross_section
+    from phasesweep.solvers.fem_sampling import rasterise_cross_section
     xi, _yi, _Az, Bmag = rasterise_cross_section(
         mesh_obj, gfu, n_grid=_RASTER_N_GRID, r_bound=geo.r_outer)
     B_mag_grid = [
@@ -184,6 +197,106 @@ def _cli_main() -> None:
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+@dataclass(frozen=True)
+class FemParams:
+    """Validated inputs for NGSolve FEM magnetostatic solver.
+
+    geometry in meters; B_rem — magnet remanence (T); mu_r_pm / mu_r_fe —
+    relative permeabilities (dimensionless); alpha_p — pole-arc ratio ((0, 1]).
+
+    mu_r_fe sets the iron reluctivity of the LINEAR solve only. With
+    nonlinear=True the solver replaces it with the generic B-H table
+    — it merely seeds
+    Picard iteration 0 and the result is insensitive to its value (inert
+    to 6e-6 across 500→4000). It stays validated and hashed either
+    way.
+    """
+
+    geometry: Geometry
+    n_p: int
+    B_rem: float
+    mu_r_pm: float
+    mu_r_fe: float
+    alpha_p: float = 1.0
+    magnetization: str = "radial"
+    halbach_segments: int | None = None
+    halbach_angles_rad: tuple[float, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.n_p < 2:
+            raise ValueError(f"n_p must be >= 2, got {self.n_p}")
+        if self.B_rem <= 0:
+            raise ValueError(f"B_rem must be > 0, got {self.B_rem}")
+        if self.mu_r_pm <= 0:
+            raise ValueError(f"mu_r_pm must be > 0, got {self.mu_r_pm}")
+        if self.mu_r_fe <= 0:
+            raise ValueError(f"mu_r_fe must be > 0, got {self.mu_r_fe}")
+        if not (0 < self.alpha_p <= 1):
+            raise ValueError(f"alpha_p must be in (0, 1], got {self.alpha_p}")
+        if self.geometry.magnet_mount == "inset" and self.alpha_p >= 1.0:
+            raise ValueError(
+                "magnet_mount='inset' requires alpha_p < 1: the interpole "
+                f"iron IS the inset feature (got alpha_p={self.alpha_p})"
+            )
+        if self.magnetization not in ("radial", "halbach"):
+            raise ValueError(
+                f"magnetization must be 'radial' or 'halbach', "
+                f"got {self.magnetization!r}"
+            )
+        if self.magnetization == "halbach":
+            if self.halbach_segments is None or self.halbach_segments < 1:
+                raise ValueError(
+                    f"halbach_segments must be >= 1 when magnetization='halbach', "
+                    f"got {self.halbach_segments}"
+                )
+            if self.alpha_p != 1.0:
+                raise ValueError(
+                    f"Halbach magnetization requires alpha_p=1.0, "
+                    f"got alpha_p={self.alpha_p}"
+                )
+            if (
+                self.halbach_angles_rad is not None
+                and len(self.halbach_angles_rad) != self.halbach_segments
+            ):
+                raise ValueError(
+                    f"halbach_angles_rad length "
+                    f"({len(self.halbach_angles_rad)}) must equal "
+                    f"halbach_segments ({self.halbach_segments})"
+                )
+        else:
+            if self.halbach_segments is not None:
+                raise ValueError(
+                    "halbach_segments must be None when magnetization='radial'"
+                )
+            if self.halbach_angles_rad is not None:
+                raise ValueError(
+                    "halbach_angles_rad must be None when magnetization='radial'"
+                )
+
+
+def prepare_fem(motor: Motor) -> FemParams:
+    """Derive, validate, and extract FEM solver params from a Motor."""
+    from math import radians
+
+    _reject_induction(motor, "fem")
+    geo = _require_geometry(motor, "fem")
+    b_rem = _resolve_b_rem(motor)
+    angles_rad = None
+    if motor.halbach_angles_deg is not None:
+        angles_rad = tuple(radians(a) for a in motor.halbach_angles_deg)
+    return FemParams(
+        geometry=geo,
+        n_p=motor.n_p,
+        B_rem=b_rem,
+        mu_r_pm=motor.mu_r_pm,
+        mu_r_fe=motor.mu_r_fe,
+        alpha_p=motor.alpha_p,
+        magnetization=motor.magnetization,
+        halbach_segments=motor.halbach_segments,
+        halbach_angles_rad=angles_rad,
+    )
 
 
 if __name__ == "__main__":

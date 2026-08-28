@@ -41,7 +41,26 @@ function makeRow(job) {
       setError(job.id, String(e.message ?? e));
     }
   });
-  head.append(title, badge, cancelBtn);
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "copy-meta-btn";
+  copyBtn.textContent = "Copy";
+  copyBtn.title = "Copy job metadata as JSON";
+  copyBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const row = rows.get(job.id);
+    const j = row?.job ?? job;
+    const meta = {
+      job_id: j.id, job_type: j.job_type, motor: j.motor_name,
+      status: j.status, params: j.params,
+      result_ids: j.result_ids ?? [],
+      created_at: j.created_at, finished_at: j.finished_at,
+    };
+    navigator.clipboard.writeText(JSON.stringify(meta, null, 2)).then(() => {
+      copyBtn.textContent = "Copied";
+      setTimeout(() => { copyBtn.textContent = "Copy"; }, 1200);
+    });
+  });
+  head.append(title, badge, copyBtn, cancelBtn);
 
   const sub = document.createElement("div");
   sub.className = "sub";
@@ -55,10 +74,8 @@ function makeRow(job) {
   const errEl = document.createElement("div");
   errEl.className = "error";
 
-  // clicking a completed card routes its output to the plots;
-  // the cancel button (shown only while active) keeps its own handler
   el.addEventListener("click", (ev) => {
-    if (ev.target.closest(".cancel-btn")) return;
+    if (ev.target.closest(".cancel-btn") || ev.target.closest(".copy-meta-btn")) return;
     const row = rows.get(job.id);
     if (row?.job?.status === "completed") app.showJobResults(row.job);
   });
@@ -187,7 +204,7 @@ async function buildForm(container) {
   });
 }
 
-// -- panel contract ------------------------------------------------------------------
+// -- panel contract -------------------------------------------------
 
 export default {
   name: "jobs",

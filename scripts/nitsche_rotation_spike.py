@@ -237,7 +237,8 @@ def _run_deformation_sweep(geo_kw, n_p, B_rem, mu_r_pm, maxh, n_pts):
 def _run_remesh_sweep(geo_kw, n_p, B_rem, mu_r_pm, mu_r_fe, maxh, n_pts):
     """Run cogging sweep via per-angle remeshing (R1 production path)."""
     from phasesweep.machines.geometry import inrunner
-    from phasesweep.solvers.fem_field import arkkio_torque, solve_field_fem
+    from phasesweep.solvers.fem_field import solve_field_fem
+    from phasesweep.solvers.fem_sampling import arkkio_torque
 
     geo = inrunner(
         r_outer=geo_kw["r_outer"], r_stator=geo_kw["r_stator"],
