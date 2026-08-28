@@ -143,7 +143,7 @@ def ws_receive_json(ws, timeout_s=30.0):
     return val
 
 
-# -- configs -------------------------------------------------------------------
+# -- configs ---------------------------------------------------
 
 def test_configs_list_and_detail(client):
     r = client.get("/api/configs")
@@ -164,7 +164,7 @@ def test_configs_list_and_detail(client):
     assert client.get("/api/configs/nope").status_code == 404
 
 
-# -- config editor write path ---------------------------------------------------
+# -- config editor write path -----------------------------------
 
 def put_config(client, name, mutate=None, expect=201):
     raw = client.get("/api/configs/test_inrunner/raw").json()["raw"]
@@ -264,7 +264,7 @@ def test_user_configs_persist_and_never_shadow_anchor(workspace):
         assert raw["geometry"]["L_stk"] == 0.12
 
 
-# -- job lifecycle -------------------------------------------------------------
+# -- job lifecycle ---------------------------------------
 
 def test_single_point_job_lifecycle(client):
     job = submit(client, "analytical")
@@ -434,8 +434,8 @@ def test_validate_filters_load_mech_per_model(client):
     """Validate with sim_plan + load_mech runs both drive_sim and
     drive_sim_two_mass — load_mech is filtered out for drive_sim."""
     from phasesweep.server.app import load_motor_configs
+    from phasesweep.simulation.params import prepare_drive_sim
     from phasesweep.simulation.sim import plan_sim
-    from phasesweep.solver_params import prepare_drive_sim
 
     motor = load_motor_configs(client.app.state.settings.motors_dir)["test_inrunner"]
     sim_plan = plan_sim(prepare_drive_sim(motor)).to_dict()
@@ -492,7 +492,7 @@ def test_cogging_rejects_nonzero_j_s(client, route):
     assert "j_s" in r.json()["detail"].lower()
 
 
-# -- sweep fan-out ---------------------------------------------------------------
+# -- sweep fan-out ---------------------------------------------
 
 def test_sweep_fan_out(client):
     job = submit(client, "sweep", params={
@@ -528,7 +528,7 @@ def test_sweep_partial_cache(client):
     assert statuses == ["OK", "cached", "cached"]
 
 
-# -- validate job -----------------------------------------------------------------
+# -- validate job ------------------------------------------------
 
 def test_validate_job(client):
     job = submit(client, "validate", params={
@@ -567,7 +567,7 @@ def test_duplicate_run_ids_collapse_to_one_subtask(client):
     assert done["completed"] == done["total"] == 1
 
 
-# -- cancellation -----------------------------------------------------------------
+# -- cancellation ------------------------------------------------
 
 def test_cancel_terminal_job_is_noop(client):
     job = submit(client, "analytical")
@@ -642,7 +642,7 @@ def test_stop_returns_while_job_draining(workspace, monkeypatch):
     release.set()
 
 
-# -- WebSocket ---------------------------------------------------------------------
+# -- WebSocket -----------------------------------------------------
 
 def test_ws_message_sequence_manager_level(workspace):
     """Deterministic full-sequence assertion: progress 1..N, then complete."""
@@ -758,7 +758,7 @@ def test_ws_rejects_cross_origin(client):
         pass
 
 
-# -- measured import ------------------------------------------------------------------
+# -- measured import ----------------------------------------------
 
 def test_measured_import(client):
     r = client.post("/api/measured/test_inrunner", json=dict(MEASURED_JSON))
@@ -836,12 +836,12 @@ def test_validation_endpoint(client):
     assert {"quantity", "rel_pct", "tol_pct", "passed", "comparison_type"} <= set(row)
 
 
-# -- calibration workflow --------------------------------------------------------
+# -- calibration workflow ---------------------------------------
 
 def test_measured_attaches_across_config_edits(client):
     # Measured data describes the hardware: it follows the Motor NAME
     # through parameter edits, while computed results stay pinned to
-    # their exact config_id.
+    # their exact config_id (the attach rule).
     client.post("/api/measured/test_inrunner", json=dict(TORQUE_JSON))
     wait_job(client, submit(client, "rated_torque")["id"])
 
@@ -959,7 +959,7 @@ def test_validation_dedupe_prefers_ok_over_failed(client):
     assert len(tau) == 1 and tau[0]["passed"] is True
 
 
-# -- job-type vocabulary ---------------------------------------------------------
+# -- job-type vocabulary ----------------------------------------
 
 def test_models_endpoint(client):
     r = client.get("/api/models")
@@ -973,7 +973,7 @@ def test_models_endpoint(client):
     assert "torque_test" not in by_key
 
 
-# -- dashboard static files ------------------------------------------------------
+# -- dashboard static files ------------------
 
 def test_dashboard_served_at_root(client):
     r = client.get("/")
@@ -998,3 +998,109 @@ def test_vendored_plotly_served(client):
 def test_api_routes_win_over_static_mount(client):
     # The "/" static mount must not shadow the API routers
     assert client.get("/api/configs").status_code == 200
+
+
+def test_rated_duty_torque_pm_unchanged():
+    from phasesweep.server.jobs import _rated_duty_torque
+    from tests.conftest import make_motor
+    tau = _rated_duty_torque(make_motor(I_rated=10.0))
+    assert tau == pytest.approx(1.5 * 2 * 0.1 * 10.0, rel=1e-12)
+
+
+def test_rated_duty_torque_synrm_uses_mtpa():
+    from phasesweep.server.jobs import _rated_duty_torque
+    from tests.conftest import make_motor
+    m = make_motor(psi_f=0.0, L_d=8e-3, L_q=4e-3, I_rated=10.0)
+    tau = _rated_duty_torque(m)
+    assert tau == pytest.approx(0.75 * 2 * 4e-3 * 10.0**2, rel=1e-9)
+
+
+def test_rated_duty_torque_synrm_no_saliency_raises():
+    from phasesweep.server.jobs import _rated_duty_torque
+    from tests.conftest import make_motor
+    m = make_motor(psi_f=0.0, I_rated=10.0)
+    with pytest.raises(ValueError, match="cannot produce torque"):
+        _rated_duty_torque(m)
+
+
+def test_model_defaults_duty_profile_synrm():
+    from phasesweep.server.routes import _derive_model_defaults
+    from tests.conftest import make_motor
+    m = make_motor(psi_f=0.0, L_d=8e-3, L_q=4e-3, I_rated=10.0)
+    d = _derive_model_defaults(m, "thermal_duty")
+    ((tau, dt),) = d["duty_profile"]
+    assert tau == pytest.approx(0.75 * 2 * 4e-3 * 10.0**2, rel=1e-9)
+    assert dt == 3600.0
+
+
+def test_n_planes_survives_the_worker_boundary():
+    from phasesweep.machines.configs import load_motor
+    from phasesweep.server.jobs import (
+        _SCALAR_CONFIG_KEYS,
+        _build_config_kw,
+        _config_kw_of,
+    )
+    from phasesweep.sweep_types import RunConfig, compute_run_id
+    from tests.conftest import REPO_ROOT
+
+    motor = load_motor(REPO_ROOT / "data/parviainen_afpm/parviainen_5kw_afpm.toml")
+    rc = RunConfig(motor=motor, model="fem_axial", n_planes=5,
+                   rotation=0.25, cogging_points=24)
+
+    kw = _config_kw_of(rc)
+    assert kw["n_planes"] == 5
+    assert kw["rotation"] == 0.25
+    assert kw["cogging_points"] == 24
+
+    assert "n_planes" in _SCALAR_CONFIG_KEYS
+    rebuilt = RunConfig(motor=motor, model="fem_axial",
+                        **_build_config_kw({"n_planes": 5, "rotation": 0.25,
+                                            "cogging_points": 24}))
+    assert compute_run_id(rebuilt) == compute_run_id(rc)
+
+    assert compute_run_id(RunConfig(motor=motor, model="fem_axial")) != \
+        compute_run_id(rc)
+
+
+# ---------------------------------------------------------------------------
+# __main__ argv -> settings smoke
+# ---------------------------------------------------------------------------
+
+def test_main_argv_reaches_settings_and_uvicorn(monkeypatch, tmp_path):
+    """CLI flags must land in ServerSettings and uvicorn.run — a renamed
+    argparse dest or dropped plumbing otherwise only fails at launch."""
+    import uvicorn
+
+    import phasesweep.server.__main__ as srv_main
+    import phasesweep.server.app as srv_app
+
+    seen: dict[str, object] = {}
+
+    def fake_create_app(settings):
+        seen["settings"] = settings
+        return "SENTINEL_APP"
+
+    def fake_run(app, **kw):
+        seen["app"] = app
+        seen["run_kw"] = kw
+
+    monkeypatch.setattr(srv_app, "create_app", fake_create_app)
+    monkeypatch.setattr(uvicorn, "run", fake_run)
+    monkeypatch.setattr("sys.argv", [
+        "phasesweep-server", "--host", "0.0.0.0", "--port", "9999",
+        "--motors-dir", str(tmp_path / "m"),
+        "--output-dir", str(tmp_path / "o"),
+        "--workers", "2", "--subtask-timeout", "30.5", "--log-json",
+    ])
+    srv_main.main()
+
+    s = seen["settings"]
+    assert s.motors_dir == tmp_path / "m"
+    assert s.output_dir == tmp_path / "o"
+    assert s.workers == 2
+    assert s.subtask_timeout_s == 30.5
+    assert s.log_json is True
+    assert "0.0.0.0" in s.extra_allowed_hosts
+    assert seen["app"] == "SENTINEL_APP"
+    assert seen["run_kw"]["host"] == "0.0.0.0"
+    assert seen["run_kw"]["port"] == 9999

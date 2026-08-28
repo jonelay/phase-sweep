@@ -43,6 +43,13 @@ slot_width_ratio = 0.45       # body at yoke; tooth narrows from 3.6 mm to ~1.5 
 slot_opening_width = 0.0008      # m; bore opening gap (~0.165 of 4.85 mm pitch)
 alpha_p = 0.635              # from geometry.py (chord-to-arc corrected at cup ID)
 L_stk = 0.007            # m (7 mm)
+magnet_overhang = 0.00025    # m per side; client-confirmed partial ~0.25 mm
+                             # overhang past the stator teeth (photo review,
+                             # 2026-06) — bench observation, not a caliper
+                             # measurement
+k_end = 0.918486             # computed 3D end-effect factor (nonlinear BH
+                             # wedge at this overhang) — scripts/compute_k_end.py;
+                             # provenance: data/outrunner_14mm_steel/k_end.record.json
 
 [materials]
 magnet_type = "NdFeB_N52"    # nominal, suspected below spec
@@ -73,6 +80,9 @@ Kt_measured = 0.002412       # Nm/A (1.5 * n_p * psi_f)
 # profile below ideal square-wave, 3D leakage, magnet grade -- but this is
 # INCOMPLETE: with a single air gap, magnet grade and the model's gap-handling
 # error are degenerate (both absorbed into effective B_rem 1.139 T).
+# With the computed k_end = 0.9185 above now applied in the analytical model,
+# the raw-2D effective B_rem 1.139 T reparameterizes to 1.240 T (grade +
+# profile only, 3D corrected separately; 1.240 x 0.9185 = 1.139).
 
 [provenance]
 source = "Motor lab measurements"

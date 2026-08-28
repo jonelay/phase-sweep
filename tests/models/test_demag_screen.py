@@ -14,18 +14,15 @@ import pytest
 
 from phasesweep.machines.configs import load_motor
 from phasesweep.machines.geometry import default_inrunner
-from phasesweep.models.demag_screen import run_demag_screen
+from phasesweep.models.demag_screen import prepare_demag_screen, run_demag_screen
 from phasesweep.registry import MODEL_REGISTRY
-from phasesweep.solver_params import (
-    j_s_from_phase_current,
-    prepare_demag_screen,
-)
+from phasesweep.solver_params import j_s_from_phase_current
 from phasesweep.sweep_types import RunConfig, compute_run_id
 from tests.conftest import requires_fem
 
 MOTOR_TOML = Path(__file__).parent.parent.parent / "motors" / "creator_case_pmsm.toml"
 
-_COARSE = dict(maxh_fraction=0.08, n_theta=60)
+_COARSE = dict(maxh_fraction=0.08, n_theta=60, nonlinear=True)
 
 
 @pytest.fixture(scope="module")
@@ -96,7 +93,7 @@ def test_creator_screen_at_drive_limit(creator, screen_at_drive_limit):
     # bias in sample_magnet_Bm, which the identity below cannot see (it shifts
     # B_m_min and margin together). abs=0.03 absorbs mesh/ngsolve drift while
     # catching the +0.15 T case 5x over.
-    assert out["margin"] == pytest.approx(0.2406, abs=0.03)
+    assert out["margin"] == pytest.approx(0.207, abs=0.03)
     # Interface pin: margin is B_m_min measured against the knee, by
     # definition. Degenerate here (B_knee = 0.0) but free.
     assert out["margin"] == pytest.approx(out["B_m_min"] - out["B_knee"])
@@ -124,3 +121,30 @@ def test_run_id_hashes_i_fault(creator):
     assert compute_run_id(rc_a) != compute_run_id(rc_b)
     assert compute_run_id(rc_a) == compute_run_id(
         RunConfig(motor=creator, model="demag_screen", i_fault=0.42))
+
+
+@requires_fem
+@pytest.mark.slow
+def test_halbach_demag_screen_runs():
+    """End-to-end demag screen on a Halbach motor with custom angles."""
+    from phasesweep.machines.geometry import inrunner
+    from phasesweep.machines.motor import Motor
+
+    geo = inrunner(
+        r_outer=0.06, r_stator=0.048, r_magnet=0.04, r_rotor=0.03,
+        n_slots=12, slot_depth=0.005,
+    )
+    m = Motor(
+        name="halbach-demag-test", geometry=geo, n_p=4,
+        B_rem=1.2, B_knee=-0.5,
+        N=50, k_w=0.966, L_stk=0.10, coils_series=1,
+        magnetization="halbach", halbach_segments=3,
+        halbach_angles_deg=(0.0, -60.0, -120.0),
+    )
+    rc = RunConfig(motor=m, model="demag_screen", i_fault=30.0,
+                   maxh_fraction=0.08, n_theta=60)
+    out = run_demag_screen(rc)
+    assert out["margin"] > 0
+    assert out["B_m_min"] > 0
+    assert out["frac_below_knee"] == 0.0
+    assert geo.r_rotor <= out["r_min"] <= geo.r_magnet

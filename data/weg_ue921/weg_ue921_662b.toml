@@ -1,0 +1,72 @@
+# WEG UE 921/662 B — 4-pole PMSM synchronous motor (production part)
+# IEC frame-80 housing, dual-sourced SKU with the NORD 80T1/4.
+#
+# Source: WEG motor nameplate (Ma_882_C designation).
+#   Nameplate: Y 187 V, 2.9 A, 50 Hz, 1500 rpm, 4.8 Nm.
+#   J = 0.0011 kg.m2 (shared frame-80 housing), 8 kg.
+#
+# IMPORTANT: this motor has NO independent electrical datasheet.
+# R_s = 2.60 Ohm is a CROSS-VENDOR IMPORT from the NORD 80T1/4 datasheet
+# (R_ww/2 = 5.20/2). The NORD is wound for 400 V / 70 Hz / 2100 rpm; the
+# WEG for 187 V / 50 Hz / 1500 rpm — these are DIFFERENT WINDINGS in the
+# same frame. Using the NORD's R_s is contested — treat it as provisional.
+# L_d, L_q, psi_f are NOT published for this motor.
+#
+# Without L_d/L_q/psi_f, this motor cannot run rated_torque, torque_speed,
+# or any solver that needs the d-q model. It exists here as a nameplate
+# reference and to document the cross-vendor relationship.
+
+[motor]
+name = "WEG UE 921/662 B"
+type = "PMSM (4-pole IEC frame-80, production part)"
+
+[circuit]
+n_p = 2                # 4 poles: 50 Hz / (1500 rpm / 60) = 2
+R_s = 2.60             # Ohm per-phase — CROSS-VENDOR IMPORT from NORD 80T1/4
+                       # datasheet (R_ww/2 = 5.20/2). NOT independently measured.
+                       # CONTESTED.
+I_rated_rms = 2.9      # A rms (nameplate, Y connection at 187 V)
+J = 0.0011             # kg.m2 (frame-80 housing)
+
+[drive]
+W_REF = 157.080        # rad/s mechanical, 2*pi*1500/60
+
+[rated]
+speed_rpm = 1500
+torque_Nm = 4.8
+frequency_Hz = 50
+# power_kW not on nameplate; derived: 4.8 * 2*pi*1500/60 = 754 W
+
+[provenance]
+source = "WEG motor nameplate (Ma_882_C designation), UE 921/662 B"
+motor_model = "WEG UE 921/662 B (IEC frame 80)"
+duty = "S1 continuous, Y 187 V, 50 Hz"
+notes = """
+Production motor in the dual-source frame-80 family. Shares housing
+(J = 0.0011 kg.m2, 8 kg) with the NORD 80T1/4 but wound for a different
+voltage/frequency point (187 V / 50 Hz vs 400 V / 70 Hz).
+
+Electrical twin of the UE 921/712 (bench DUT). The 712 is LCR-measured
+but those measurements are bench data, not published datasheet values.
+
+WARNING: R_s = 2.60 Ohm is from the NORD 80T1/4, not this motor's own
+measurement. The NORD's psi_f = 0.601 Wb implies 231 V L-L back-EMF at
+1500 rpm — above the WEG's 187 V supply. The WEG has a different winding;
+its true R_s, L_d, L_q, psi_f are unknown from published data alone.
+
+Rewind-scaling estimate (2026-08-26): with the
+same frame, magnets, and slot copper, turns scale with the volts-per-
+hertz design point — N_WEG/N_NORD ~ (187/50)/(400/70) = 0.65 — and
+same-copper-mass R scales with N^2, putting the WEG's R_s near
+2.60 x 0.65^2 ~ 1.1 Ohm, roughly HALF the imported value. Same-copper-
+mass and same-flux are assumptions, not measurements, so this does not
+replace the value; it quantifies the contest (the import is plausibly
+~2x high) and stays consistent with eligibility being nameplate-only.
+The resolution path remains the 712 twin's bench measurement, blocked
+on publication clearance. Note the induction-machine circuit tier
+(im_* models) cannot arbitrate this: these are PM synchronous machines.
+
+Eligible for: nameplate reference only (no d-q model).
+Not eligible for: rated_torque, stall_torque, torque_speed, drive_sim,
+  analytical, FEM.
+"""

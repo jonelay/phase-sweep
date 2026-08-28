@@ -342,7 +342,8 @@ class TestCircuitParams:
     def test_psi_f_not_cleared_by_own_perturbation(self):
         m = _make_inrunner(psi_f=0.1, B_rem=None)
         p = _perturb_motor(m, "psi_f", 0.10)
-        assert p is not None and p.psi_f is not None
+        assert p is not None
+        assert p.psi_f == pytest.approx(0.1 * 1.10)
 
     def test_other_fields_untouched(self):
         m = _make_inrunner(psi_f=0.1)

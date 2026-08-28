@@ -1,8 +1,8 @@
 # Architecture
 
 Three figures covering how a motor definition becomes a stored result,
-how that result's identity is computed, and what the fleet currently
-covers. Diagram sources live in [`diagrams/`](diagrams/); every element
+how that result's identity is computed, and a generated fleet-coverage
+snapshot. Diagram sources live in [`diagrams/`](diagrams/); every element
 that asserts a fact carries a claim-table row in
 [`diagrams/README.md`](diagrams/README.md), with the repo state it was
 grounded against.
@@ -13,12 +13,13 @@ grounded against.
 
 A motor TOML loads into a frozen `Motor` (validation at the boundary,
 see [`motor-toml.md`](motor-toml.md)). `RunConfig` pairs that `Motor`
-with a model key and solver params; the `prepare_*` factories in
-`solver_params.py` validate completeness and derive `psi_f` ↔ `B_rem`,
+with a model key and solver params; the `prepare_*` factories (each
+living next to its model's run function, on the shared derivation
+utilities in `solver_params.py`) validate completeness and derive
+`psi_f` ↔ `B_rem`,
 so holding a params object means the `Motor` is ready for that solver.
-`MODEL_REGISTRY` is a plain dict of `ModelInfo` — no Protocol, ABC, or
-plugin system — and every model is a `RunConfig -> dict` function over
-its declared `produces` quantities. Results land in the `ResultStore`
+`MODEL_REGISTRY` maps model keys to `ModelInfo` metadata and executable
+model functions over their declared `produces` quantities. Results land in the `ResultStore`
 carrying `motor_config_id`, `model`, and `source`; the crossval
 comparison surface is derived from `produces` intersections rather than
 hardcoded, and deltas are computed on request, never stored.
@@ -77,6 +78,5 @@ A grey cell is a statement about the motor file, not about the model:
 `iron_loss` needs an `[iron]` section, `thermal_duty` and
 `torque_speed` need circuit and thermal fields that the published
 benchmark motors do not all carry. Light cells mean the model runs but
-nothing is stored — `populate_cache.py` deliberately skips `drive_sim`
-(subprocess, slow) and `demag_screen` (needs a fault current chosen per
-run), so those stay light until someone runs them by hand.
+nothing was stored when the image was generated. The generation script is
+the authority for inclusion policy.

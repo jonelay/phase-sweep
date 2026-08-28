@@ -1,0 +1,79 @@
+# 2017 Chevrolet Bolt EV — 150 kW 8-pole V-shape IPM traction motor
+# Designed by GM, produced by LG. Bar-wound (hairpin) stator with 6
+# conductors per slot, sintered NdFeB magnets in double-layer V arrangement.
+#
+# Sources:
+#   - SAE 2016-01-1228: "Electric Motor Design of General Motors'
+#     Chevrolet Bolt Electric Vehicle"
+#   - McMaster University Dataverse teardown dataset:
+#     doi:10.5683/SP3/LM35Z2 (FEA model + measured geometry)
+#   - InsideEVs deep dive: motor weight, gear ratio, max RPM
+#
+# IMPORTANT: L_d, L_q, psi_f, and R_s are NOT publicly available from
+# web-accessible sources. The SAE paper and McMaster dataset contain
+# detailed geometry and FEA model files but the d-q axis inductances
+# and flux linkage require either:
+#   (a) downloading the McMaster dataset and extracting from FEA files
+#   (b) accessing the full SAE paper (paywalled)
+#   (c) community reverse-engineering (not yet found for this motor)
+#
+# This TOML is nameplate + geometry-level only. Circuit-tier solvers
+# (rated_torque, stall_torque, torque_speed) cannot run without L_d,
+# L_q, and psi_f.
+#
+# Geometry note: stator OD 204 mm and stack length 125 mm are confirmed
+# from multiple sources. Stator bore, rotor OD, and airgap are in the
+# McMaster teardown dataset but not web-extractable. The motor uses
+# asymmetric magnet placement between adjacent poles plus small rotor
+# slots near the OD for torque ripple reduction.
+
+[motor]
+name = "Chevrolet Bolt EV 2017 150 kW"
+type = "V-shape IPM (8-pole, double-layer NdFeB, hairpin bar-wound stator)"
+
+[circuit]
+n_p = 4                # 8 poles
+# R_s: NOT PUBLISHED (requires McMaster dataset or SAE paper)
+# L_d: NOT PUBLISHED
+# L_q: NOT PUBLISHED
+# psi_f: NOT PUBLISHED
+# I_rated_rms: not published as a single number; peak current ~400 A
+
+[drive]
+U_DC = 350.0           # V nominal battery voltage (355 V typical)
+# MAX_I_S: not published
+W_REF = 922.56         # rad/s mechanical, 2*pi*8810/60 (max motor speed)
+
+[rated]
+power_kW = 150.0       # peak
+torque_Nm = 360.0      # peak (266 lb-ft)
+speed_rpm = 8810       # max motor RPM
+gear_ratio = 7.05      # final drive ratio
+
+[provenance]
+source = "SAE 2016-01-1228 (GM); McMaster Dataverse doi:10.5683/SP3/LM35Z2; InsideEVs deep dive"
+motor_model = "GM/LG 150 kW IPM traction motor (Chevrolet Bolt EV, 2017)"
+duty = "automotive traction, liquid-cooled"
+notes = """
+Nameplate-only TOML. The d-q model parameters (L_d, L_q, psi_f, R_s)
+are locked behind the SAE paper paywall and the McMaster dataset
+download. The McMaster dataset (doi:10.5683/SP3/LM35Z2) contains
+measured teardown geometry AND FEA model files — downloading it would
+yield a COMPLETE anchor with geometry + electrical params.
+
+Known geometry (confirmed from multiple sources):
+  Stator OD: 204 mm, stack length: 125 mm
+  8 poles, bar-wound stator, 6 hairpin conductors per slot
+  Double-layer V-arrangement NdFeB magnets
+  Asymmetric magnet placement + small rotor slots for torque ripple
+
+Motor weight: 76 kg (motor + gear unit combined).
+Gear ratio: 7.05:1 single-speed reduction.
+
+Eligible for: nameplate reference only.
+Not eligible for: rated_torque, stall_torque, torque_speed, drive_sim,
+  analytical, FEM — all require L_d/L_q/psi_f not yet available.
+
+ACTION REQUIRED: Download McMaster dataset to extract L_d, L_q, psi_f,
+R_s from the FEA model files and complete this TOML.
+"""

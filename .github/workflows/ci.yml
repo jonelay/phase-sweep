@@ -1,12 +1,25 @@
 name: CI
 
+# Test tiers:
+#   Tier 0 — every push/PR, below. FEM-free by policy: `-m "not fem"` is
+#            explicit, not an artifact of ngsolve failing to load.
+#   Tier 1 — nightly + manual dispatch, the `fem` job below.
+#   Tier 2 — release gate, the release-cut checklist. Not automated here.
+
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 jobs:
   test:
+    name: Tier 0 — full extras
+    # The nightly schedule exists for Tier 1; Tier 0 already ran on the day's
+    # pushes. Manual dispatch still runs everything.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,15 +32,17 @@ jobs:
         run: uv run ruff check phasesweep/ scripts/ tests/
       - name: Type check
         run: uv run mypy
-      - name: Test (fast tier)
+      - name: Test (Tier 0)
         # STRICT_SKIP fails the run on any skip whose reason is not in the
         # conftest allowlist — an optional dependency dropping out of the CI
         # environment must not read as a green suite.
-        run: uv run pytest -m "not slow" -q -rs
+        run: uv run pytest -m "not fem and not slow" -q -rs
         env:
           PHASESWEEP_STRICT_SKIP: "1"
 
   core:
+    name: Tier 0 — core only
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,8 +53,42 @@ jobs:
         run: uv sync --extra test
       - name: Smoke-test lean import
         run: uv run python -c "import phasesweep"
-      - name: Test (core lane)
-        run: uv run pytest -m "not slow" -q -rs
+      - name: Test (Tier 0, core lane)
+        run: uv run pytest -m "not fem and not slow" -q -rs
         env:
           PHASESWEEP_STRICT_SKIP: "1"
           PHASESWEEP_CORE_LANE: "1"
+
+  fem:
+    name: Tier 1 — FEM
+    # Too slow for every push (~10 min of solves). Nightly, or on demand.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --extra all --extra test
+      - name: Preflight — ngsolve must actually load
+        # The whole point of this tier. ngsolve failing to load makes every
+        # FEM test skip under an allowlisted reason, which is how CI went
+        # FEM-blind for ~20 sessions. Fail here instead, loudly.
+        run: uv run python -c "import ngsolve; print('ngsolve', ngsolve.__version__)"
+      - name: Test (Tier 1)
+        # EXPECTED_SKIPS pins the total: the CREATOR datasets are gitignored
+        # third-party downloads absent on a runner, so their anchors skip
+        # legitimately — but under a reason already on the allowlist, which
+        # means a NEW silently-skipping anchor would otherwise go unseen.
+        # 4 = the CREATOR_DATASET_SKIP anchors, measured in a clean worktree.
+        run: uv run pytest -m "fem and not slow" -q -rs
+        env:
+          PHASESWEEP_STRICT_SKIP: "1"
+          PHASESWEEP_EXPECTED_SKIPS: "4"
+      - name: Verify pinned FEM reference arrays
+        # output/reference_br/*.npz are committed repo content for this step.
+        # Nothing else diffs them, so a physics change that forgets to
+        # recapture is invisible until someone regenerates a README figure.
+        run: uv run python scripts/capture_reference_br.py --verify

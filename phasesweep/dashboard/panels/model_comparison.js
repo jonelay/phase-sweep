@@ -96,7 +96,7 @@ function redraw() {
       hovermode: "closest",
       // this panel keeps its legend (color=model in a single-config,
       // multi-model context — deliberate split from the Results tab's
-      // color=config decision note)
+      // color=config)
       showlegend: true,
       legend: { orientation: "h", y: -0.25 },
     });

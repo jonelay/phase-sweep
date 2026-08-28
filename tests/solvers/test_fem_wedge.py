@@ -135,22 +135,101 @@ def test_endeffect_flux_measures_agree():
     assert r.flux_droop_ratio == pytest.approx(r.k_end, abs=1e-2)
 
 
-@requires_fem
-@pytest.mark.timeout(900)
-def test_endeffect_nonlinear_iron_lowers_k_end():
+@pytest.fixture(scope="module")
+def nl_picard_endeffect():
     # picard_tol 1e-3: the saturating end-region converges slowly under
     # the adaptive relaxation at this coarse fast config (the old
     # fixed relax = 0.3 never converged here at all and the fall-through
     # returned the oscillating field silently). A 1e-3 mu step bounds the
     # k_end error well below the ~2% saturation effect asserted.
-    geo = _outrunner_14mm()
-    lin = solve_wedge_endeffect(geo, **_FAST_END)
-    nl = solve_wedge_endeffect(geo, nonlinear=True, picard_tol=1e-3,
-                               **_FAST_END)
+    return solve_wedge_endeffect(_outrunner_14mm(), nonlinear=True,
+                                 nonlinear_solver="picard",
+                                 picard_tol=1e-3, **_FAST_END)
+
+
+@requires_fem
+@pytest.mark.timeout(900)
+def test_endeffect_nonlinear_iron_lowers_k_end(nl_picard_endeffect):
+    lin = solve_wedge_endeffect(_outrunner_14mm(), **_FAST_END)
+    nl = nl_picard_endeffect
     # End-region iron saturates -> more droop -> k_end a few % below linear.
     # Pinned two-sided: the ordering alone passed the non-converged solves.
     assert nl.k_end < lin.k_end
     assert nl.k_end == pytest.approx(0.8986, abs=0.03)
+
+
+def test_bh_mu_h_inverts_bh_nu():
+    """The wedge Newton's mu(|H|) must be the exact H-space inverse of the
+    2D solver's nu(|B|) — same clipped BH spline, so Picard (which
+    iterates mu = 1/nu(mu*|H|)) and Newton share one fixed point."""
+    import numpy as np
+
+    from phasesweep.solvers.fem_materials import _BH_H, _bh_mu_h, _bh_nu
+
+    # Cover the corners: H = 0 and near-0 (first-segment plateau), every
+    # table knot +/- half the FD step, the clip crossover, and beyond
+    # the table end (vacuum-slope extrapolation).
+    H = np.concatenate([
+        [0.0, 1e-13, 1e-9],
+        np.logspace(-1, 5.6, 400),
+        _BH_H[1:], _BH_H[1:] - 0.25, _BH_H[1:] + 0.25,
+    ])
+    mu = _bh_mu_h(H)
+    B = mu * H
+    np.testing.assert_allclose(1.0 / _bh_nu(B), mu, rtol=1e-12)
+    # H -> 0 limit is the initial permeability B1/H1, not vacuum.
+    assert mu[0] == pytest.approx(0.1 / 25.0, rel=1e-12)
+
+
+@requires_fem
+@pytest.mark.timeout(900)
+def test_endeffect_newton_matches_picard_fixed_point(nl_picard_endeffect,
+                                                     monkeypatch):
+    # Direct same-run comparison against the shared Picard solve: both
+    # iterations solve the same discrete BH system, so they must agree
+    # far inside their stop tolerances (measured ~1.4e-6 in k_end at
+    # this config; 1e-4 leaves tolerance-floor headroom).
+    import phasesweep.solvers.fem_wedge as fw
+
+    # The wedge dispatch has no info plumbing, so a silent Newton->Picard
+    # fallback would make this comparison vacuous (Picard vs Picard) —
+    # trap the fallback path instead (axial-test pattern).
+    def _fallback_trap(*a, **k):
+        raise AssertionError("wedge Newton silently fell back to Picard")
+
+    monkeypatch.setattr(fw, "_picard_solve_wedge", _fallback_trap)
+    nl = solve_wedge_endeffect(_outrunner_14mm(), nonlinear=True,
+                               nonlinear_solver="newton", **_FAST_END)
+    assert nl.k_end == pytest.approx(nl_picard_endeffect.k_end, abs=1e-4)
+    assert nl.k_end == pytest.approx(0.8986, abs=0.03)
+
+
+@requires_fem
+def test_endeffect_invalid_nonlinear_solver_raises():
+    with pytest.raises(ValueError, match="nonlinear_solver"):
+        solve_wedge_endeffect(_outrunner_14mm(), nonlinear=True,
+                              nonlinear_solver="gauss", **_FAST_END)
+
+
+@requires_fem
+def test_endeffect_newton_stall_falls_back_to_picard(monkeypatch):
+    """A stalled Newton must route to Picard automatically (2D behavior)."""
+    import phasesweep.solvers.fem_wedge as fw
+
+    class _Sentinel(Exception):
+        pass
+
+    def stalled(*args, **kwargs):
+        raise RuntimeError("stalled")
+
+    def marker(*args, **kwargs):
+        raise _Sentinel
+
+    monkeypatch.setattr(fw, "_newton_solve_wedge", stalled)
+    monkeypatch.setattr(fw, "_picard_solve_wedge", marker)
+    with pytest.raises(_Sentinel):
+        solve_wedge_endeffect(_outrunner_14mm(), nonlinear=True,
+                              nonlinear_solver="newton", **_FAST_END)
 
 
 @requires_fem
@@ -211,4 +290,4 @@ def test_wedge_picard_nonconvergence_raises(monkeypatch):
     monkeypatch.setattr(fw, "_picard_solve_wedge", strict)
     with pytest.raises(RuntimeError, match="did not converge"):
         solve_wedge_endeffect(_outrunner_14mm(), nonlinear=True,
-                              **_FAST_END)
+                              nonlinear_solver="picard", **_FAST_END)

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from phasesweep.machines.motor import Motor
     from phasesweep.simulation.sim import SimPlan
 
-from phasesweep.solver_params import TwoMassLoad
+from phasesweep.simulation.params import TwoMassLoad
 
 Status = Literal["OK", "TIMEOUT", "ERROR"]
 
@@ -24,7 +24,10 @@ class RunConfig:
     model — registry key ("analytical", "fem", "drive_sim", ...);
     maxh_fraction — max FEM mesh element size as fraction of r_outer;
     n_theta — airgap angular samples per revolution;
-    nonlinear — enable B-H curve Picard iteration (FEM);
+    nonlinear — enable B-H curve iteration (FEM);
+    nonlinear_solver — BH iteration scheme for nonlinear FEM solves:
+    "newton" (default, line-search damped with Picard fallback) or
+    "picard"; validated by the solver;
     sim_plan — drive-sim timing/load plan (SimPlan);
     j_s — armature slot current density amplitude (A/m², 0 = open circuit);
     i_fault — peak phase current (A) the demag_screen model screens at;
@@ -39,7 +42,13 @@ class RunConfig:
     rotation — mechanical rotor angle (rad) for rotated FEM solves;
     0.0 = aligned (identity-preserving default, no version bump);
     cogging_points — angular samples per cogging period for the
-    cogging_torque model (default 12).
+    cogging_torque model (default 12);
+    n_planes — quasi-3D computation planes for the fem_axial model
+    (default 3; odd values put the middle plane at r_mean);
+    slip — rotor slip ((0, 1], the motoring range) for induction-machine
+    models; no default (the operating slip is a deliberate choice:
+    rated slip, standstill, ...). Slip is an operating point, so it
+    lives here and in hash_fields, not on the Motor.
     """
 
     motor: Motor
@@ -48,6 +57,7 @@ class RunConfig:
     maxh_fraction: float = 0.05
     n_theta: int = 360
     nonlinear: bool = False
+    nonlinear_solver: str = "newton"
 
     sim_plan: SimPlan | None = None
 
@@ -64,6 +74,10 @@ class RunConfig:
     rotation: float = 0.0
 
     cogging_points: int = 12
+
+    n_planes: int = 3
+
+    slip: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -84,10 +98,16 @@ class RunConfig:
             d["dataset_id"] = self.dataset_id
         if self.load_mech is not None:
             d["load_mech"] = self.load_mech.to_dict()
+        if self.nonlinear_solver != "newton":
+            d["nonlinear_solver"] = self.nonlinear_solver
         if self.rotation != 0.0:
             d["rotation"] = self.rotation
         if self.cogging_points != 12:
             d["cogging_points"] = self.cogging_points
+        if self.n_planes != 3:
+            d["n_planes"] = self.n_planes
+        if self.slip is not None:
+            d["slip"] = self.slip
         return d
 
     @classmethod
@@ -117,6 +137,7 @@ class RunConfig:
             maxh_fraction=d.get("maxh_fraction", 0.05),
             n_theta=d.get("n_theta", 360),
             nonlinear=d.get("nonlinear", False),
+            nonlinear_solver=d.get("nonlinear_solver", "newton"),
             sim_plan=sim_plan,
             j_s=d.get("j_s", 0.0),
             i_fault=d.get("i_fault"),
@@ -125,6 +146,8 @@ class RunConfig:
             load_mech=load_mech,
             rotation=d.get("rotation", 0.0),
             cogging_points=d.get("cogging_points", 12),
+            n_planes=d.get("n_planes", 3),
+            slip=d.get("slip"),
         )
 
 
@@ -258,10 +281,23 @@ def compute_run_id(
         solver_params["load_mech"] = json.dumps(
             rc.load_mech.to_dict(), sort_keys=True
         )
+    if rc.nonlinear_solver != "newton":
+        # Default-suppressed like rotation/n_planes: an unconditional key
+        # would change archived run IDs on the unknown-model fallback path.
+        solver_params["nonlinear_solver"] = rc.nonlinear_solver
     if rc.rotation != 0.0:
         solver_params["rotation"] = f"{rc.rotation:.10f}"
     if rc.cogging_points != 12:
         solver_params["cogging_points"] = str(rc.cogging_points)
+    if rc.n_planes != 3:
+        # Default-suppressed like rotation/cogging_points: an
+        # unconditional key would change every archived run ID on the
+        # unknown-model fallback path (needs=None hashes all params).
+        solver_params["n_planes"] = str(rc.n_planes)
+    if rc.slip is not None:
+        # Default-suppressed like rotation/n_planes: an unconditional key
+        # would change archived run IDs on the unknown-model fallback path.
+        solver_params["slip"] = f"{rc.slip:.10g}"
 
     if needs is not None:
         solver_params = {k: v for k, v in solver_params.items() if k in needs}

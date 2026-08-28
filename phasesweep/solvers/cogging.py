@@ -10,6 +10,7 @@ Arkkio torque at each angle.  The full sweep runs in one subprocess call
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -24,9 +25,28 @@ _PER_ANGLE_TIMEOUT = 300
 
 def _run_cogging_impl(config: RunConfig) -> dict[str, Any]:
     """Run cogging torque sweep from RunConfig.  Executes inside subprocess."""
-    from phasesweep.solver_params import prepare_fem
-    from phasesweep.solvers.fem_field import arkkio_torque, solve_field_fem
+    from phasesweep.solvers.fem_field import solve_field_fem
+    from phasesweep.solvers.fem_mesh import (
+        ENV_CACHE_DIR,
+        disk_cache_dir,
+        set_disk_cache_dir,
+    )
+    from phasesweep.solvers.fem_runner import prepare_fem
+    from phasesweep.solvers.fem_sampling import arkkio_torque
     from phasesweep.solvers.harmonics import cogging_angles, harmonics_1sided
+
+    # Meshing dominates a cogging sweep (~1.1 s/angle vs ~0.3 s to solve),
+    # and every angle needs its own mesh once magnet arcs are discrete.
+    # run_cogging_safe forwards the parent's cache dir through the
+    # environment so a repeated sweep loads meshes instead of rebuilding.
+    #
+    # This function is also the in-process registry path, where the pool
+    # worker has usually already called set_disk_cache_dir. An ambient env
+    # var must not override that, so the env is only a fallback.
+    if disk_cache_dir() is None:
+        _cache_dir = os.environ.get(ENV_CACHE_DIR)
+        if _cache_dir:
+            set_disk_cache_dir(_cache_dir)
 
     if config.j_s != 0.0:
         raise ValueError(
@@ -71,9 +91,13 @@ def _run_cogging_impl(config: RunConfig) -> dict[str, Any]:
             mu_r_pm=params.mu_r_pm, mu_r_fe=params.mu_r_fe,
             maxh_fraction=config.maxh_fraction,
             n_theta=config.n_theta, nonlinear=config.nonlinear,
+            nonlinear_solver=config.nonlinear_solver,
             j_s=0.0, alpha_p=params.alpha_p,
             rotation=float(phi),
             return_full=True,
+            magnetization=params.magnetization,
+            halbach_segments=params.halbach_segments,
+            halbach_angles_rad=params.halbach_angles_rad,
         )
         tau_per_m = rotor_sign * arkkio_torque(
             mesh_obj, gfu, r_ark_inner, r_ark_outer,
@@ -114,6 +138,13 @@ def run_cogging_safe(
     if timeout_s is None:
         timeout_s = _PER_ANGLE_TIMEOUT * max(config.cogging_points, 1)
     t0 = time.time()
+    # Hand the child the parent's mesh cache dir; without it the subprocess
+    # starts cold on every sweep.
+    from phasesweep.solvers.fem_mesh import ENV_CACHE_DIR, disk_cache_dir
+    env = dict(os.environ)
+    _cache = disk_cache_dir()
+    if _cache is not None:
+        env[ENV_CACHE_DIR] = str(_cache)
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "phasesweep.solvers.cogging",
@@ -121,6 +152,7 @@ def run_cogging_safe(
             capture_output=True,
             text=True,
             timeout=timeout_s,
+            env=env,
         )
         if proc.returncode != 0:
             return RunResult(

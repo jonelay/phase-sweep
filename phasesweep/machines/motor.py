@@ -1,7 +1,7 @@
 """Motor dataclass composing Geometry with electrical/winding/material fields.
 
-Motor is the data model. All fields except name, geometry, and n_p
-are optional (None means "not yet measured/specified").
+All fields except name, geometry, and n_p are optional (None means "not yet
+measured/specified").
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
-from phasesweep.machines.geometry import Geometry
+from phasesweep.machines.geometry import AxialFluxGeometry, Geometry
 
 
 @dataclass(frozen=True)
@@ -44,6 +44,158 @@ class DriveParams:
             raise ValueError(f"I_LIMIT must be > 0, got {self.I_LIMIT}")
 
 
+def _check_xy_table(
+    name: str, table: tuple[tuple[float, float], ...] | None,
+    *, y_positive: bool = True,
+) -> None:
+    """Validate an interpolation table: >= 2 rows of finite (x, y) pairs,
+    x strictly increasing and > 0, y > 0 (when y_positive)."""
+    import math
+
+    if table is None:
+        return
+    if len(table) < 2:
+        raise ValueError(f"{name} needs >= 2 rows, got {len(table)}")
+    prev_x = -float("inf")
+    for row in table:
+        if len(row) != 2:
+            raise ValueError(f"{name} rows must be (x, y) pairs, got {row}")
+        x, y = row
+        if not (math.isfinite(x) and math.isfinite(y)):
+            raise ValueError(f"{name} entries must be finite, got {row}")
+        if x <= 0:
+            # x = 0 would silently shadow the scalar reference that
+            # anchors the interpolation at f/I = 0 (see _interp_anchored)
+            raise ValueError(f"{name} x-values must be > 0, got {x}")
+        if x <= prev_x:
+            raise ValueError(
+                f"{name} x-values must be strictly increasing, got {x} "
+                f"after {prev_x}"
+            )
+        if y_positive and y <= 0:
+            raise ValueError(f"{name} y-values must be > 0, got {y}")
+        prev_x = x
+
+
+@dataclass(frozen=True)
+class InductionParams:
+    """Squirrel-cage induction machine parameters (TOML [induction] section).
+
+    A Motor with `induction` set is an induction machine: the synchronous
+    d-q fields (psi_f, B_rem, L_d, L_q) must be None, and the
+    synchronous-machine models reject it loudly. All rotor quantities
+    are referred to the stator; inductances in H, resistances in Ω.
+
+      R_2         — rotor resistance referred to the stator (Ω, at the
+                    reference temperature and DC / low rotor frequency)
+      L_m         — magnetizing inductance (H, rated-point reference)
+      L_sigma_s   — stator leakage inductance (H)
+      L_sigma_r   — rotor leakage inductance referred to the stator (H)
+      n_bars      — cage bar count (documentation / future FEM tier)
+      f_rated     — rated supply frequency (Hz)
+      s_rated     — rated slip (dimensionless, (0, 1))
+      V_LL_rated  — rated supply line-line voltage (V rms). Explicitly
+                    line-line rms because IM datasheet voltage
+                    conventions are the canonical trap (a naive plug-in
+                    of a wye machine's L-L voltage as phase voltage
+                    triples the apparent power).
+      design_letter — NEMA design letter ("A"/"B"/"C"/"D"),
+                    documentation + envelope-bound priors
+      R_2_vs_f    — deep-bar table ((f_rotor_Hz, R_2_ohm), ...): rotor
+                    resistance vs ROTOR frequency s·f. Real cages rise
+                    steeply, so a constant R_2 gets the starting region
+                    badly wrong.
+      L_sigma_s_vs_f — stator leakage vs SUPPLY frequency table
+      L_sigma_r_vs_f — rotor leakage vs ROTOR frequency table
+      L_m_vs_i    — magnetizing saturation table
+                    ((I_m_A_rms, L_m_H), ...): L_m vs magnetizing
+                    branch current
+    """
+
+    R_2: float | None = None
+    L_m: float | None = None
+    L_sigma_s: float | None = None
+    L_sigma_r: float | None = None
+    n_bars: int | None = None
+    f_rated: float | None = None
+    s_rated: float | None = None
+    V_LL_rated: float | None = None
+    design_letter: str | None = None
+    R_2_vs_f: tuple[tuple[float, float], ...] | None = None
+    L_sigma_s_vs_f: tuple[tuple[float, float], ...] | None = None
+    L_sigma_r_vs_f: tuple[tuple[float, float], ...] | None = None
+    L_m_vs_i: tuple[tuple[float, float], ...] | None = None
+
+    def __post_init__(self) -> None:
+        # Normalize numeric types at construction (frozen dataclass, so
+        # object.__setattr__): TOML/JSON round-trips may deliver 10 vs
+        # 10.0, which compare equal but hash differently through the
+        # config_id JSON serialization.
+        for f in ("R_2", "L_m", "L_sigma_s", "L_sigma_r", "f_rated",
+                  "s_rated", "V_LL_rated"):
+            v = getattr(self, f)
+            if v is not None:
+                object.__setattr__(self, f, float(v))
+        for f in ("R_2_vs_f", "L_sigma_s_vs_f", "L_sigma_r_vs_f",
+                  "L_m_vs_i"):
+            t = getattr(self, f)
+            if t is not None:
+                object.__setattr__(
+                    self, f,
+                    tuple(tuple(float(x) for x in row) for row in t),
+                )
+        if self.n_bars is not None:
+            # int-normalize like the floats above: 28.0 vs 28 must not
+            # split one machine into two config_ids
+            if self.n_bars != int(self.n_bars):
+                raise ValueError(
+                    f"[induction] n_bars must be an integer, got {self.n_bars}")
+            object.__setattr__(self, "n_bars", int(self.n_bars))
+        for f in ("R_2", "L_m", "L_sigma_s", "L_sigma_r", "f_rated",
+                  "V_LL_rated"):
+            v = getattr(self, f)
+            if v is not None and v <= 0:
+                raise ValueError(f"[induction] {f} must be > 0, got {v}")
+        if self.n_bars is not None and self.n_bars < 2:
+            raise ValueError(
+                f"[induction] n_bars must be >= 2, got {self.n_bars}")
+        if self.s_rated is not None and not (0 < self.s_rated < 1):
+            raise ValueError(
+                f"[induction] s_rated must be in (0, 1), got {self.s_rated}")
+        if (self.design_letter is not None
+                and self.design_letter not in ("A", "B", "C", "D")):
+            raise ValueError(
+                f"[induction] design_letter must be one of A/B/C/D, "
+                f"got {self.design_letter!r}")
+        for name in ("R_2_vs_f", "L_sigma_s_vs_f", "L_sigma_r_vs_f",
+                     "L_m_vs_i"):
+            _check_xy_table(f"[induction] {name}", getattr(self, name))
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {}
+        for f in dataclasses.fields(self):
+            v = getattr(self, f.name)
+            if v is None:
+                continue
+            if isinstance(v, tuple):
+                d[f.name] = [list(row) for row in v]
+            else:
+                d[f.name] = v
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> InductionParams:
+        kwargs: dict[str, Any] = {}
+        for f in dataclasses.fields(cls):
+            if f.name not in d:
+                continue
+            v = d[f.name]
+            if f.name.endswith(("_vs_f", "_vs_i")) and v is not None:
+                v = tuple((float(x), float(y)) for x, y in v)
+            kwargs[f.name] = v
+        return cls(**kwargs)
+
+
 @dataclass(frozen=True)
 class Motor:
     """A PMSM: Geometry plus electrical/winding/material parameters.
@@ -65,10 +217,23 @@ class Motor:
       L_stk        — stack axial length (m)
       I_rated      — rated continuous stator current (A, peak)
       coils_series — coils in series per phase (N_eff = N × coils_series)
+      k_end        — 3D axial end-effect factor on the winding flux
+                     linkage (dimensionless, (0, ~1.05]; > 1 is real
+                     under magnet overhang). A computed-and-committed
+                     value from the offline wedge solve
+                     (scripts/compute_k_end.py) with a provenance
+                     record — NOT the uncalibrated analytical
+                     end_effect_factor. None = no correction applied.
       alpha_p      — magnet pole-arc / pole-pitch ratio ((0, 1])
       mu_r_fe      — relative permeability of iron (dimensionless)
       mu_r_pm      — magnet recoil permeability (dimensionless)
       drive        — DriveParams operating point
+      induction    — InductionParams for a squirrel-cage induction
+                     machine (None = synchronous machine). Mutually
+                     exclusive with the d-q synchronous fields psi_f,
+                     B_rem, L_d, L_q — `motor.induction is not None` is
+                     THE topology discriminator, and both model families
+                     reject the other topology loudly.
 
     geometry is optional (None) for datasheet/circuit-only motors with no
     teardown: the field/FEM factories raise on missing geometry, while the
@@ -114,7 +279,7 @@ class Motor:
     """
 
     name: str
-    geometry: Geometry | None
+    geometry: Geometry | AxialFluxGeometry | None
     n_p: int
 
     R_s: float | None = None
@@ -128,6 +293,7 @@ class Motor:
     L_stk: float | None = None
     I_rated: float | None = None
     coils_series: int | None = None
+    k_end: float | None = None
 
     winding_temp_limit: float | None = None
     ambient_temp: float | None = None
@@ -149,24 +315,45 @@ class Motor:
 
     alpha_p: float = 1.0
 
+    magnetization: str = "radial"
+    halbach_segments: int | None = None
+    halbach_angles_deg: tuple[float, ...] | None = None
+
     mu_r_fe: float = 1000.0
     mu_r_pm: float = 1.05
 
     drive: DriveParams = dataclasses.field(default_factory=DriveParams)
 
+    induction: InductionParams | None = None
+
     def __post_init__(self) -> None:
         if self.n_p < 2:
             raise ValueError(f"n_p must be >= 2, got {self.n_p}")
+        if self.induction is not None:
+            pm_set = [f for f in ("psi_f", "B_rem", "L_d", "L_q")
+                      if getattr(self, f) is not None]
+            if pm_set:
+                raise ValueError(
+                    f"[induction] is set together with the synchronous d-q "
+                    f"field(s) {', '.join(pm_set)} — a squirrel-cage "
+                    f"induction machine has no PM flux linkage or d-q "
+                    f"inductances. Remove one side."
+                )
         if self.R_s is not None and self.R_s < 0:
             raise ValueError(f"R_s must be >= 0, got {self.R_s}")
         if self.L_d is not None and self.L_d <= 0:
             raise ValueError(f"L_d must be > 0, got {self.L_d}")
         if self.L_q is not None and self.L_q <= 0:
             raise ValueError(f"L_q must be > 0, got {self.L_q}")
-        if self.psi_f is not None and self.psi_f <= 0:
-            raise ValueError(f"psi_f must be > 0, got {self.psi_f}")
+        if self.psi_f is not None and self.psi_f < 0:
+            raise ValueError(f"psi_f must be >= 0, got {self.psi_f}")
         if self.B_rem is not None and self.B_rem <= 0:
             raise ValueError(f"B_rem must be > 0, got {self.B_rem}")
+        if self.psi_f == 0.0 and self.B_rem is not None:
+            raise ValueError(
+                f"psi_f = 0 (reluctance machine, no magnets) contradicts "
+                f"B_rem={self.B_rem} — remove B_rem or set psi_f > 0"
+            )
         if self.J is not None and self.J <= 0:
             raise ValueError(f"J must be > 0, got {self.J}")
         if self.N is not None and self.N <= 0:
@@ -179,6 +366,11 @@ class Motor:
             raise ValueError(f"I_rated must be > 0, got {self.I_rated}")
         if self.coils_series is not None and self.coils_series <= 0:
             raise ValueError(f"coils_series must be > 0, got {self.coils_series}")
+        if self.k_end is not None and not (0 < self.k_end <= 1.2):
+            raise ValueError(
+                f"k_end must be in (0, 1.2], got {self.k_end} — computed "
+                f"end-effect factors land in (0, ~1.05] (fem_wedge)"
+            )
         if self.r_th is not None and self.r_th <= 0:
             raise ValueError(f"r_th must be > 0, got {self.r_th}")
         if self.thermal_time_constant is not None and self.thermal_time_constant <= 0:
@@ -226,6 +418,61 @@ class Motor:
             raise ValueError(f"B_core must be > 0, got {self.B_core}")
         if not (0 < self.alpha_p <= 1):
             raise ValueError(f"alpha_p must be in (0, 1], got {self.alpha_p}")
+        if (
+            self.geometry is not None
+            and hasattr(self.geometry, "magnet_mount")
+            and self.geometry.magnet_mount == "inset"
+            and self.alpha_p >= 1.0
+        ):
+            raise ValueError(
+                "magnet_mount='inset' requires alpha_p < 1: the interpole "
+                f"iron IS the inset feature (got alpha_p={self.alpha_p})"
+            )
+        if self.magnetization not in ("radial", "halbach"):
+            raise ValueError(
+                f"magnetization must be 'radial' or 'halbach', "
+                f"got {self.magnetization!r}"
+            )
+        if self.magnetization == "halbach":
+            if (
+                self.halbach_segments is None
+                or not isinstance(self.halbach_segments, int)
+                or isinstance(self.halbach_segments, bool)
+                or self.halbach_segments < 1
+            ):
+                raise ValueError(
+                    f"halbach_segments must be >= 1 when magnetization='halbach', "
+                    f"got {self.halbach_segments}"
+                )
+            if self.alpha_p != 1.0:
+                raise ValueError(
+                    f"Halbach magnetization requires alpha_p=1.0 (full-pitch "
+                    f"magnet ring); partial-pitch Halbach arrays are not yet "
+                    f"supported. Got alpha_p={self.alpha_p}"
+                )
+            if self.halbach_angles_deg is not None:
+                import math
+                if len(self.halbach_angles_deg) != self.halbach_segments:
+                    raise ValueError(
+                        f"halbach_angles_deg length ({len(self.halbach_angles_deg)}) "
+                        f"must equal halbach_segments ({self.halbach_segments})"
+                    )
+                if not all(
+                    isinstance(a, (int, float)) and math.isfinite(a)
+                    for a in self.halbach_angles_deg
+                ):
+                    raise ValueError(
+                        "halbach_angles_deg values must be finite numbers"
+                    )
+        else:
+            if self.halbach_segments is not None:
+                raise ValueError(
+                    "halbach_segments must be None when magnetization='radial'"
+                )
+            if self.halbach_angles_deg is not None:
+                raise ValueError(
+                    "halbach_angles_deg must be None when magnetization='radial'"
+                )
         if self.mu_r_fe <= 0:
             raise ValueError(f"mu_r_fe must be > 0, got {self.mu_r_fe}")
         if self.mu_r_pm <= 0:
@@ -237,7 +484,7 @@ class Motor:
         parts = [geo_id, str(self.n_p)]
         for name in (
             "R_s", "L_d", "L_q", "psi_f", "B_rem", "J", "N", "k_w", "L_stk",
-            "I_rated", "coils_series",
+            "I_rated", "coils_series", "k_end",
             "winding_temp_limit", "ambient_temp", "r_th",
             "thermal_time_constant",
             "alpha_Br", "magnet_temp",
@@ -250,6 +497,22 @@ class Motor:
         parts.append(f"alpha_p={self.alpha_p}")
         parts.append(f"mu_r_fe={self.mu_r_fe}")
         parts.append(f"mu_r_pm={self.mu_r_pm}")
+        if self.magnetization != "radial":
+            parts.append(f"magnetization={self.magnetization}")
+            parts.append(f"halbach_segments={self.halbach_segments}")
+            if self.halbach_angles_deg is not None:
+                parts.append(f"halbach_angles_deg={self.halbach_angles_deg}")
+        if self.induction is not None:
+            # Append-only under the not-None rule: every synchronous
+            # motor's hash is byte-identical to before. R_2/L_m/leakages
+            # and their tables ARE machine properties (unlike [drive],
+            # which is an operating point and hashes via compute_run_id);
+            # slip and supply overrides go in RunConfig.
+            import json
+            parts.append(
+                "induction="
+                + json.dumps(self.induction.to_dict(), sort_keys=True)
+            )
         key = "|".join(parts)
         return hashlib.md5(key.encode()).hexdigest()[:12]
 
@@ -265,11 +528,18 @@ class Motor:
         }
         if drive:
             d["drive"] = drive
+        if self.induction is not None:
+            d["induction"] = self.induction.to_dict()
         if self.geometry is not None:
             d["geometry"] = dataclasses.asdict(self.geometry)
+        if self.magnetization != "radial":
+            d["magnetization"] = self.magnetization
+            d["halbach_segments"] = self.halbach_segments
+            if self.halbach_angles_deg is not None:
+                d["halbach_angles_deg"] = list(self.halbach_angles_deg)
         for name in (
             "R_s", "L_d", "L_q", "psi_f", "B_rem", "J", "N", "k_w", "L_stk",
-            "I_rated", "coils_series",
+            "I_rated", "coils_series", "k_end",
             "winding_temp_limit", "ambient_temp", "r_th", "insulation_class",
             "thermal_time_constant",
             "alpha_Br", "magnet_temp",
@@ -284,21 +554,37 @@ class Motor:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Motor:
         geo_d = d.get("geometry")
-        geo = Geometry(**geo_d) if geo_d else None
+        geo: Geometry | AxialFluxGeometry | None = None
+        if geo_d:
+            if "variant" in geo_d:
+                geo = AxialFluxGeometry(**geo_d)
+            else:
+                geo = Geometry(**geo_d)
         drive_d = d.get("drive", {})
         drive = DriveParams(**drive_d) if drive_d else DriveParams()
+        induction_d = d.get("induction")
+        induction = (
+            InductionParams.from_dict(induction_d) if induction_d else None
+        )
+        angles_raw = d.get("halbach_angles_deg")
         kwargs: dict[str, Any] = {
             "name": d["name"],
             "geometry": geo,
             "n_p": d["n_p"],
             "alpha_p": d.get("alpha_p", 1.0),
+            "magnetization": d.get("magnetization", "radial"),
+            "halbach_segments": d.get("halbach_segments"),
+            "halbach_angles_deg": (
+                tuple(angles_raw) if angles_raw is not None else None
+            ),
             "mu_r_fe": d.get("mu_r_fe", 1000.0),
             "mu_r_pm": d.get("mu_r_pm", 1.05),
             "drive": drive,
+            "induction": induction,
         }
         for name in (
             "R_s", "L_d", "L_q", "psi_f", "B_rem", "J", "N", "k_w", "L_stk",
-            "I_rated", "coils_series",
+            "I_rated", "coils_series", "k_end",
             "winding_temp_limit", "ambient_temp", "r_th", "insulation_class",
             "thermal_time_constant",
             "alpha_Br", "magnet_temp",

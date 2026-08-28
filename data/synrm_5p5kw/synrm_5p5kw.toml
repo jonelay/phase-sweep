@@ -1,0 +1,68 @@
+# Jilin University 5.5 kW SynRM — pure synchronous reluctance, no magnets
+# Source: I-f control paper, PMC11679518 (2024), Jilin University.
+#   Table 1: R_s, J, n_p, rated voltage/current/power.
+#   Table 2: L_d/L_q vs current (saturation-dependent).
+#
+# This is a PURE SYNCHRONOUS RELUCTANCE MOTOR — no permanent magnets,
+# psi_f = 0 by definition. Torque arises entirely from saliency:
+#   T = (3/2) * n_p * (L_d - L_q) * i_d * i_q
+# MTPA angle for a SynRM is 45 electrical degrees from the q-axis.
+#
+# psi_f = 0 is set explicitly in [circuit]: the circuit-model chain
+# (rated_torque, stall_torque, torque_speed, thermal_duty, drive_sim)
+# accepts psi_f = 0 and takes the reluctance-only MTPA path
+# (gamma = -45 deg from the q-axis for L_d > L_q).
+#
+# INDUCTANCE NOTE: L_d and L_q are strongly current-dependent (saturation).
+# Table 2 ranges: L_d 28.83-44.01 mH, L_q 7.55-20.35 mH over the test
+# current range. Values here are at rated current (worst-case saturation).
+# The constant-parameter model uses these saturated values.
+
+[motor]
+name = "Jilin SynRM 5.5 kW"
+type = "SynRM (pure synchronous reluctance, no magnets)"
+
+[circuit]
+n_p = 2                # 4 poles (Table 1)
+R_s = 0.25             # Ohm per-phase (Table 1)
+L_d = 0.02883          # H (28.83 mH at rated current, Table 2)
+L_q = 0.00755          # H (7.550 mH at rated current, Table 2)
+psi_f = 0.0            # Wb — pure SynRM, no PM flux linkage
+I_rated_rms = 12.5     # A rms (Table 1)
+J = 0.108              # kg.m2 (Table 1)
+
+[drive]
+U_DC = 537.40          # V, sqrt(2) * 380 V (rectified rated voltage)
+MAX_I_S = 17.678       # A peak, sqrt(2) * 12.5 A rms
+W_REF = 157.08         # rad/s, 2*pi*1500/60 (assumed rated 1500 rpm for 4-pole/50 Hz)
+
+[rated]
+power_kW = 5.5
+voltage_V = 380
+# speed_rpm not explicitly stated in Table 1; 1500 rpm assumed (4-pole, 50 Hz)
+
+[provenance]
+source = "I-f Control Method for SynRMs, PMC11679518, 2024"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC11679518/"
+institution = "Jilin University"
+motor_model = "5.5 kW SynRM (unspecified manufacturer)"
+notes = """
+Pure synchronous reluctance motor with no permanent magnets. The paper's
+focus is I-f sensorless control; motor parameters are from Table 1 (R_s,
+J, rated specs) and Table 2 (L_d/L_q identification at multiple current
+levels via voltage injection).
+
+psi_f = 0.0 is explicit in [circuit]; the circuit models run through
+the reluctance-only MTPA path (45 deg from the q-axis). drive_sim
+requires the L_d > L_q SynRM convention used here (motulator's
+psi_f = 0 angle search assumes it).
+
+SATURATION: L_d varies 28.83–44.01 mH, L_q varies 7.55–20.35 mH
+across the test current range (Table 2). The constant-parameter values
+here are at rated current. Saliency ratio ranges from ~2.2 (low current)
+to ~3.8 (rated current).
+
+Eligible for: nameplate reference, rated_torque, stall_torque,
+  torque_speed, thermal_duty, drive_sim (L_d > L_q convention).
+Not eligible for: analytical, FEM (no geometry, no PM field).
+"""

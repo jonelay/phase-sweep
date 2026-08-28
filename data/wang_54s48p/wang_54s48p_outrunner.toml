@@ -1,0 +1,100 @@
+# Wang 54s/48p Outer-Rotor SPM — 13 kW in-wheel direct-drive motor
+# 54-slot / 48-pole (n_p = 24), fractional-slot concentrated winding
+#
+# Source: Wang, Q., "Performance Evaluation of Outer Rotor Permanent Magnet
+#   Direct Drive In-Wheel Motor Based on Air-Gap Field Modulation Effect,"
+#   World Electric Vehicle Journal, 16(5):247, April 2025.
+#   DOI: 10.3390/wevj16050247
+#   Southeast University, Nanjing 210096, China.
+#
+# PROTOTYPE MANUFACTURED AND TESTED (Section 6). LCR-measured electrical
+# parameters (HIOKI 3522-50 LCR Hitester) at 20 °C — Table 5. Measured
+# no-load back-EMF at multiple speeds (Fig 14), measured torque vs current
+# (Fig 15), measured torque-speed curve (Fig 16), measured efficiency map
+# (Fig 17, peak ~94.6%).
+#
+# This is the ONLY outrunner SPM in the validation set with both full
+# geometry AND LCR-measured R_s, L_d, L_q. The mild saliency (L_q/L_d =
+# 1.51) is slot-induced, not from magnet burial — the magnets are surface-
+# mounted on the inner bore of the rotating rotor.
+#
+# UNIT/BOOKKEEPING FLAGS:
+# - Back-EMF coefficient ke = 0.3225 V_line_rms / rpm (Table 5, measured).
+#   At 400 r/min: E_LL_rms = 0.3225 × 400 = 129 V (consistent with Fig 13).
+# - psi_f derived from measured back-EMF:
+#     E_phase_rms = 129 / sqrt(3) = 74.48 V
+#     omega_e = 24 × 2*pi*400/60 = 1005.3 rad/s
+#     psi_f = sqrt(2) × 74.48 / 1005.3 = 0.10476 Wb
+# - Peak current 83 A is the controller limit (phase peak), not thermal S1.
+# - L_d < L_q despite SPM topology — the 54s/48p concentrated winding
+#   creates slot-induced saliency. MTPA angle is slightly off q-axis.
+
+[motor]
+name = "Wang 54s/48p Outrunner SPM"
+type = "outer-rotor surface-magnet PMSM (54s/48p FSCW in-wheel)"
+topology = "outrunner"
+
+[geometry]
+# Table 1 — shared dimensions for all four slot-pole variants
+r_outer = 0.1575       # m, rotor yoke outer radius = 157.5 mm
+r_rotor = 0.1520       # m, PM outer (attached to yoke) = 148.0 + 4.0 mm
+r_magnet = 0.1480      # m, PM inner (airgap side) = 148.0 mm (rotor inner radius)
+r_stator = 0.1470      # m, stator OD at airgap = 147.0 mm
+r_inner = 0.1200       # m, stator inner radius = 120.0 mm
+L_stk = 0.048          # m, active stack length = 48 mm
+alpha_p = 1.0           # pole arc ratio not explicitly stated; assumed full
+
+[winding]
+n_slots = 54            # Table 1
+
+[materials]
+B_rem = 1.10            # T, N30UH NdFeB typical midpoint (1.08–1.13 T)
+mu_r_pm = 1.05
+# Steel: BAT1500 (non-oriented electrical steel)
+
+[circuit]
+n_p = 24               # 48 poles = 24 pole pairs
+R_s = 0.044            # Ohm per phase at 20 °C (Table 5, MEASURED via LCR)
+L_d = 0.000431         # H = 0.431 mH (Table 5, MEASURED via LCR)
+L_q = 0.000653         # H = 0.653 mH (Table 5, MEASURED via LCR)
+psi_f = 0.10476        # Wb, derived from measured back-EMF at 400 rpm
+                       # ke = 0.3225 V_LL_rms/rpm (Table 5, measured)
+
+[drive]
+MAX_I_S = 83.0         # A peak, controller current limit (Table 1)
+W_REF = 41.888         # rad/s = 2*pi*400/60 (no-load test speed, 400 rpm)
+
+[rated]
+torque_Nm = 396.5      # Nm, FEM average torque at peak current (Table 4)
+speed_rpm = 400        # no-load test speed (prototype Section 6.1)
+power_kW = 13.0        # prototype rated (Section 6, "a 13 kW prototype")
+
+[provenance]
+source = "Wang, Q. (2025), WEVJ 16(5):247, Tables 1, 2, 4, 5"
+doi = "10.3390/wevj16050247"
+institution = "Southeast University, Nanjing, China"
+motor_model = "54s/48p outer-rotor ORSPM in-wheel prototype"
+duty = "in-wheel EV direct-drive, max 1200 rpm"
+notes = """
+First outrunner SPM in the repo with BOTH full geometry AND LCR-measured
+circuit parameters. The 54s/48p configuration was selected from a four-way
+comparison (36s32p, 48s40p, 54s48p, 60s56p) as optimal for torque density
+and field-weakening capability.
+
+Measured data (prototype, Section 6):
+  ke = 0.3225 V_LL_rms/rpm (Table 5), confirmed at 400 rpm: 129 V_LL_rms
+  R_s = 0.044 Ohm at 20 C (Table 5, LCR)
+  L_d = 0.431 mH, L_q = 0.653 mH (Table 5, LCR)
+  FEM vs measured error < 5% on all parameters
+  Torque linear to ~60 A, peak ~397 Nm (Fig 15/16)
+  Efficiency peak ~94.6% at 300-400 rpm / 100-200 Nm (Fig 17)
+
+FEM comparison (Table 2 vs Table 5):
+  L_d: FEM 0.43 mH vs measured 0.431 mH (+0.2%)
+  L_q: FEM 0.65 mH vs measured 0.653 mH (+0.5%)
+  Back-EMF coefficient: FEM 0.3275 vs measured 0.3225 (+1.5%)
+  R_s: FEM 0.046 Ohm vs measured 0.044 Ohm (+4.5%)
+
+Eligible for: rated_torque, stall_torque, torque_speed (full d-q model),
+  analytical, FEM (full geometry).
+"""

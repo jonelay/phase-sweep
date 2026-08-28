@@ -1,5 +1,5 @@
 # ABB BSM50N-233 — brushless AC servo motor (surface PM, 4-pole, WYE)
-# Second multi-voltage torque-speed envelope anchor (REQ-0814): the brochure
+# Second multi-voltage torque-speed envelope anchor: the brochure
 # prints the SAME winding's rated speed at TWO voltages as table numbers —
 # "Rated speed @ 300 volts: 7500 rpm" and "Rated speed @ 160 volts:
 # 4000 rpm" — and 7500/4000 = 1.875 = 300/160 EXACTLY: the rated speed is
@@ -67,7 +67,7 @@ source = "ABB AC Servo Motors brochure 9AKK106417 (Dec 2015), BSM N-series, colu
 url = "https://library.e.abb.com/public/d7e5741298fe4760a818106caec8a45a/9AKK106417%20E%20Servo%20Motors_1215_WEB.pdf"
 motor_model = "ABB BSM50N-233 (BSM N-series, low inertia)"
 duty = "S1 continuous at stall torque/current, 155 C max winding temperature, 25 C ambient curves (40 C ambient: derate 6%)"
-# Multi-voltage rated speeds (REQ-0814 anchor class; the key evidence):
+# Multi-voltage rated speeds (the key evidence):
 #   V [V] | rated speed [rpm]
 #    160  |      4000
 #    300  |      7500        (overview table prints the same figure @ 320 Vdc)

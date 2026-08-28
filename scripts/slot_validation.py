@@ -25,11 +25,9 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Wedge
 
 from phasesweep.machines.configs import load_motor
-from phasesweep.solvers.fem_field import (
-    geometry_to_step,
-    rasterise_cross_section,
-    solve_field_fem,
-)
+from phasesweep.solvers.fem_field import solve_field_fem
+from phasesweep.solvers.fem_mesh import geometry_to_step
+from phasesweep.solvers.fem_sampling import rasterise_cross_section
 from phasesweep.solvers.harmonics import compute_thd, harmonics_1sided
 
 ROOT = Path(__file__).resolve().parent.parent

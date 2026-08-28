@@ -1,5 +1,5 @@
 # Bosch Rexroth MS2N04-D0BHN — synchronous servomotor (10-pole)
-# Sixth voltage-corner envelope anchor (REQ-0814), and the only one whose
+# Sixth voltage-corner envelope anchor, and the only one whose
 # manual STATES the corner mechanism in prose rather than leaving it to be
 # inferred from multi-voltage scaling: section 6.3 "Rated speed is
 # determined by the DC bus voltage UZK1. The voltage limit or the point of

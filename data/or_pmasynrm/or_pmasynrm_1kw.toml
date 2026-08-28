@@ -1,0 +1,87 @@
+# Bozkurt PMASynRM — 1 kW outer-rotor PM-assisted synchronous reluctance
+# 48 slots / 8 poles, 3-barrier TLA rotor, arc-shaped N35H NdFeB magnets
+#
+# Sources:
+#   [1] Bozkurt, Oner, Baba, "Manufacturing and Experimental Validation
+#       of an Outer-Rotor Permanent Magnet-Assisted Synchronous Reluctance
+#       Motor for In-Wheel Electric Vehicle Drive," Machines 2026, 14, 729.
+#       DOI: 10.3390/machines14070729
+#   [2] Bozkurt, Baba, Oner, "Design of Outer-Rotor Permanent-Magnet-
+#       Assisted Synchronous Reluctance Motor for Electric Vehicles,"
+#       Energies 2021, 14, 3739. DOI: 10.3390/en14133739
+#
+# Topology: outer-rotor PMASynRM with 3-barrier transversally laminated
+# anisotropic (TLA) rotor. Arc-shaped NdFeB magnets embedded in flux
+# barriers — NOT surface-mounted. Reluctance torque + PM torque.
+# Distributed double-layer winding. Designed for in-wheel EV application.
+#
+# WHAT'S PUBLISHED:
+#   - Outer dimensions: rotor OD 265 mm, stator OD 193 mm, stack 80 mm
+#   - Airgap: 1 mm
+#   - Slot/pole: 48s/8p (n_p = 4)
+#   - Measured performance at 4 load points (Table 2, [1]):
+#       No-load, 13 Nm (nominal), 20 Nm, 26 Nm — all at 750 rpm
+#   - FEM-predicted losses: core 7.4 W, copper 76.9 W, other 12 W
+#   - Efficiency: 90.55% measured at nominal 13 Nm
+#
+# WHAT'S NOT PUBLISHED:
+#   - Stator bore diameter, rotor inner diameter
+#   - Winding turns, coils per phase, winding factor
+#   - R_s, L_d, L_q, psi_f (NO circuit parameters in either paper)
+#   - Magnet arc angle, barrier thickness, bridge thickness (parametric
+#     bounds given in [2] Table 2 but final optimized values not tabulated)
+#   - Back-EMF at a known speed
+#
+# Without L_d/L_q/psi_f, this motor cannot run any d-q solver. It exists
+# as a nameplate + measured-performance reference for the PMaSynRM topology.
+
+[motor]
+name = "Bozkurt PMASynRM 1 kW"
+type = "outer-rotor PMASynRM (3-barrier TLA, N35H NdFeB, in-wheel EV)"
+topology = "outrunner"
+
+[circuit]
+n_p = 4                # 8 poles (Table 1, [2])
+# R_s: NOT published
+# L_d, L_q: NOT published (parametric FEM only, no values tabulated)
+# psi_f: NOT published
+# I_rated: ~10.95 A rms at 750 rpm nominal (Table 4, [2])
+
+[materials]
+# N35H NdFeB: B_rem typically 1.17-1.22 T at 20 C
+# B_rem not explicitly stated in either paper
+B_rem = 1.20           # T, typical N35H value (not measured)
+mu_r_pm = 1.05
+
+[rated]
+speed_rpm = 750
+torque_Nm = 12.73      # design target (Table 1, [2])
+power_kW = 1.0
+frequency_Hz = 50
+
+[provenance]
+source = "Bozkurt, Oner, Baba (2026), Machines 14(7):729 + Bozkurt, Baba, Oner (2021), Energies 14(13):3739"
+doi = "10.3390/machines14070729"
+motor_model = "Pamukkale University outer-rotor PMASynRM prototype"
+duty = "in-wheel EV direct-drive, 750 rpm nominal"
+notes = """
+First experimentally validated outer-rotor PMASynRM in the repo.
+48 slots / 8 poles, 3-barrier TLA rotor with arc-shaped N35H NdFeB.
+M470-50A electrical steel. Distributed double-layer winding.
+
+Measured performance at 750 rpm (Table 2, [1]):
+  13 Nm (nominal): P_out=1096 W, P_in=1210 W, eta=90.55%, I~10.6 A
+  20 Nm (overload): P_out=1613 W, P_in=1815 W, eta=88.89%
+  26 Nm (overload): P_out=1995 W, P_in=2275 W, eta=87.68%
+
+FEM loss breakdown at nominal ([2]):
+  Core loss: 7.42 W, Copper loss: 76.9 W, Other: 12 W
+
+Design rotor parameter bounds (Table 2, [2]):
+  alpha: 16-20 deg, B0: 3-6 mm, Rb: 3-7 mm, Y0: 2.5-5 mm, H: 1.5-3 mm
+Final optimized values NOT tabulated — only the ranges.
+
+Eligible for: nameplate reference, efficiency benchmark, topology validation.
+Not eligible for: rated_torque, stall_torque, torque_speed, drive_sim,
+  analytical, FEM (no R_s, L_d, L_q, psi_f, no stator bore, no winding).
+"""

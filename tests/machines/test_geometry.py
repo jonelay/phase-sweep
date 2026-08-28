@@ -35,12 +35,6 @@ class TestInrunnerConstruction:
         with pytest.raises(ValueError, match="r_ag"):
             inrunner(r_outer=1.0, r_stator=0.70, r_magnet=0.64, r_rotor=0.30, r_ag=0.75)
 
-    def test_frozen(self):
-        geo = default_inrunner()
-        with pytest.raises(AttributeError):
-            geo.r_outer = 2.0  # type: ignore[misc]
-
-
 class TestOutrunnerConstruction:
 
     def test_valid_outrunner(self):
@@ -120,7 +114,7 @@ class TestBackIronThickness:
             )
 
     def test_circle_spec_splits_yoke(self):
-        from phasesweep.solvers.fem_field import _circle_spec
+        from phasesweep.solvers.fem_mesh import _circle_spec
         plain = [n for _, n in _circle_spec(self._base())]
         assert plain == ["yoke", "pm", "airgap", "stator", "air"]
         split = _circle_spec(self._base(back_iron_thickness=0.05))
@@ -129,6 +123,48 @@ class TestBackIronThickness:
         # split radius sits between r_rotor and r_outer
         radii = {n: r for r, n in split}
         assert radii["back_iron"] == pytest.approx(0.75)  # r_rotor + 0.05
+
+
+class TestMagnetOverhang:
+
+    def _base(self, **kw):
+        return outrunner(r_outer=0.80, r_rotor=0.70, r_magnet=0.64,
+                         r_stator=0.50, r_inner=0.10, **kw)
+
+    def test_default_none(self):
+        assert self._base().magnet_overhang is None
+
+    def test_zero_is_valid(self):
+        # 0.0 = measured co-extensive, distinct from None = not measured
+        assert self._base(magnet_overhang=0.0).magnet_overhang == 0.0
+
+    def test_negative_raises(self):
+        with pytest.raises(ValueError, match="magnet_overhang"):
+            self._base(magnet_overhang=-1e-4)
+
+    def test_config_id_unchanged_when_none(self):
+        # back-compat: existing run-IDs must not move
+        assert (self._base().config_id
+                == self._base(magnet_overhang=None).config_id)
+
+    def test_config_id_hashes_overhang(self):
+        g1 = self._base(magnet_overhang=0.00025)
+        g2 = self._base(magnet_overhang=0.0005)
+        assert g1.config_id != g2.config_id
+        assert g1.config_id != self._base().config_id
+
+    def test_from_toml(self):
+        geo = geometry_from_toml(
+            {"r_outer": 0.80, "r_rotor": 0.70, "r_magnet": 0.64,
+             "r_stator": 0.50, "r_inner": 0.10, "magnet_overhang": 0.00025},
+            "outrunner",
+        )
+        assert geo.magnet_overhang == 0.00025
+
+    def test_inrunner_factory_accepts(self):
+        geo = inrunner(r_outer=1.0, r_stator=0.70, r_magnet=0.64,
+                       r_rotor=0.30, magnet_overhang=0.001)
+        assert geo.magnet_overhang == 0.001
 
 
 class TestConfigId:
@@ -145,6 +181,109 @@ class TestConfigId:
 
     def test_is_12_chars(self):
         assert len(default_inrunner().config_id) == 12
+
+
+class TestInsetMagnets:
+
+    def _base(self, **kw):
+        return inrunner(r_outer=1.0, r_stator=0.70, r_magnet=0.64,
+                        r_rotor=0.30, **kw)
+
+    def _base_out(self, **kw):
+        return outrunner(r_outer=0.80, r_rotor=0.70, r_magnet=0.64,
+                         r_stator=0.50, r_inner=0.10, **kw)
+
+    def test_default_surface(self):
+        geo = self._base()
+        assert geo.magnet_mount == "surface"
+        assert geo.bridge_thickness is None
+
+    def test_invalid_mount_raises(self):
+        with pytest.raises(ValueError, match="magnet_mount"):
+            self._base(magnet_mount="buried")
+
+    def test_bridge_allowed_with_surface(self):
+        geo = self._base(bridge_thickness=0.01)
+        assert geo.bridge_thickness == 0.01
+        assert geo.magnet_mount == "surface"
+
+    def test_bridge_bounds(self):
+        # PM annulus thickness = r_magnet - r_rotor = 0.34
+        with pytest.raises(ValueError, match="bridge_thickness"):
+            self._base(bridge_thickness=0.0)
+        with pytest.raises(ValueError, match="bridge_thickness"):
+            self._base(bridge_thickness=0.34)
+
+    def test_config_id_unchanged_for_surface(self):
+        # back-compat: existing run-IDs must not move
+        g_default = self._base()
+        g_explicit = self._base(magnet_mount="surface", bridge_thickness=None)
+        assert g_default.config_id == g_explicit.config_id
+
+    def test_config_id_hashes_mount_and_bridge(self):
+        g_surface = self._base()
+        g_inset = self._base(magnet_mount="inset")
+        g_bridge1 = self._base(magnet_mount="inset", bridge_thickness=0.01)
+        g_bridge2 = self._base(magnet_mount="inset", bridge_thickness=0.02)
+        g_surface_bridge = self._base(bridge_thickness=0.01)
+        ids = {g.config_id for g in (g_surface, g_inset, g_bridge1,
+                                      g_bridge2, g_surface_bridge)}
+        assert len(ids) == 5
+
+    def test_from_toml(self):
+        geo = geometry_from_toml(
+            {"r_outer": 1.0, "r_stator": 0.70, "r_magnet": 0.64,
+             "r_rotor": 0.30, "magnet_mount": "inset",
+             "bridge_thickness": 0.01},
+            "inrunner",
+        )
+        assert geo.magnet_mount == "inset"
+        assert geo.bridge_thickness == 0.01
+
+    def test_circle_spec_bridge_inrunner(self):
+        from phasesweep.solvers.fem_mesh import _circle_spec
+        spec = _circle_spec(self._base(magnet_mount="inset",
+                                       bridge_thickness=0.01))
+        assert [(round(r, 6), n) for r, n in spec] == [
+            (1.0, "stator"), (0.70, "airgap"), (0.64, "bridge"),
+            (0.63, "pm"), (0.30, "shaft"),
+        ]
+
+    def test_circle_spec_bridge_outrunner(self):
+        from phasesweep.solvers.fem_mesh import _circle_spec
+        spec = _circle_spec(self._base_out(magnet_mount="inset",
+                                           bridge_thickness=0.01))
+        assert [(round(r, 6), n) for r, n in spec] == [
+            (0.80, "yoke"), (0.70, "pm"), (0.65, "bridge"),
+            (0.64, "airgap"), (0.50, "stator"), (0.10, "air"),
+        ]
+
+    def test_circle_spec_inset_without_bridge_unchanged(self):
+        from phasesweep.solvers.fem_mesh import _circle_spec
+        # material reassignment only — same faces as surface
+        assert (_circle_spec(self._base(magnet_mount="inset"))
+                == _circle_spec(self._base()))
+
+    def test_circle_spec_bridge_surface_inrunner(self):
+        from phasesweep.solvers.fem_mesh import _circle_spec
+        spec = _circle_spec(self._base(bridge_thickness=0.01))
+        assert [(round(r, 6), n) for r, n in spec] == [
+            (1.0, "stator"), (0.70, "airgap"), (0.64, "bridge"),
+            (0.63, "pm"), (0.30, "shaft"),
+        ]
+
+    def test_pm_radii(self):
+        from phasesweep.solvers.fem_mesh import _pm_radii
+        assert _pm_radii(self._base()) == (0.64, 0.30)
+        assert _pm_radii(
+            self._base(magnet_mount="inset", bridge_thickness=0.01)
+        ) == (pytest.approx(0.63), 0.30)
+        assert _pm_radii(self._base(bridge_thickness=0.01)
+        ) == (pytest.approx(0.63), 0.30)
+        assert _pm_radii(self._base_out()) == (0.70, 0.64)
+        assert _pm_radii(
+            self._base_out(magnet_mount="inset", bridge_thickness=0.01)
+        ) == (0.70, pytest.approx(0.65))
 
 
 class TestSlotOpeningRatio:

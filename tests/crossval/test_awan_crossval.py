@@ -50,7 +50,12 @@ class TestAwanRatedTorque:
         )
 
     def test_mtpa_physically_reasonable(self):
-        """2.2 kW motor: tau in (14, 30) Nm range."""
+        """2.2 kW motor: tau in (14, 30) Nm range, plus a tight regression
+        pin — the loose bound alone would pass a 2x model error. The pin
+        is the current model value (rated_torque v4), not a published
+        number; re-freeze deliberately on any MTPA physics change."""
         gamma = mtpa_gamma(PSI_F, L_D, L_Q, I_RATED)
         tau = mtpa_torque(N_P, PSI_F, L_D, L_Q, I_RATED, gamma)
         assert 14.0 < tau < 30.0, f"tau={tau:.2f} outside expected range"
+        assert tau == pytest.approx(15.1161, rel=1e-3)
+        assert gamma == pytest.approx(0.15959, rel=1e-3)

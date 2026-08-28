@@ -176,10 +176,6 @@ class TestMeasuredRegistry:
 # CREATOR fixture
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skipif(
-    not (REPO_ROOT / "data/creator_case_pmsm/backemf_measured.json").exists(),
-    reason="CREATOR-derived CSVs not found — run python scripts/fetch_creator_dataset.py",
-)
 class TestCreatorFixture:
 
     def test_fixture_loads(self):

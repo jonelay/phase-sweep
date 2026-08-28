@@ -125,9 +125,12 @@ class CalibrationResult:
 def _param_value(motor: Motor, param: str) -> float | None:
     """Current value of a fittable param (the quantity the delta scales)."""
     if param == "OD":
-        return motor.geometry.r_outer if motor.geometry is not None else None
+        if motor.geometry is None or not hasattr(motor.geometry, "r_outer"):
+            return None
+        return motor.geometry.r_outer
     if param == "gap":
-        if motor.geometry is None:
+        if (motor.geometry is None or not hasattr(motor.geometry, "r_stator")
+                or not hasattr(motor.geometry, "r_magnet")):
             return None
         return abs(motor.geometry.r_stator - motor.geometry.r_magnet)
     val = getattr(motor, param)
@@ -189,9 +192,17 @@ def _guard_circular(
 # Residual evaluation
 # ---------------------------------------------------------------------------
 
-def _auto_models(measured: list[RunResult], quantities: tuple[str, ...]) -> tuple[str, ...]:
+def _auto_models(
+    motor: Motor, measured: list[RunResult], quantities: tuple[str, ...],
+) -> tuple[str, ...]:
     """Fast computed models producing the computed-side keys the selected
-    quantities resolve to (key_mapping / curve_compare / direct)."""
+    quantities resolve to (key_mapping / curve_compare / direct).
+
+    Models that do not validate for this motor are dropped — radial and
+    axial field solvers produce the same keys but each runs on only one
+    geometry family. Explicitly passed `models=` skip this filter and
+    fail loudly in calibrate() instead.
+    """
     needed: set[str] = set()
     for r in measured:
         metrics = r.metrics or {}
@@ -209,18 +220,28 @@ def _auto_models(measured: list[RunResult], quantities: tuple[str, ...]) -> tupl
             else:
                 needed.add(q)
     # thermal_duty needs a duty_profile the loop's RunConfig never carries.
-    models = tuple(sorted(
+    candidates = sorted(
         name for name, info in MODEL_REGISTRY.items()
         if info.source == "computed" and info.cost == "fast"
         and name != "thermal_duty"
         and needed & info.produces
-    ))
-    if not models:
+    )
+    models = []
+    for name in candidates:
+        validate = MODEL_REGISTRY[name].validate
+        if validate is not None:
+            try:
+                validate(motor)
+            except ValueError:
+                continue
+        models.append(name)
+    selected = tuple(models)
+    if not selected:
         raise ValueError(
             f"no fast computed model produces any of {sorted(needed)} — "
             f"the v1 inner loop excludes slow models (FEM verifies at the end)"
         )
-    return models
+    return selected
 
 
 def _run_models(
@@ -334,7 +355,9 @@ def calibrate(
                 f"bound for {name!r}: ({lo}, {hi}) — lower must be < upper"
             )
 
-    model_tuple = tuple(models) if models else _auto_models(measured, quantities)
+    model_tuple = (
+        tuple(models) if models else _auto_models(motor, measured, quantities)
+    )
     for name in model_tuple:
         info = MODEL_REGISTRY.get(name)
         if info is None or info.source != "computed" or info.fn is None:
@@ -554,9 +577,13 @@ def write_motor_toml(
         lines.append("")
 
     geo = motor.geometry
+    from phasesweep.machines.geometry import AxialFluxGeometry
+    topo = None
+    if geo is not None:
+        topo = geo.topology if hasattr(geo, "topology") else "axial"
     lines += _toml_section("motor", {
         "name": motor.name,
-        "topology": geo.topology if geo is not None else None,
+        "topology": topo,
     })
     lines += _toml_section("circuit", {
         "n_p": motor.n_p,
@@ -572,7 +599,7 @@ def write_motor_toml(
         "k_w": motor.k_w,
         "coils_series": motor.coils_series,
     })
-    if geo is not None:
+    if geo is not None and not isinstance(geo, AxialFluxGeometry):
         lines += _toml_section("geometry", {
             "r_outer": geo.r_outer,
             "r_stator": geo.r_stator,
@@ -585,8 +612,28 @@ def write_motor_toml(
             "slot_width_ratio": geo.slot_width_ratio,
             "slot_opening_width": geo.slot_opening_width,
             "back_iron_thickness": geo.back_iron_thickness,
+            "magnet_mount": geo.magnet_mount if geo.magnet_mount != "surface" else None,
+            "bridge_thickness": geo.bridge_thickness,
+            "magnet_overhang": geo.magnet_overhang,
             "alpha_p": motor.alpha_p,
             "L_stk": motor.L_stk,
+            "k_end": motor.k_end,
+        })
+    elif isinstance(geo, AxialFluxGeometry):
+        lines += _toml_section("geometry", {
+            "r_out": geo.r_out,
+            "r_in": geo.r_in,
+            "airgap": geo.airgap,
+            "magnet_thickness": geo.magnet_thickness,
+            "rotor_yoke": geo.rotor_yoke,
+            "stator_yoke": geo.stator_yoke,
+            "variant": geo.variant,
+            "n_slots": geo.n_slots,
+            "slot_depth": geo.slot_depth,
+            "slot_width_ratio": geo.slot_width_ratio,
+            "slot_opening_width": geo.slot_opening_width,
+            "alpha_p": motor.alpha_p,
+            "k_end": motor.k_end,
         })
     lines += _toml_section("materials", {
         "B_rem": motor.B_rem,

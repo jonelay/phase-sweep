@@ -794,7 +794,7 @@ wheels = [
 
 [[package]]
 name = "phasesweep"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
@@ -805,6 +805,7 @@ dependencies = [
 all = [
     { name = "fastapi" },
     { name = "matplotlib" },
+    { name = "mkl", marker = "sys_platform == 'linux'" },
     { name = "motulator" },
     { name = "ngsolve" },
     { name = "structlog" },
@@ -816,6 +817,7 @@ dev = [
     { name = "ruff" },
 ]
 fem = [
+    { name = "mkl", marker = "sys_platform == 'linux'" },
     { name = "ngsolve" },
 ]
 gpu = [
@@ -848,8 +850,9 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'server'" },
     { name = "httpx", marker = "extra == 'test'" },
     { name = "matplotlib", marker = "extra == 'viz'" },
+    { name = "mkl", marker = "sys_platform == 'linux' and extra == 'fem'" },
     { name = "mkl", marker = "extra == 'mkl'" },
-    { name = "motulator", marker = "extra == 'sim'", specifier = ">=0.7.3,<0.8" },
+    { name = "motulator", marker = "extra == 'sim'", specifier = "==0.7.3" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "ngsolve", marker = "extra == 'fem'" },
     { name = "numpy" },

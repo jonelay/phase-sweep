@@ -19,7 +19,8 @@ import numpy as np
 import pytest
 
 from phasesweep.machines.configs import load_motor
-from phasesweep.solver_params import derive_psi_f_smooth, prepare_drive_sim
+from phasesweep.simulation.params import prepare_drive_sim
+from phasesweep.solver_params import derive_psi_f_smooth
 from tests.conftest import CAPTURES_SKIP, REPO_ROOT, requires_sim, requires_viz
 
 MOTOR_TOML = REPO_ROOT / "motors/outrunner_14mm_steel.toml"
@@ -58,12 +59,13 @@ class TestOutrunner14mmSpeedSweep:
         """Model-predicted V_peak over-predicts by 20-40% at every speed.
 
         The raw 2D smooth-bore gap is +30% (square-wave convention,
-        k_w = 0.866 ideal 9s/12p): no end effects (k_end ≈ 0.84 for
-        this 7 mm stack), datasheet B_rem = 1.45 T (N52 nominal, grade
-        unmeasured), nominal alpha_p. This test pins the raw gap so
+        k_w = 0.866 ideal 9s/12p): no end effects (computed 3D k_end =
+        0.9185 for this 7 mm stack — deliberately NOT applied here),
+        datasheet B_rem = 1.45 T (N52 nominal, grade unmeasured),
+        nominal alpha_p. This test pins the raw gap so
         convention/regression drift is visible; the k_end-corrected
-        expectation is Tier-0 below. Will tighten after gaussmeter
-        measurement provides true B_rem.
+        expectation is the computed tier below. Will tighten after
+        gaussmeter measurement provides true B_rem.
         """
         psi_f = derive_psi_f_smooth(motor)
         assert psi_f is not None
@@ -82,14 +84,35 @@ class TestOutrunner14mmSpeedSweep:
     # bound were separate tests, both strictly implied by the [20%, 40%] band
     # above — three tests, one scalar, one real constraint. Dropped.
 
-    def test_ke_with_end_effect_correction(self, motor):
-        """Tier-0: k_end-corrected Ke lands within [3%, 18%] of measured.
+    def test_ke_with_computed_k_end(self, motor):
+        """Computed-k_end tier: 3D-corrected Ke residual is +14–25%.
+
+        Motor.k_end = 0.9185 (nonlinear 3D wedge at the measured 0.25 mm
+        overhang, data/outrunner_14mm_steel/k_end.record.json) brings the
+        raw smooth-bore +30% gap to ≈ +19%. The residual is still large
+        and is dominated by magnet grade (suspected below the claimed
+        N52) — the wired k_end takes ~8 points of Ke off the raw gap,
+        and the wedge value is verified against the 2D analytic limit,
+        not an independent 3D benchmark. Raw 2D stays canonical (test
+        above).
+        """
+        assert motor.k_end is not None  # wired from the TOML
+        psi_f = derive_psi_f_smooth(motor)
+        Ke_corr = psi_f * motor.k_end * motor.n_p
+        delta_pct = (Ke_corr - KE_MEASURED) / KE_MEASURED * 100
+        assert 14.0 < delta_pct < 25.0, (
+            f"computed-k_end-corrected Ke delta {delta_pct:+.1f}% outside "
+            f"[14%, 25%]"
+        )
+
+    def test_ke_with_heuristic_end_effect_correction(self, motor):
+        """Tier-0 (historical): heuristic-k_end Ke lands within [3%, 18%].
 
         Russell-Norsworthy k_end ≈ 0.841 for L_stk = 7 mm brings the raw
-        +30% gap (k_w = 0.866) to ≈ +9%. Informational tier — k_end
-        is uncalibrated (no 3D validation yet) and is NOT applied to
-        production psi_f; the residual absorbs magnet grade, effective
-        alpha_p, and the magnetization profile.
+        +30% gap (k_w = 0.866) to ≈ +9%. Informational tier — this
+        heuristic disagrees with the computed 3D wedge value (0.841 vs
+        0.9185) and is NOT applied to production psi_f; kept so drift in
+        end_effect_factor stays visible.
         """
         from phasesweep.solvers.analytical import end_effect_factor
         psi_f = derive_psi_f_smooth(motor)

@@ -1,8 +1,8 @@
 // Validation summary panel: agreement matrix of model
 // pairs x quantities from GET /api/validation/{motor}. Green <= tol,
-// yellow 1-2x tol, red > 2x tol (thresholds via the
+// yellow 1-2x tol, red > 2x tol (thresholds from the
 // server's ComparisonRow). Clicking a cell jumps the model comparison
-// panel to that quantity. The diagnosis line follows the standard
+// panel to that quantity. The diagnosis line is the standard
 // diagnostic pattern.
 
 let appRef = null;

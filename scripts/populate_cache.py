@@ -214,8 +214,7 @@ def _default_duty_profile(motor: Any) -> tuple[tuple[float, float], ...]:
     The rated_torque model must validate first, so I_rated and psi_f are
     guaranteed present.
     """
-    from phasesweep.models.rated_torque import magnet_torque_constant
-    from phasesweep.solver_params import prepare_rated_torque
+    from phasesweep.models.rated_torque import magnet_torque_constant, prepare_rated_torque
     p = prepare_rated_torque(motor)
     k_t = magnet_torque_constant(motor.n_p, p.psi_f)
     tau_rated = k_t * motor.I_rated

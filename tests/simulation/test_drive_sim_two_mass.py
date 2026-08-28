@@ -15,6 +15,7 @@ import numpy as np
 from phasesweep.machines.geometry import default_inrunner
 from phasesweep.machines.motor import DriveParams, Motor
 from phasesweep.registry import MODEL_REGISTRY
+from phasesweep.simulation.params import TwoMassLoad, prepare_drive_sim
 from phasesweep.simulation.sim import (
     SimPlan,
     build_sim,
@@ -23,7 +24,6 @@ from phasesweep.simulation.sim import (
     plan_sim,
     plan_two_mass_sim,
 )
-from phasesweep.solver_params import TwoMassLoad, prepare_drive_sim
 from phasesweep.sweep_types import RunConfig, compute_run_id
 
 MOTOR = Motor(
@@ -66,7 +66,7 @@ class TestRegistryEntry:
         assert "load_mech" in MODEL_REGISTRY["drive_sim_two_mass"].hash_fields
 
     def test_fn_callable(self):
-        assert MODEL_REGISTRY["drive_sim_two_mass"].fn is not None
+        assert callable(MODEL_REGISTRY["drive_sim_two_mass"].fn)
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +115,8 @@ class TestPlanTwoMassSim:
     def test_returns_sim_plan(self):
         plan = plan_two_mass_sim(PARAMS, SAARAKKALA_LOAD)
         assert isinstance(plan, SimPlan)
+        assert plan.T_s > 0
+        assert plan.t_stop > plan.load_time > 0
 
     def test_alpha_s_below_antiresonance(self):
         plan = plan_two_mass_sim(PARAMS, SAARAKKALA_LOAD)

@@ -17,13 +17,11 @@ treatment of both internal (inrunner) and external (outrunner) rotor
 topologies. Our `zhu_howe_Br()` implements the 2002 model: open-circuit,
 PM-only field with square-wave radial magnetization and infinite iron
 permeability at boundary surfaces. Solves the 2×2 interface-matching system
-numerically. FEM agrees within 1% on fundamental amplitude for the Zhu & Howe
-reference configurations and within 2% for the other tested configurations
-(test-enforced bounds).
+numerically. Current implementation-verification results belong in the
+validation report rather than this source bibliography.
 
 ### Zhu & Howe (1993) — original four-part series
 Four-part series, all in *IEEE Transactions on Magnetics*, 29(1), Jan. 1993.
-All paywalled on IEEE Xplore; no free PDFs found.
 
 - **Part I — Open-Circuit Field** (magnet source only)
   https://doi.org/10.1109/20.195557 — pp. 124–135
@@ -33,9 +31,46 @@ All paywalled on IEEE Xplore; no free PDFs found.
   https://doi.org/10.1109/20.195559 — pp. 143–151
 
 Part III (slotting) is the primary reference for the Carter factor
-correction. Eqs 15–17 define k_c using the
-effective airgap g' = g + h_m/μ_r and the modified stator radius R_se.
-Also the natural reference for the cogging-torque sweep.
+correction. Eqs 15–17 define k_c using the effective airgap
+g' = g + h_m/μ_r and the modified stator radius R_se. It is also the
+natural reference for the cogging-torque sweep.
+
+## Axial-Flux Field Analysis
+
+### Parviainen (2005) — **primary reference** (`analytical_axial`)
+**Parviainen, A. (2005).** "Design of Axial-Flux Permanent-Magnet
+Low-Speed Machines and Performance Comparison Between Radial-Flux and
+Axial-Flux Machines." D.Sc. thesis, Lappeenranta University of
+Technology, Acta Universitatis Lappeenrantaensis 208.
+ISBN 952-214-029-5. Open access:
+https://web.mit.edu/kirtley/binlustuff/literature/electric%20machine/designOfAxialFluxPMM.pdf
+
+Chapter 2 defines the quasi-3D approach (unroll the annulus at
+computation-plane radii into Cartesian linear machines, Eqs. 2.1–2.5),
+the layer-model air-gap field (Eq. 2.18), Carter applied to the
+physical gap (Eq. 2.11, g' = k_C·g — the magnet is carried explicitly
+by the layer model's coth term), the Qu PM-leakage adoption
+(Eqs. 2.13–2.17, k_σPM,add = 0.95 reconciling analytical with 3D FEA),
+and the back-EMF (Eq. 2.28). Chapter 3 documents the 5 kW / 300 rpm
+1R2S prototype used as the validation anchor
+(`data/parviainen_afpm/`). `analytical_axial` implements the
+single-plane (r_mean) case; `fem_axial` implements the multi-plane
+case with the planes solved by FEM rather than the layer expression.
+
+### Chung & Kim (2002) / Hanselman (2003) — Cartesian layer field
+Source form of thesis Eq. (2.18): per-harmonic air-gap flux density of
+a linear PM machine with iron boundaries on both sides — equivalent to
+the hyperbolic transfer
+B_n = b_src / (cosh(m·g') + μ_r·sinh(m·g')·coth(m·l_PM)), whose m → 0
+limit is the 1D magnetic circuit b_src·l_PM/(l_PM + μ_r·g').
+Implemented in `axial_layer_Bz_series`.
+
+### Qu & Lipo (2004) — PM leakage factors (`pm_leakage_factor`)
+**Qu, R., & Lipo, T. A. (2004).** "Analysis and Modeling of Air-Gap and
+Zigzag Leakage Fluxes in a Surface-Mounted Permanent-Magnet Machine."
+*IEEE Trans. Ind. Appl.*, 40(1), pp. 121–127.
+Closed-form magnet-to-rotor, magnet-to-magnet, and zigzag leakage
+factors; adopted for axial machines by Parviainen (2005) Eqs. 2.15–2.17.
 
 ---
 
@@ -67,7 +102,6 @@ the general slot harmonic order formula `Q ± n_p`.
 cogging torque in surface-mounted PM motors." *IEEE Transactions on Industry
 Applications*, 38(5), 1259–1265.
 https://doi.org/10.1109/TIA.2002.802989
-Paywalled on IEEE Xplore; no free PDF found.
 
 Reference for cogging torque reduction techniques (slot/pole combination,
 magnet shaping, skew). Focuses on SPM cogging rather than IPM saliency.
@@ -88,15 +122,11 @@ equation:
 P = k_h · f · B^α + k_e · f² · B²   [W/kg]
 ```
 
-**M19 29-gauge coefficients** (fitted from 60 Hz loss data, SI units):
-- `k_h ≈ 0.0275` [W·s/kg·T^α] — hysteresis coefficient
-- `k_e ≈ 0.00026` [W·s²/kg·T²] — eddy current coefficient
-- `α ≈ 1.7` — Steinmetz exponent
-
-Source for coefficient values: AK Steel M19 silicon steel datasheet (public
-domain). Confirm against the specific grade and lamination thickness before
-use in production. Coefficients are highly sensitive to lamination thickness
-(eddy current term scales as t²).
+The M19 test fixture fits coefficients from the cited loss data. The exact
+fixture values live with the iron-loss tests so this bibliography does not
+become a second configuration source. Confirm coefficients against the
+specific grade and lamination thickness before production use; the eddy term
+is especially thickness-sensitive.
 
 ### M19 B-H data
 **AK Steel Corporation.** "DI-MAX Non-Oriented Electrical Steel M-15 through M-47."
@@ -104,7 +134,7 @@ Product data sheet, 2020. Available from Cleveland-Cliffs (formerly AK Steel).
 PDF: https://e-magnetica.pl/database-em/01_Soft/Electrical_steels/AKSteel_2020/NO-DI-MAX-M-15_M-19_M-22_M-27_M-36_M-43_M-47_2020.pdf
 
 Tabulated B-H data for silicon steel at 60 Hz, 0–2.2 T range. Used for
-the polynomial ν(B²) fit in nonlinear FEM. Approximately 20 measurement points
+the polynomial ν(B²) fit in nonlinear FEM (Spec 07 §3). Approximately 20 measurement points
 available in the public datasheet. Multi-grade PDF — M-19 section starts
 alongside M-15, M-22, M-27, M-36, M-43, M-47.
 
@@ -135,24 +165,28 @@ dependence of the knee is steeper than that of B_rem.
 
 ## FEM Formulation
 
-### Picard iteration for nonlinear iron permeability
-Fixed-point (Picard) iteration for solving nonlinear magnetostatic problems
-where iron permeability depends on flux density. At each iteration:
+### Nonlinear iteration for iron permeability
+
+The v0.5 default is line-search-damped Newton with two relaxed-Picard
+startup steps and automatic Picard fallback. Newton stops at an algebraic
+relative residual of 1e-4. The fallback/fixed-point method updates
+reluctivity from local flux density as follows:
+
 1. Solve linear system with current ν(B) distribution
 2. Compute |B| per element from the solution
 3. Update ν from B-H curve lookup (iron elements only)
 4. Under-relax: ν_new = α·ν_BH + (1−α)·ν_old, with α = 0.2 (defaults.toml)
 
-Convergence criterion: max relative change in ν over iron elements < 1%.
-Typically converges in 5–10 iterations for moderate saturation.
+Picard uses a 1e-4 raw-step tolerance and adaptive relaxation. It remains
+selectable with `nonlinear_solver="picard"`.
 
 **Standard reference:**
 Silvester, P. P., & Ferrari, R. L. (1996). *Finite Elements for Electrical
 Engineers.* 3rd ed. Cambridge University Press. Chapter 7 (nonlinear problems).
 
-The B-H curve used is a generic soft magnetic steel composite (not
-grade-specific). See `_BH_B` / `_BH_H` in `solvers/fem_field.py`. For grade-specific
-data, see the M19 datasheet entry above (Iron Loss section).
+The implemented B-H curve is a generic soft-magnetic-steel composite rather
+than a grade-specific material model. For grade-specific data, see the M19
+datasheet entry above.
 
 ### NGSolve documentation
 **Schöberl, J. (2014–present).** NGSolve finite element library.
@@ -162,19 +196,28 @@ A-formulation (vector potential), 2D magnetostatic:
 ```
 −∇·(ν ∇A_z) = J_z + (∇×(ν M))_z
 ```
-Weak form used in `solve_field_fem()`. See `solvers/fem_field.py` module docstring
-for the specific source term derivation.
+This is the weak form used by the radial FEM solver; its module documentation
+records the source-term derivation.
+
+### ElmerFEM (cross-code verification)
+**CSC — IT Center for Science (1995–present).** Elmer finite element software.
+https://www.elmerfem.org — https://github.com/ElmerCSC/elmerfem
+
+Used only as an independent check on the NGSolve solvers — different
+mesher, basis, and nonlinear linearization (`MagnetoDynamics2D` /
+`MagnetoDynamics`). Pinned comparisons and harness docs:
+`scripts/elmer_radial/`, `scripts/elmer_axial/`; results are in
+`docs/validation-report.md`.
 
 ### Maxwell stress tensor torque
 **Coulomb, J. L., & Meunier, G. (1984).** "Finite element implementation of
 virtual work principle for magnetic or electric force and torque computation."
 *IEEE Transactions on Magnetics*, 20(5), 1894–1896.
 https://doi.org/10.1109/TMAG.1984.1063232
-Paywalled on IEEE Xplore; no free PDF confirmed.
 
 Canonical reference for Maxwell stress tensor torque computation in FEM via
 contour integral on a circular air-gap path — the formulation behind
-`maxwell_stress_torque`; the circuit models
+`maxwell_stress_torque` (Spec 07 §3.11); the circuit models
 (rated_torque.py) remain the primary torque path:
 ```
 τ = (L_stk · R_AG² / μ₀) · ∫₀²π B_r(θ) · B_θ(θ) dθ
@@ -225,7 +268,6 @@ TOML: `data/awan_ipm/awan_2p2kw_ipm.toml`. Tests: `tests/models/test_rated_torqu
 interior permanent magnet synchronous motors with high-performance current
 regulator." *IEEE Transactions on Industry Applications*, 30(4), 920–926.
 https://doi.org/10.1109/28.297908
-Paywalled on IEEE Xplore; no free PDF found.
 
 Original reference for the closed-form MTPA quadratic used in IPM drives.
 The unsaturated MTPA condition (dT/dγ = 0 at constant |I_s|) yields a

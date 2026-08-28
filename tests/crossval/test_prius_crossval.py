@@ -42,7 +42,9 @@ def stall_result(prius):
 class TestPriusStallTorque:
 
     def test_stall_torque_at_peak_current(self, stall_result):
-        """MTPA at MAX_I_S (250 A peak) — pinned to model prediction.
+        """REGRESSION PIN, not validation: pinned to the model's own
+        prediction so drift is visible — the pinned number is known to
+        be wrong against the bench.
 
         905 Nm over-predicts the ORNL dynamometer measurement (~340 Nm
         at 250 A) by ~166%. The linear model's constant L_q (6.15 mH,

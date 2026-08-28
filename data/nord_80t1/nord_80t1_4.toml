@@ -1,0 +1,82 @@
+# NORD / Watt-Drive 80T1/4 — 4-pole IPM synchronous motor
+# The only motor in the dual-source frame-80 family with a full published
+# electrical datasheet: R_ww, L_d, L_q, and phase back-EMF at rated speed.
+# The companion WEG UE 921 motors share the same housing (frame 80,
+# J = 0.0011 kg·m², 8 kg) but are wound for 187 V Y / 50 Hz / 1500 rpm;
+# they have NO independent electrical datasheet — R_s = 2.60 Ohm in the
+# WEG packs is a cross-vendor import from this NORD sheet.
+#
+# Source: NORD / Watt-Drive motor datasheet for 80T1/4 (Nr. 43931265).
+#   Published electrical parameters: R_ww 5.20 Ohm (line-to-line, Y),
+#   L_d 63 mH, L_q 133 mH, phase back-EMF 187 V rms at 2100 rpm.
+#   Nameplate: 400 V Y, 70 Hz, 2100 rpm, 5.0 Nm, 1.1 kW.
+#
+# Topology: interior permanent magnet (L_q/L_d = 2.11 — strong saliency).
+# The IPM topology with L_q > 2*L_d means reluctance torque contributes
+# substantially at rated current; this is not a surface-magnet machine
+# despite the frame-80 IEC form factor.
+#
+# UNIT/BOOKKEEPING FLAGS:
+# - R_ww = 5.20 Ohm is the winding-to-winding (line-to-line) resistance
+#   measured at the motor terminals (Y connection). Per-phase R_s = R_ww/2
+#   = 2.60 Ohm. Temperature coefficient not published; this is presumably
+#   a 20-25 C cold-winding value.
+# - Phase back-EMF 187 V rms is per-phase (not line-to-line). At 2100 rpm
+#   mechanical (70 Hz electrical with n_p=2):
+#     omega_e = 2 * 2*pi*2100/60 = 439.82 rad/s
+#     psi_f = sqrt(2) * 187 / 439.82 = 0.6014 Wb (peak per-phase)
+# - Rated current: 5.8 A rms in 400 V Y configuration (nameplate).
+#   The 10 A I_max in the table is the drive/inverter current limit
+#   (not a motor thermal rating).
+# - L_d = 63 mH, L_q = 133 mH are presumably unsaturated values at
+#   rated current; saturation behavior is not published.
+
+[motor]
+name = "NORD 80T1/4 IPM"
+type = "IPM (4-pole IEC frame-80 synchronous motor, strong saliency)"
+
+[circuit]
+n_p = 2                # 4 poles: 70 Hz / (2100 rpm / 60) = 2
+R_s = 2.60             # Ohm per-phase, = R_ww/2 = 5.20/2 (Y-connected)
+L_d = 0.063            # H (63 mH, datasheet)
+L_q = 0.133            # H (133 mH, datasheet; L_q/L_d = 2.11)
+psi_f = 0.6014         # Wb peak per-phase, derived from 187 V rms back-EMF
+                       # at 2100 rpm: sqrt(2)*187 / (2*2*pi*2100/60)
+I_rated_rms = 5.8      # A rms (400 V Y nameplate)
+J = 0.0011             # kg.m2 (datasheet, shared with WEG frame-80 housing)
+
+[drive]
+U_DC = 565.69          # V, sqrt(2) * 400 V line-to-line (rectified 400 V mains)
+MAX_I_S = 14.142       # A peak, sqrt(2) * 10 A rms (drive current limit)
+W_REF = 219.911        # rad/s mechanical, 2*pi*2100/60
+
+[rated]
+speed_rpm = 2100
+torque_Nm = 5.0
+frequency_Hz = 70
+power_kW = 1.1
+
+[provenance]
+source = "NORD / Watt-Drive motor datasheet, 80T1/4 (Nr. 43931265)"
+motor_model = "NORD 80T1/4 (Watt-Drive, IEC frame 80)"
+duty = "S1 continuous (IEC), 400 V Y, 70 Hz"
+notes = """
+The only motor in the dual-source frame-80 family with full published
+electrical parameters. L_q/L_d = 2.11 confirms interior permanent magnet
+topology with strong saliency — reluctance torque is a substantial
+fraction of rated torque at MTPA.
+
+Eligible for: rated_torque, stall_torque, torque_speed, drive_sim,
+  thermal_duty (if R_th added).
+Not eligible for: analytical, FEM (no geometry — stator/rotor radii,
+  magnet dimensions, slot geometry not published).
+
+Cross-vendor note: the WEG UE 921 series (662 B, 712) shares the same
+frame-80 housing and J = 0.0011 kg.m2 but is wound for 187 V Y / 50 Hz
+/ 1500 rpm. R_s = 2.60 Ohm appearing in WEG documentation is imported
+from this NORD datasheet — the WEG pair has no independent R_s
+measurement (contested). The NORD's
+psi_f = 0.601 Wb at the WEG's 1500 rpm implies 231 V L-L back-EMF,
+above the WEG's 187 V supply — the WEG is a different winding, not
+simply the same motor at a different speed.
+"""

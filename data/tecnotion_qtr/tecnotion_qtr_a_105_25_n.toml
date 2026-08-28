@@ -1,6 +1,6 @@
 # Tecnotion QTR-A-105-25, winding N — frameless direct-drive torque motor
 # (surface PM, 20-pole). Third multi-voltage torque-speed envelope anchor
-# (REQ-0814), and the only LOADED two-voltage corner in the registry: the
+# and the only LOADED two-voltage corner in the registry: the
 # spec sheet tabulates "Maximum speed @ 48 Volt @ Tc" = 240 rpm and
 # "Maximum speed @ max. voltage @ Tc" = 3625 rpm (max voltage 230 Vac rms
 # = 325 Vdc) for the same winding — the corner of the CONTINUOUS-torque
@@ -63,7 +63,7 @@ source = "Tecnotion Torque QTR 105 series specsheet Ver. 2.0, column QTR-A-105-2
 url = "https://www.tecnotion.com/wp-content/uploads/2022/09/QTR105_Specsheet_EN_2.0.pdf"
 motor_model = "Tecnotion QTR-A-105-25-N (frameless torque motor kit)"
 duty = "S1 continuous at Tc/Ic with coils at 100 C, mounting surface 20 C (sheet note 1); Pc = 214 W continuous power loss"
-# Two-voltage loaded corners (REQ-0814 anchor class; the key evidence):
+# Two-voltage loaded corners (the key evidence):
 #   V [Vdc] | max speed @ Tc [rpm]
 #     48    |        240
 #    325    |       3625

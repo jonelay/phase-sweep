@@ -42,7 +42,7 @@ _FUTURE_TIMEOUT_S = 600
 def _worker_init(cache_dir: str | None) -> None:
     """ProcessPoolExecutor initializer — runs once per worker process."""
     if cache_dir:
-        from phasesweep.solvers.fem_field import set_disk_cache_dir
+        from phasesweep.solvers.fem_mesh import set_disk_cache_dir
         set_disk_cache_dir(cache_dir)
 
 
@@ -101,6 +101,120 @@ def _run_worker(job: dict[str, Any]) -> dict[str, Any]:
         return _failure_result(job, "ERROR", time.perf_counter() - t0, str(e))
 
 
+_DEFAULT_BATCH_SIZE = 128
+
+
+def _run_batch_worker(job: dict[str, Any]) -> dict[str, Any]:
+    """Run one batch job {"model_key": mk, "items": [...]} via batch_fn.
+
+    Returns {"batch": True, "results": [per-item result, ...]} in item
+    order. elapsed_s per item is the batch wall time / len(items).
+    """
+    from phasesweep.machines.motor import Motor
+    from phasesweep.registry import MODEL_REGISTRY
+    from phasesweep.sweep_types import RunConfig
+
+    model_key = job["model_key"]
+    items = job["items"]
+
+    t0 = time.perf_counter()
+    construct_errors: dict[int, str] = {}
+    configs: list[RunConfig] = []
+    config_idx: list[int] = []
+    for i, item in enumerate(items):
+        try:
+            motor = Motor.from_dict(item["motor_dict"])
+            configs.append(RunConfig(
+                motor=motor, model=model_key, **item.get("config_kw", {})))
+            config_idx.append(i)
+        except Exception as e:
+            construct_errors[i] = str(e)
+
+    batch_fn = MODEL_REGISTRY[model_key].batch_fn
+    assert batch_fn is not None  # callers group only batchable models
+    try:
+        outputs = batch_fn(configs) if configs else []
+    except Exception as e:
+        outputs = [e] * len(configs)
+
+    per_item_s = (time.perf_counter() - t0) / len(items) if items else 0.0
+
+    results: list[dict[str, Any]] = [
+        _failure_result(item, "ERROR", per_item_s,
+                        construct_errors.get(i, "no batch output"))
+        for i, item in enumerate(items)
+    ]
+    for i, out in zip(config_idx, outputs):
+        if isinstance(out, Exception):
+            results[i] = _failure_result(items[i], "ERROR", per_item_s, str(out))
+        else:
+            results[i] = {
+                **_passthrough(items[i]),
+                "status": "OK",
+                "metrics": out,
+                "elapsed_s": per_item_s,
+                "error_msg": None,
+            }
+    return {"batch": True, "results": results}
+
+
+def _dispatch_worker(job: dict[str, Any]) -> dict[str, Any]:
+    if "items" in job:
+        return _run_batch_worker(job)
+    return _run_worker(job)
+
+
+def _split_batches(
+    jobs: list[dict[str, Any]], batch_size: int, workers: int,
+) -> list[dict[str, Any]]:
+    """Group batchable jobs by model_key into ≤batch_size chunks.
+
+    Produces at least min(n_batchable, workers) chunks overall so all
+    workers stay fed; non-batchable jobs pass through unchanged.
+    """
+    from phasesweep.registry import MODEL_REGISTRY
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    mixed: list[dict[str, Any]] = []
+    for job in jobs:
+        info = MODEL_REGISTRY.get(job.get("model_key", ""))
+        if info is not None and info.batch_fn is not None:
+            groups.setdefault(job["model_key"], []).append(job)
+        else:
+            mixed.append(job)
+
+    n_batchable = sum(len(g) for g in groups.values())
+    if n_batchable:
+        target_chunks = min(n_batchable, max(workers, 1))
+        for mk, group in groups.items():
+            n = len(group)
+            k = max(-(-n // batch_size), -(-target_chunks * n // n_batchable))
+            for c in range(k):
+                lo = c * n // k
+                hi = (c + 1) * n // k
+                mixed.append({"model_key": mk, "items": group[lo:hi]})
+    return mixed
+
+
+def _expand_batch_result(result: dict[str, Any]) -> list[dict[str, Any]]:
+    if result.get("batch"):
+        return result["results"]
+    if "items" in result:
+        # Batch job failed as a whole (future error, cancel, timeout):
+        # fan the failure out to every item.
+        return [
+            {
+                **_passthrough(item),
+                "status": result.get("status", "ERROR"),
+                "metrics": None,
+                "elapsed_s": 0.0,
+                "error_msg": result.get("error_msg"),
+            }
+            for item in result["items"]
+        ]
+    return [result]
+
+
 def execute_parallel(
     jobs: list[dict[str, Any]],
     workers: int = 1,
@@ -108,16 +222,52 @@ def execute_parallel(
     on_complete: Callable[[dict[str, Any], int, int], None] | None = None,
     timeout_s: float | None = None,
     cancel: threading.Event | None = None,
+    batch_size: int | None = None,
 ) -> list[dict[str, Any]]:
     """Run registry-based model jobs via _run_worker.
 
     Thin wrapper around execute_generic — see that function for details.
+
+    batch_size opts in to batched dispatch: jobs whose model has a
+    batch_fn are grouped by model_key and run as chunks of at most
+    batch_size items; results are flattened back to one dict per input
+    job (elapsed_s per item = batch wall time / items). None (default)
+    keeps single-job dispatch.
     """
-    return execute_generic(
-        _run_worker, jobs, workers=workers,
-        cache_dir=cache_dir, on_complete=on_complete, timeout_s=timeout_s,
+    if batch_size is None:
+        return execute_generic(
+            _run_worker, jobs, workers=workers,
+            cache_dir=cache_dir, on_complete=on_complete, timeout_s=timeout_s,
+            cancel=cancel,
+        )
+
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+
+    mixed = _split_batches(jobs, batch_size, workers)
+    total = len(jobs)
+    done_count = 0
+    count_lock = threading.Lock()
+
+    wrapped: Callable[[dict[str, Any], int, int], None] | None = None
+    if on_complete is not None:
+        def wrapped(result: dict[str, Any], _done: int, _total: int) -> None:
+            nonlocal done_count
+            for item in _expand_batch_result(result):
+                with count_lock:
+                    done_count += 1
+                    n = done_count
+                on_complete(item, n, total)
+
+    raw = execute_generic(
+        _dispatch_worker, mixed, workers=workers,
+        cache_dir=cache_dir, on_complete=wrapped, timeout_s=timeout_s,
         cancel=cancel,
     )
+    flat: list[dict[str, Any]] = []
+    for r in raw:
+        flat.extend(_expand_batch_result(r))
+    return flat
 
 
 def execute_generic(
@@ -371,35 +521,6 @@ def generate_grid(
 # ---------------------------------------------------------------------------
 
 
-def _sweep_worker(job: dict[str, Any]) -> dict[str, Any]:
-    """Module-level worker for execute_generic (must be picklable)."""
-    from phasesweep.machines.motor import Motor
-    from phasesweep.registry import MODEL_REGISTRY
-    from phasesweep.sweep_types import RunConfig
-
-    motor = Motor.from_dict(job["motor_dict"])
-    model_key = job["model_key"]
-    config_kw = job.get("config_kw", {})
-
-    passthrough = {k: v for k, v in job.items()
-                   if k not in {"motor_dict", "config_kw"}}
-
-    info = MODEL_REGISTRY[model_key]
-    if info.fn is None:
-        return {**passthrough, "status": "ERROR", "metrics": None,
-                "error_msg": f"model {model_key!r} has no fn"}
-
-    t0 = time.perf_counter()
-    try:
-        config = RunConfig(motor=motor, model=model_key, **config_kw)
-        metrics = info.fn(config)
-        return {**passthrough, "status": "OK", "metrics": metrics,
-                "elapsed_s": time.perf_counter() - t0}
-    except Exception as e:
-        return {**passthrough, "status": "ERROR", "metrics": None,
-                "elapsed_s": time.perf_counter() - t0, "error_msg": str(e)}
-
-
 @dataclass(frozen=True)
 class SweepResult:
     point_idx: int
@@ -418,8 +539,12 @@ def run_sweep(
     workers: int = 1,
     cache_dir: str | None = None,
     on_complete: Callable[[dict[str, Any], int, int], None] | None = None,
+    batch_size: int | None = _DEFAULT_BATCH_SIZE,
 ) -> list[SweepResult]:
     """Run models across sweep points, optionally in parallel.
+
+    Models with a registry batch_fn are dispatched in batches of at most
+    batch_size (None disables batching).
 
     Returns a flat list of SweepResult (one per point × model).
     """
@@ -439,9 +564,9 @@ def run_sweep(
                 "point_idx": i,
             })
 
-    raw = execute_generic(
-        _sweep_worker, jobs, workers=workers,
-        cache_dir=cache_dir, on_complete=on_complete,
+    raw = execute_parallel(
+        jobs, workers=workers,
+        cache_dir=cache_dir, on_complete=on_complete, batch_size=batch_size,
     )
 
     return [

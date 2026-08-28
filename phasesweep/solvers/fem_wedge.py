@@ -29,7 +29,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from phasesweep.solvers.analytical import zhu_howe_Br
-from phasesweep.solvers.fem_field import _MU0
+from phasesweep.solvers.fem_materials import _MU0
+
+# Relaxation for the wedge Newton's Picard start-up steps — mirrors
+# _picard_solve_wedge's shipping relax default.
+_WEDGE_STARTUP_RELAX: float = 0.3
 
 if TYPE_CHECKING:
     from ngsolve import CoefficientFunction, GridFunction, Mesh
@@ -189,9 +193,9 @@ def _fundamental_Br(
 ) -> float:
     """Fundamental amplitude of B_r(θ) at radius r_ag, height z, over [0, alpha]."""
     thetas = np.linspace(0.0, alpha, n_sample)
-    B_r = np.array([
-        B_r_cf(mesh(r_ag * cos(t), r_ag * sin(t), z)) for t in thetas
-    ])
+    mips = mesh(r_ag * np.cos(thetas), r_ag * np.sin(thetas),
+                np.full_like(thetas, z))
+    B_r = np.asarray(B_r_cf(mips), dtype=float).reshape(-1)
     cos_np = np.cos(n_p * thetas)
     return np.trapezoid(B_r * cos_np, thetas) / np.trapezoid(cos_np**2, thetas)
 
@@ -202,7 +206,9 @@ def _halfpole_flux_Br(
 ) -> float:
     """Net (all-harmonic) radial flux per unit length through the half-pole arc."""
     thetas = np.linspace(0.0, alpha, n_sample)
-    B_r = np.array([B_r_cf(mesh(r * cos(t), r * sin(t), z)) for t in thetas])
+    mips = mesh(r * np.cos(thetas), r * np.sin(thetas),
+                np.full_like(thetas, z))
+    B_r = np.asarray(B_r_cf(mips), dtype=float).reshape(-1)
     return r * np.trapezoid(B_r, thetas)
 
 
@@ -231,7 +237,8 @@ def _picard_solve_wedge(
     from ngsolve import L2, BilinearForm, GridFunction, dx, grad, sqrt
 
     from phasesweep.defaults import PICARD_MAX_ITERATIONS
-    from phasesweep.solvers.fem_field import _MIN_PICARD_RELAX, _bh_nu
+    from phasesweep.solvers.fem_field import _MIN_PICARD_RELAX
+    from phasesweep.solvers.fem_materials import _bh_nu
 
     if n_iter is None:
         n_iter = PICARD_MAX_ITERATIONS  # same budget as the 2D solver (200)
@@ -277,6 +284,175 @@ def _picard_solve_wedge(
         raise RuntimeError(
             f"Wedge Picard iteration did not converge in {n_iter} "
             f"iterations (step: {step:.4e}, tol: {tol})"
+        )
+    return gfu
+
+
+def _newton_solve_wedge(
+    mesh: Mesh, fes: FESpace, lf: LinearForm, mu_lin: CoefficientFunction,
+    n_iter: int | None = None,
+) -> GridFunction:
+    """Nonlinear iron Newton for the scalar-φ wedge, with line-search damping.
+
+    Same discrete fixed point as ``_picard_solve_wedge``: element-wise L2⁰
+    iron μ with the element-averaged |∇φ|. Picard's per-element implicit
+    relation μ = 1/ν(μ·|∇φ|) resolves to the explicit secant
+    μ = ``_bh_mu_h``(|∇φ|) — the exact H-space inverse of the BH spline —
+    so both iterations share one solution; only the update differs.
+    Ported from the 2D ``_newton_solve`` pattern, including its
+    relaxed-Picard start-up steps before the Newton loop.
+
+    Stops on the relative algebraic residual ‖A(μ(φ))φ − f‖/‖f‖ <
+    ``_NEWTON_RTOL`` — NOT on a μ-step criterion: the line search leaves
+    μ at μ(φ), so a μ-step check would compare μ(φ) with itself and
+    report false convergence after one step (the spike's trap #1).
+
+    The Jacobian uses the normalized tangent form
+    μ_t ∇δu·∇v + (μ_l − μ_t)(n̂·∇δu)(n̂·∇v), n̂ = ∇φ/|∇φ| pointwise,
+    with μ_t = μ(H̄_e) and μ_l = dB/dH(H̄_e) per element. Its pointwise
+    eigenvalues are exactly {μ_l, μ_t, μ_t} > 0, so it stays SPD even
+    where the pointwise gradient differs from the element average. The
+    2D ``_newton_solve``'s un-normalized (ν'/|B̄|)(∇A·∇δu)(∇A·∇v) term is
+    NOT safe here: in the μ(H) orientation μ' ≤ 0 wherever iron
+    saturates, and pointwise |∇φ| ≫ H̄ at the stack-end corner makes
+    that correction indefinite — the un-normalized port produced a
+    near-singular step and a stalled line search on the first fast-config
+    case tried. (In 2D, ν' ≥ 0 everywhere once the low-B clip is active,
+    so the same structure is benign there.) μ_l is evaluated at the
+    element-averaged H̄ while n̂ is pointwise — still an inconsistent
+    Jacobian, so the asymptotic rate is linear; irrelevant at the 1e-4
+    stop.
+
+    Raises:
+        RuntimeError: If the line search stalls or ``n_iter`` is
+            exhausted. Callers fall back to ``_picard_solve_wedge``.
+    """
+    from ngsolve import L2, BilinearForm, GridFunction, dx, grad, sqrt
+
+    from phasesweep.defaults import PICARD_MAX_ITERATIONS
+    from phasesweep.solvers.fem_field import (
+        _NEWTON_RTOL,
+        _NEWTON_STARTUP_PICARD,
+    )
+    from phasesweep.solvers.fem_materials import _bh_dB_dH, _bh_mu_h
+
+    if n_iter is None:
+        n_iter = PICARD_MAX_ITERATIONS
+
+    u, v = fes.TnT()
+    fes_mu = L2(mesh, order=0)
+    gfu_mu = GridFunction(fes_mu)
+    gfu_mu.Set(mu_lin)
+    is_iron = GridFunction(fes_mu)
+    is_iron.Set(mesh.MaterialCF({"iron": 1.0, "magnet": 0.0, "gap": 0.0}))
+    iron_mask = is_iron.vec.FV().NumPy() > 0.5
+
+    free = fes.FreeDofs()
+    free_mask = np.array([free[i] for i in range(fes.ndof)])
+    lf_np = lf.vec.FV().NumPy().copy()
+
+    gfu = GridFunction(fes)
+    gg = grad(gfu)
+    gfu_coeff = GridFunction(fes_mu)
+    a = BilinearForm(gfu_mu * grad(u) * grad(v) * dx)
+    # (μ_l − μ_t) (n̂·∇u)(n̂·∇v) with n̂ = ∇φ/|∇φ|; the 1e-30 (A/m)²
+    # regularizer only matters at exactly-zero gradient, where the
+    # numerator vanishes too.
+    jac = BilinearForm(
+        gfu_mu * grad(u) * grad(v) * dx
+        + gfu_coeff * (gg * grad(u)) * (gg * grad(v)) / (gg * gg + 1e-30) * dx
+    )
+
+    tmp = gfu.vec.CreateVector()
+    rvec = gfu.vec.CreateVector()
+    step = gfu.vec.CreateVector()
+
+    def project_Hmag() -> np.ndarray:
+        gfu_H = GridFunction(fes_mu)
+        gfu_H.Set(sqrt(gg[0] ** 2 + gg[1] ** 2 + gg[2] ** 2))
+        return gfu_H.vec.FV().NumPy().copy()
+
+    def residual_np() -> np.ndarray:
+        a.Assemble()
+        tmp.data = a.mat * gfu.vec
+        r = tmp.FV().NumPy() - lf_np
+        r[~free_mask] = 0.0
+        return r
+
+    # Iteration 0: linear solve with the seed mu (identical to Picard's
+    # first solve).
+    a.Assemble()
+    gfu.vec.data = a.mat.Inverse(free, inverse="sparsecholesky") * lf.vec
+
+    mu_seed = gfu_mu.vec.FV().NumPy().copy()
+
+    # Picard start-up: relaxed mu-updates before Newton, mirroring the
+    # 2D _newton_solve (capped by the shared iteration budget, always
+    # reserving at least one Newton iteration).
+    n_startup = min(_NEWTON_STARTUP_PICARD, max(0, n_iter - 1))
+    for _ in range(n_startup):
+        mu_cur = gfu_mu.vec.FV().NumPy().copy()
+        mu_upd = mu_cur.copy()
+        mu_upd[iron_mask] = (
+            _WEDGE_STARTUP_RELAX * _bh_mu_h(project_Hmag())[iron_mask]
+            + (1 - _WEDGE_STARTUP_RELAX) * mu_cur[iron_mask]
+        )
+        gfu_mu.vec.FV().NumPy()[:] = mu_upd
+        a.Assemble()
+        gfu.vec.data = a.mat.Inverse(free, inverse="sparsecholesky") * lf.vec
+
+    f_norm = float(np.linalg.norm(lf_np[free_mask]))
+    rel_res = float("inf")
+    for _newton_i in range(max(1, n_iter - n_startup)):
+        H_vals = project_Hmag()
+        mu_upd = mu_seed.copy()
+        mu_upd[iron_mask] = _bh_mu_h(H_vals)[iron_mask]
+        gfu_mu.vec.FV().NumPy()[:] = mu_upd
+        r_np = residual_np()
+        rnorm = float(np.linalg.norm(r_np))
+        rel_res = rnorm / f_norm
+        if rel_res < _NEWTON_RTOL:
+            break
+
+        # Tangent slope μ_l = dB/dH per element (iron only), analytic
+        # from the BH spline — the clip plateau (where μ_l = μ_t and the
+        # correction vanishes) and the vacuum-slope extrapolation are
+        # handled inside _bh_dB_dH; floored at μ0, so μ_l > 0 keeps jac
+        # SPD.
+        mu_l = _bh_dB_dH(H_vals)
+        gfu_coeff.vec.FV().NumPy()[:] = np.where(
+            iron_mask, mu_l - mu_upd, 0.0)
+
+        jac.Assemble()
+        jinv = jac.mat.Inverse(free, inverse="sparsecholesky")
+
+        rvec.FV().NumPy()[:] = r_np
+        step.data = jinv * rvec
+        step_np = step.FV().NumPy().copy()
+
+        u0 = gfu.vec.FV().NumPy().copy()
+        alpha, accepted = 1.0, False
+        for _ in range(8):
+            gfu.vec.FV().NumPy()[:] = u0 - alpha * step_np
+            mu_trial = mu_seed.copy()
+            mu_trial[iron_mask] = _bh_mu_h(project_Hmag())[iron_mask]
+            gfu_mu.vec.FV().NumPy()[:] = mu_trial
+            if float(np.linalg.norm(residual_np())) < rnorm:
+                accepted = True
+                break
+            alpha *= 0.5
+        if not accepted:
+            gfu.vec.FV().NumPy()[:] = u0
+            raise RuntimeError(
+                f"Wedge Newton line search stalled at iteration "
+                f"{_newton_i + 1} (rel residual: {rel_res:.4e})"
+            )
+    else:
+        raise RuntimeError(
+            f"Wedge Newton iteration did not converge in {n_iter} "
+            f"iterations ({n_startup} Picard start-up + "
+            f"{n_iter - n_startup} Newton; "
+            f"rel residual: {rel_res:.4e}, tol: {_NEWTON_RTOL})"
         )
     return gfu
 
@@ -479,6 +655,7 @@ def solve_wedge_endeffect(
     mu_r_pm: float = 1.05,
     mu_r_fe: float = 1.0e4,
     nonlinear: bool = False,
+    nonlinear_solver: str = "newton",
     z_box_factor: float = 6.0,
     outer_bc: str = "neumann",
     top_bc: str = "neumann",
@@ -498,7 +675,11 @@ def solve_wedge_endeffect(
 
     mag_overhang / yoke_overhang: axial extension (per side) of the magnet and the
     rotor yoke beyond the stack end — both 0 for a co-extensive stack.
-    nonlinear: solve the iron with the BH curve (Picard) instead of linear mu_r_fe.
+    nonlinear: solve the iron with the BH curve instead of linear mu_r_fe.
+    nonlinear_solver: "newton" (default) or "picard" — Newton converges in
+    far fewer iterations on the same discrete fixed point (see
+    ``_newton_solve_wedge``); a stalled Newton falls back to Picard
+    automatically, mirroring the 2D ``solve_field_fem`` behavior.
     picard_n_iter / picard_tol: Picard budget and raw-step stop tolerance
     (defaults: the 2D solver's 200-iteration budget, 1e-4). Non-convergence
     raises — pass a looser tol for coarse studies rather than
@@ -528,6 +709,12 @@ def solve_wedge_endeffect(
         x,
         y,
     )
+
+    if nonlinear_solver not in ("picard", "newton"):
+        raise ValueError(
+            f"nonlinear_solver must be 'picard' or 'newton', "
+            f"got {nonlinear_solver!r}"
+        )
 
     alpha = pi / (2 * n_p)
     L_half = L_stk / 2.0
@@ -561,7 +748,16 @@ def solve_wedge_endeffect(
     lf = LinearForm(Brem_r * (cos_t * grad(v)[0] + sin_t * grad(v)[1]) * dx)
     lf.Assemble()
 
-    if nonlinear:
+    if nonlinear and nonlinear_solver == "newton":
+        try:
+            gfu = _newton_solve_wedge(mesh, fes, lf, mu)
+        except RuntimeError as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "wedge Newton fell back to Picard: %s", e)
+            gfu = _picard_solve_wedge(mesh, fes, lf, mu,
+                                      n_iter=picard_n_iter, tol=picard_tol)
+    elif nonlinear:
         gfu = _picard_solve_wedge(mesh, fes, lf, mu,
                                   n_iter=picard_n_iter, tol=picard_tol)
     else:

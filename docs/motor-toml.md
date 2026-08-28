@@ -31,7 +31,7 @@ missing fields when a solver actually needs them.
 | `n_p` | — | Pole pairs. **Required.** Must be ≥ 2 |
 | `R_s` | Ω | Stator phase resistance |
 | `L_d`, `L_q` | H | d/q-axis inductance |
-| `psi_f` | Wb (peak) | PM flux linkage per phase |
+| `psi_f` | Wb (peak) | PM flux linkage per phase. See [`psi_f`/`B_rem` authority](#psi_fb_rem-authority) before supplying both |
 | `J` | kg·m² | Rotor inertia |
 | `I_rated` | A (peak) | Rated continuous current |
 | `I_rated_rms` | A (RMS) | Convenience: converted to peak ×√2. `I_rated` wins if both given |
@@ -55,7 +55,14 @@ Spec names (preferred):
 | `slot_opening_width` | m | Slot throat width at the bore (Carter input) |
 | `slot_opening_ratio` | — | Convenience: converted to width via slot pitch at the bore; width wins if both given |
 | `alpha_p` | — | Magnet pole-arc / pole-pitch ratio, (0, 1] (maps to `Motor.alpha_p`, default 1.0) |
+| `magnetization` | — | `"radial"` (default) or `"halbach"` — magnetization pattern. Halbach requires `alpha_p = 1.0` |
+| `halbach_segments` | — | Segments per pole (κ_m) for Halbach arrays. Required when `magnetization = "halbach"` |
+| `halbach_angles_deg` | deg | Per-segment local magnetization angles (length = `halbach_segments`). Omit for the ideal Halbach rule |
 | `back_iron_thickness` | m | **Outrunner only** — magnetic back-iron ring inside the rotor wall, splitting it into ring + non-magnetic shell. Must be in (0, wall thickness); setting it on an inrunner raises |
+| `magnet_mount` | — | `"surface"` (default, interpole gaps are air) or `"inset"` (magnets recessed in the rotor; interpole gaps are rotor iron). FEM only, requires `alpha_p < 1` and `nonlinear = true`; the analytical solver rejects inset rotors, and psi_f/B_rem must both be explicit (the radial derivation ignores the interpole iron shunt) |
+| `bridge_thickness` | m | Iron bridge ring between the magnet faces and the airgap (retaining ring cut from the PM annulus). Compatible with any `magnet_mount` or `magnetization` (e.g. Halbach with a retaining sleeve). FEM only, requires `nonlinear = true`; the analytical solver rejects it. Must be in (0, magnet radial thickness); omit for exposed magnet faces |
+| `magnet_overhang` | m | Axial extension of the magnets per side beyond `L_stk` (maps to `Geometry.magnet_overhang`). ≥ 0; `0.0` = measured co-extensive, omit = not measured. Input to the offline 3D wedge k_end solve (`scripts/compute_k_end.py`) — the dominant lever on the end-effect factor. Not used by the 2D solvers |
+| `k_end` | — | 3D axial end-effect factor on the winding flux linkage (maps to `Motor.k_end`), accepted in (0, 1.2]. Values above 1 are possible under magnet overhang. A **computed** value from `scripts/compute_k_end.py` — commit its provenance record (`data/<motor>/k_end.record.json`) alongside. Applied by the `analytical` model to the B_rem-derived `flux_linkage_peak`/`backemf_fundamental` only (never when psi_f is the input — a measured psi_f already includes end effects) |
 
 Legacy diameter names are also accepted: `stator_od`, `stator_id`,
 `rotor_od`, `magnet_thickness` (halved/derived to radii). One of
@@ -78,7 +85,7 @@ outrunner reverses the middle three.
 
 | Field | Units | Default | Notes |
 |-------|-------|---------|-------|
-| `B_rem` | T | — | Magnet remanence. Derivable from `psi_f` (and vice versa) by the solver factories when winding params exist |
+| `B_rem` | T | — | Magnet remanence. Derivable from `psi_f` (and vice versa) by the solver factories when winding params exist; see [`psi_f`/`B_rem` authority](#psi_fb_rem-authority) |
 | `mu_r_fe` | — | 1000.0 | Iron relative permeability (linear FEM) |
 | `mu_r_pm` | — | 1.05 | Magnet recoil permeability |
 | `alpha_Br` | 1/K | — | Fractional remanence temperature coefficient, validated to (−0.01, 0); applied against `[thermal] magnet_temp` |
@@ -146,6 +153,29 @@ Sections not listed above (`[rated]`, `[provenance]`) and unrecognized
 fields inside the listed ones (datasheet extras like `tooth_width`) are
 ignored by `load_motor` — they are documentation for humans, not
 inputs.
+
+## `psi_f`/`B_rem` authority
+
+`psi_f` (circuit tier) and `B_rem` (geometry/materials tier) encode the
+same magnet through different models, so supplying both couples two
+sources of truth. Choose one as authoritative by design intent:
+
+- **Geometry-led** (a design study, no bench data): supply `B_rem` and
+  omit `psi_f`; the solver factories derive flux linkage from magnet,
+  geometry, and winding inputs.
+- **Measurement-led** (a real motor with a back-EMF measurement): supply
+  the measured `psi_f`; it is authoritative for the circuit models. An
+  explicit `B_rem` then participates only in field calculations and is a
+  separate model assumption.
+
+Supplying both is legal. When the `B_rem` implied by `psi_f` disagrees
+with the explicit value by more than 50%, every run that resolves them
+warns (the threshold is loose because the simplified radial derivation
+has real model error; inset and Halbach rotors are exempt because the
+derivation does not apply). The warning means the two tiers describe
+different magnets - resolve it by picking an evidence path, not by
+tuning one value to silence the other. `scripts/check_motor.py` reports
+the derived value, the disagreement, and the remediation for one motor.
 
 ## Minimal example
 

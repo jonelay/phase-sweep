@@ -1,0 +1,105 @@
+# Zhang 2021 — 9-slot/8-pole segmented Halbach array PMSM
+# First Halbach motor with full geometry AND measured back-EMF closure.
+#
+# Source: Zhang, H.; Yang, M.; Zhang, Y.; Tuo, J.; Luo, S.; Xu, J.
+#   "Analytical field model of segmented Halbach array permanent magnet
+#   machines considering iron nonlinearity," IET Electric Power
+#   Applications, 15:717–727, 2021. DOI: 10.1049/elp2.12069
+#   Open access CC-BY-4.0.
+#
+# Prototype fabricated and tested. Measured back-EMF at 400 r/min:
+# ~7 V phase peak (Fig. 7 — analytical, FEA, and measured overlap).
+# Torque at 10 A rms (rated): 3.6–3.7 N·m (linear = nonlinear = FEA,
+# iron unsaturated). At 30 A rms (3x rated): nonlinear 10.0 N·m,
+# FEA 9.8–9.9 N·m, linear over-predicts ~10.9 N·m.
+# Max nonlinear-vs-measured torque error: 4.17%.
+#
+# UNIT FLAGS:
+# - All radii from Table 1. The table labels say "diametre" but values
+#   are radii (a 58.5 mm stator *diameter* would sit inside the 46.5 mm
+#   slot bottom radius — nonsensical). Summary confirms radii.
+# - Rated current 10 A rms (paper §3, Fig. 10a).
+# - Back-EMF ~7 V = phase peak at 400 rpm (Fig. 7).
+# - psi_f derived: E_peak / omega_e = 7.0 / (4 * 2*pi*400/60) = 0.04178 Wb
+#
+# WINDING: 9 slots, 3 phases, double-layer concentrated (nonoverlapping).
+# Connection matrices C1/C2 (Eqs 10–11): each phase row has 3 non-zero
+# entries per layer → 3 coils per phase, all in series → coils_series = 3.
+# k_w1 = 0.9452 for 9s/8p (standard FSCW value).
+
+[motor]
+name = "Zhang 2021 Halbach 9s8p"
+type = "surface-magnet PMSM (8p/9s, 4-segment Halbach array)"
+topology = "inrunner"
+
+[geometry]
+r_outer = 0.0585        # m, stator core outer radius R_sy (Table 1)
+r_stator = 0.0285       # m, stator bore radius R_s (Table 1)
+r_magnet = 0.0275       # m, PM outer radius R_m (Table 1)
+r_rotor = 0.0245        # m, PM inner radius R_r (Table 1)
+r_inner = 0.0085        # m, rotor core inner radius R_ry (Table 1)
+L_stk = 0.050           # m, active axial length L_u (Table 1)
+alpha_p = 1.0            # Halbach: segments span full pole pitch
+magnetization = "halbach"
+halbach_segments = 4     # 4-segment ideal Halbach per pole (kappa_m = 4)
+slot_depth = 0.018       # m, R_sb - R_s = 46.5 - 28.5 = 18.0 mm
+slot_width_ratio = 0.6   # b_sa / slot_pitch = 24 / 40 deg
+slot_opening_width = 0.004974  # m, b_oa = 10 deg at R_s = 28.5 mm
+                                # arc = 0.0285 * 10 * pi/180
+
+[winding]
+n_slots = 9             # Table 1
+N = 26                  # turns per coil N_c (Table 1)
+coils_series = 3        # 9 slots / 3 phases, DL concentrated, all series
+k_w = 0.9452            # fundamental winding factor for 9s/8p DL concentrated
+
+[circuit]
+n_p = 4                 # 8 poles (Table 1)
+psi_f = 0.04178         # Wb, from ~7 V phase peak at 400 rpm
+                        # = 7.0 / (4 * 2*pi*400/60)
+I_rated_rms = 10.0      # A, rated phase current (§3, Fig. 10a)
+# R_s: NOT published
+# L_d, L_q: NOT published (Halbach SPM → L_d ≈ L_q expected)
+
+[materials]
+B_rem = 1.20            # T, magnet remanence (Table 1)
+mu_r_pm = 1.05          # magnet recoil permeability (Table 1)
+mu_r_fe = 1000.0        # DW310 non-oriented silicon steel; nominal
+                        # (B-H curve in Fig. 2, not digitized)
+
+[rated]
+speed_rpm = 400
+
+[validation]
+backemf_phase_peak_V = 7.0       # V, at 400 rpm (Fig. 7, measured)
+torque_rated_Nm = 3.65           # N·m, at 10 A rms (Fig. 10a, FEA)
+torque_30A_nonlinear_Nm = 10.0   # N·m, at 30 A rms (Fig. 10b, nonlinear analytical)
+torque_30A_linear_Nm = 10.9      # N·m, at 30 A rms (Fig. 10b, linear analytical)
+torque_30A_fea_Nm = 9.85         # N·m, at 30 A rms (Fig. 10b, 2D FEA)
+
+[provenance]
+source = "Zhang, Yang, Zhang, Tuo, Luo, Xu (2021), IET EPA 15:717–727, Table 1 + Figs 7/10/11"
+doi = "10.1049/elp2.12069"
+institution = "Shandong University, China"
+motor_model = "9s/8p Halbach SPM prototype"
+duty = "research prototype"
+notes = """
+First Halbach motor with full geometry AND measured back-EMF closure
+in the phase-sweep validation set. 4-segment ideal Halbach array per
+pole (kappa_m = 4). Double-layer concentrated winding, 26 turns/coil,
+3 coils in series per phase.
+
+Lamination: DW310 non-oriented silicon steel (B-H curve in Fig. 2).
+Measured back-EMF at 400 rpm overlaps with both analytical and FEA
+predictions (Fig. 7). Torque validated up to 30 A rms (3x rated) with
+nonlinear analytical agreeing to ~2% of FEA and ~4% of measurement.
+
+Halbach FEM: 4-segment ideal Halbach array per pole (kappa_m = 4).
+No custom halbach_angles_deg — the ideal rule applies
+(phi_local = (1-p)*delta for inrunner).
+
+BACK-EMF CLOSURE PATH:
+  FEM B_1 → winding_transfer(N=26, coils_series=3, k_w=0.9452,
+  r_stator=0.0285, L_stk=0.050, n_p=4) → psi_f → E_phase_peak
+  → compare against 7.0 V measured at 400 rpm.
+"""

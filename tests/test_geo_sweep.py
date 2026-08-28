@@ -10,7 +10,7 @@ from phasesweep.geo_parallel import (
     run_sweep,
 )
 from phasesweep.machines.geometry import default_inrunner
-from phasesweep.machines.motor import Motor
+from phasesweep.machines.motor import DriveParams, Motor
 from tests.conftest import requires_fem
 
 # ---------------------------------------------------------------------------
@@ -220,3 +220,29 @@ class TestRunSweep:
         results = run_sweep(motor, pts, ["analytical"])
         assert len(results) == 2
         assert all(r.status == "OK" for r in results)
+
+    def test_batched_matches_unbatched(self):
+        geo = default_inrunner()
+        motor = Motor(
+            name="test", geometry=geo, n_p=4, B_rem=1.2,
+            psi_f=0.1, R_s=0.5, L_d=1e-3, L_q=2e-3,
+            drive=DriveParams(U_DC=540.0, MAX_I_S=20.0, W_REF=100.0),
+        )
+        gap = geo.r_stator - geo.r_magnet
+        axis = SweepAxis("r_ag", gap * 0.5, gap * 1.5, 3)
+        points = generate_grid(geo, [axis])
+        models = ["torque_speed", "analytical"]
+
+        def key(r: SweepResult) -> tuple:
+            return (r.point_idx, r.model)
+
+        batched = sorted(run_sweep(motor, points, models), key=key)
+        serial = sorted(
+            run_sweep(motor, points, models, batch_size=None), key=key)
+        assert len(batched) == len(points) * len(models)
+        for b, s in zip(batched, serial):
+            assert (b.point_idx, b.model, b.status) == (
+                s.point_idx, s.model, s.status)
+            assert b.status == "OK"
+            assert b.metrics == s.metrics
+            assert b.error_msg == s.error_msg

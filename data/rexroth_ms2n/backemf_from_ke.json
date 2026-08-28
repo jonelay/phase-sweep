@@ -20,5 +20,5 @@
   "source_file": "Bosch Rexroth MS2N Project Planning Manual R911347583 Ed.07 (2021-07), table MS2N04-D0BHN",
   "source": "published",
   "derived_params": ["psi_f"],
-  "provenance_note": "Unit conversion of the manual constant, NOT an independent measurement: the motor TOML psi_f = 0.248100 Wb is DERIVED from this same KE (psi_f = sqrt(2)*[KE/(1000*2*pi/60)]/(sqrt(3)*n_p)), so backemf_fundamental here equals psi_f*n_p*omega by construction. derived_params arms the calibration circularity guard (REQ-0819): fitting psi_f (or interderivable B_rem) against this dataset is an echo, not a calibration, and is refused. Tolerance 5% per manual section 6.4 (constants toleranced +/- 5%)."
+  "provenance_note": "Unit conversion of the manual constant, NOT an independent measurement: the motor TOML psi_f = 0.248100 Wb is DERIVED from this same KE (psi_f = sqrt(2)*[KE/(1000*2*pi/60)]/(sqrt(3)*n_p)), so backemf_fundamental here equals psi_f*n_p*omega by construction. derived_params arms the calibration circularity guard: fitting psi_f (or interderivable B_rem) against this dataset is an echo, not a calibration, and is refused. Tolerance 5% per manual section 6.4 (constants toleranced +/- 5%)."
 }

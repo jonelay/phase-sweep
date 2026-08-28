@@ -43,6 +43,8 @@ const SECTION_FIELDS = {
     slot_opening_ratio: {},
     alpha_p: {},
     back_iron_thickness: MM,
+    magnet_overhang: MM,
+    k_end: {},
   },
   materials: {
     B_rem: { unit: "T" },
@@ -73,6 +75,19 @@ const SECTION_FIELDS = {
     m_core: { unit: "kg" },
     B_core: { unit: "T" },
   },
+  // Induction-machine circuit scalars (the deep-bar/saturation tables
+  // are TOML-only: collect() clones the raw config, so they survive
+  // form edits untouched).
+  induction: {
+    R_2: { unit: "Ω" },
+    L_m: { unit: "H" },
+    L_sigma_s: { unit: "H" },
+    L_sigma_r: { unit: "H" },
+    n_bars: { int: true },
+    f_rated: { unit: "Hz" },
+    s_rated: {},
+    V_LL_rated: { unit: "V rms" },
+  },
 };
 
 // all sweepable fields are lengths — entered in mm like the form above,
@@ -85,7 +100,7 @@ let rawConfig = null; // parsed TOML of the loaded config, section layout intact
 let formEl, saveNameEl, saveMsgEl, modelListEl, axesEl, runMsgEl;
 const modelMeta = {}; // keyed by model key, holds needs_params from /api/models
 
-// -- parameter form --------------------------------------------------------------
+// -- parameter form --------------------------------------------
 
 // trims binary-float noise from scaled values (0.0301*1000 -> "30.1")
 const fmt = (v) => String(Number(v.toPrecision(12)));
@@ -252,7 +267,7 @@ async function load(name) {
   renderForm();
 }
 
-// -- model selector + sweep builder -----------------------------------------------
+// -- model selector + sweep builder --------------------------
 
 function checkedModels() {
   return [...modelListEl.querySelectorAll("input:checked")].map((i) => i.value);
@@ -381,7 +396,7 @@ function runSweep() {
   runJob({ motor, model: "sweep", params: { axes, model_keys: models } });
 }
 
-// -- panel contract -----------------------------------------------------------
+// -- panel contract ----------------------------------------------
 
 export default {
   name: "config_editor",

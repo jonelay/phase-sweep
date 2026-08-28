@@ -1,0 +1,178 @@
+# Parviainen 5 kW / 300 rpm AFPM prototype — axial flux SPM, 12-pole, WYE
+# Third axial-flux anchor and the first with full measured cross-validation
+# (back-EMF, efficiency, cogging, thermal). Research prototype with complete
+# geometry — will be the primary anchor for the axial-flux analytical solver
+# when it is implemented.
+# Source:
+#   A. Parviainen, "Design of Axial-Flux Permanent-Magnet Low-Speed Machines
+#   and Performance Comparison Between Radial-Flux and Axial-Flux Machines,"
+#   D.Sc. thesis, Lappeenranta University of Technology, Acta Universitatis
+#   Lappeenrantaensis 208, 2005. Chapter 3, Tables 3.1 and 3.3, Appendix A.3.
+#   PDF (open access): https://web.mit.edu/kirtley/binlustuff/literature/electric%20machine/designOfAxialFluxPMM.pdf
+#   Also published as: Parviainen, Niemelä, Pyrhönen, "Modeling Axial-Flux
+#   Permanent-Magnet Machines," IEEE Trans. Ind. Appl., 40(5), 2004, pp. 1333-1340.
+#
+# Topology: 1-rotor-2-stators (TORUS), surface-mounted NdFeB (Neorem 495a),
+# sinusoidal magnet shape, solid-iron rotor disk (S232JR), stator lamination
+# M600-50A (stacking factor 0.92). Double-layer lap winding, q = 1 (slots
+# per pole per phase).
+#
+# PARALLEL STATOR CONVENTION (critical):
+#   The two stators are connected electrically in parallel in star (wye).
+#   Terminal voltage = per-stator voltage; terminal current = 2 × per-stator.
+#   Table 3.1 "rated phase current" I_ph = 8.4 A is the TERMINAL current
+#   (per-stator = 4.2 A). Power check: P = T·ω = 159·(2π·300/60) = 5.0 kW ✓.
+#   Table 3.3 R_ph = 3.7 Ω and L_d = 0.055 H are PER-STATOR values (the
+#   analytical model computes per-stator, and measured agrees). The ACS600
+#   inverter identification "estimated by the inverter" may report per-stator
+#   or terminal depending on configuration — Table 3.3 agreement with the
+#   per-stator analytical values confirms they are per-stator.
+#   For the Motor dataclass (single terminal equivalent):
+#     psi_f = per-stator (same as terminal — parallel → same voltage)
+#     R_s = R_stator / 2 = 1.85 Ω (parallel halves resistance)
+#     L_d = L_stator / 2 = 0.0275 H (parallel halves inductance)
+#     L_q = L_stator / 2 = 0.03 H
+#     I_rated = 8.4 A rms (terminal)
+#
+# psi_f DERIVATION (from E_PM,rms = 211 V at 300 rpm, Table 3.1/3.3):
+#   psi_f = √2 · E_PM,rms / (n_p · ω_mech)
+#         = √2 · 211 / (6 · 2π·300/60)
+#         = 1.5831 Wb (peak per-phase)
+#   Cross-check: τ_em = 1.5·n_p·psi_f·√2·I = 1.5·6·1.583·√2·8.4
+#   = 169.3 Nm electromagnetic vs 159 Nm shaft (+6.4% — losses).
+#   Same margin as ORNL FSCW anchor (+5.2%).
+#
+# B_r at operating temperature: Table 3.1 gives B_r = 1.05 T at 100 °C.
+# Appendix A.3 gives B_r = 1.10 T at 20 °C (Neorem 495a).
+# The back-EMF measurement (Fig. 3.6) was taken "having reached its
+# operation temperature" (magnets ~95 °C per Table 3.4), so psi_f
+# corresponds to the hot (100 °C) magnet condition.
+
+[motor]
+name = "Parviainen 5 kW AFPM prototype"
+type = "axial-flux SPM (1-rotor 2-stators TORUS, concentrated winding)"
+topology = "axial"
+
+[circuit]
+n_p = 6                # 12 poles (Table 3.1: p = 6)
+R_s = 1.85             # Ω per-phase, terminal (Table 3.3: 3.7 per-stator / 2)
+L_d = 0.0275           # H per-phase, terminal (Table 3.3: 0.055 per-stator / 2)
+L_q = 0.03             # H per-phase, terminal (Table 3.3: 0.06 per-stator / 2)
+psi_f = 1.5831         # Wb, peak per-phase — derived from E_PM (see header)
+I_rated_rms = 8.4      # A rms, terminal (Table 3.1)
+
+[winding]
+n_slots = 36           # per stator (Table 3.1)
+connection = "wye"     # star, stators in parallel
+layers = 2             # double-layer lap
+turns_per_phase = 840  # N_ph per stator (Table 3.1)
+q = 1                  # slots per pole per phase
+N = 140                # turns per coil (thesis p. 74: "each of the phase
+                       # coils includes 140 turns")
+coils_series = 6       # 840 / 140 series turns per phase, per stator
+k_w = 1.0              # q = 1 double-layer lap, full pitch (thesis Eq. 2.23
+                       # with wc = tau_p gives xi_1 = 1)
+
+[materials]
+B_rem = 1.05           # T at 100 °C operating temperature (Table 3.1) —
+                       # hot value: the measured E_PM (211 V) was taken at
+                       # operating temperature (~95 °C magnets, Table 3.4)
+mu_r_pm = 1.05         # Neorem 495a recoil: Br/(mu0*Hc) = 1.10/1.043 = 1.055
+                       # at 20 °C (Appendix A.3); 1.05 within datasheet spread
+mu_r_fe = 1000         # M600-50A stator / S232JR solid rotor (not used by
+                       # the layer model, validated + hashed only)
+
+[rated]
+torque_Nm = 159.0      # shaft torque at rated (Table 3.1)
+speed_rpm = 300        # rated speed (Table 3.1)
+power_kW = 5.0         # rated output (Table 3.1)
+
+[magnets]
+material = "Neorem 495a"
+B_r_20C = 1.10         # T (Appendix A.3, Table A3.1)
+B_r_100C = 1.05        # T (Table 3.1, operating temperature)
+H_ci = 2400            # kA/m intrinsic coercivity at 20 °C (Appendix A.3)
+H_c = 830              # kA/m coercivity at 20 °C (Appendix A.3)
+BH_max = 230           # kJ/m³ (Appendix A.3)
+thickness_mm = 4.0     # magnet axial thickness (Table 3.1)
+mass_kg = 2.1          # total PM mass (Table 3.1)
+
+[geometry]
+D_out_mm = 328.0       # stator stack OD (Table 3.1)
+D_in_mm = 197.0        # stator stack ID (Table 3.1)
+airgap_mm = 1.5        # per stator side (Table 3.1)
+magnet_thickness_mm = 4.0  # axial (Table 3.1, [magnets] thickness_mm)
+rotor_yoke_mm = 20.0   # solid rotor disc (p. 74)
+stator_yoke_mm = 20.0  # stator yoke per stator (p. 74, estimated from total stack)
+variant = "1R2S"       # 1-rotor 2-stators TORUS
+n_slots = 36           # per stator (Table 3.1)
+slot_depth_mm = 15.0   # axial slot depth (estimated; < stator_yoke)
+slot_width_ratio = 0.5 # Table 3.1 (q=1 double-layer lap)
+alpha_p = 0.575        # equivalent square-wave magnet width of the
+                       # SINUSOIDAL magnet shape (thesis §3, Parviainen
+                       # 2004a): matching fundamentals gives
+                       # (4/pi)*sin(alpha*pi/2) = 1 -> alpha = (2/pi)*asin(pi/4)
+                       # = 0.5750. Not a physical arc ratio at r_mean.
+
+[envelope]
+stator_steel = "M600-50A"
+stacking_factor = 0.92 # measured (p. 74, lower than designed)
+rotor_material = "S232JR construction steel"
+
+[provenance]
+source = "Parviainen D.Sc. thesis, LUT, 2005. Ch. 3 Tables 3.1, 3.3; Appendix A.3"
+url = "https://web.mit.edu/kirtley/binlustuff/literature/electric%20machine/designOfAxialFluxPMM.pdf"
+isbn = "952-214-029-5"
+motor_model = "LUT 5 kW / 300 rpm AFPM laboratory prototype (1R2S TORUS)"
+duty = "continuous at rated 5 kW, 300 rpm; water-cooled (2.5 kg/min) or natural convection"
+E_PM_rms_V = 211              # measured no-load phase EMF (Table 3.3)
+load_angle_meas_deg = 25      # measured by inverter (Table 3.3)
+load_angle_calc_deg = 27      # analytical (Table 3.3)
+L_s_no_load_grid_H = 0.057   # synchronous inductance from no-load grid test (p. 77)
+R_ph_per_stator_ohm = 3.7    # per-stator DC resistance (Table 3.3)
+L_d_per_stator_H = 0.055     # per-stator, inverter-estimated (Table 3.3)
+L_q_per_stator_H = 0.06      # per-stator, inverter-estimated (Table 3.3)
+L_d_analytical_H = 0.064     # per-stator, analytical (Table 3.3)
+L_q_analytical_H = 0.065     # per-stator, analytical (Table 3.3)
+efficiency_pct = 89.2         # measured at rated, natural convection (§3.5)
+efficiency_calc_pct = 89.6    # analytical at rated (§3.5)
+max_power_water_kW = 7.4      # max output with water cooling, T_wind < 150 °C (§3.5)
+notes = """
+Third axial-flux anchor and the only one from an academic prototype with
+complete geometry, measured circuit parameters, and measured performance
+(back-EMF, efficiency, cogging, thermal maps). The thesis also publishes
+analytical and 3D-FEA results for direct cross-validation.
+
+Key measured data:
+  - Back-EMF: Fig. 3.6(a) shows three-phase waveform at operating temp
+    (~95 °C magnets); Fig. 3.6(b) overlays analytical (with/without PM
+    leakage), 3D-FEA, and measured — good agreement on fundamental,
+    measured has flat-top from magnet radial joint manufacturing defect.
+  - Cogging: Fig. 3.7 — measured is ~2x analytical and 3D-FEA amplitudes
+    due to the magnet joint aligning with slot openings (§3.4). Dominant
+    6th harmonic (q=1). Peak ~0.008 p.u.
+  - Efficiency: Fig. 3.9 — measured and calculated vs load, water-cooled
+    (2.5 kg/min). Analytical slightly low below 6 kW, matches at rated,
+    drops rapidly above 6.5 kW (thermal runaway onset).
+  - Thermal: Tables 3.4-3.6 — calculated vs measured at multiple points
+    for air-cooled (5 kW) and water-cooled (5 kW at 1 kg/min, 7 kW at
+    5 kg/min). Winding temp 110 °C air-cooled, 52 °C water (1 kg/min)
+    at rated.
+
+Circuit-tier eligible: rated_torque (Kt cross-check, +6.4% EM vs shaft),
+thermal_duty (two cooling methods, measured temps at multiple loads).
+Geometry-tier eligible (future): back-EMF from analytical model, cogging
+torque, FEM field. The thesis's own analytical model (Ch. 2) is a natural
+cross-validation target for our axial-flux solver.
+
+Inductance note: L_d analytical (0.064 H) exceeds measured (0.055 H) by
+16%; L_q differs by 8%. The no-load grid test gives L_s = 0.057 H,
+consistent with the inverter estimate. The analytical model over-predicts
+inductance — a known pattern for this class of machine (§3.2).
+
+Magnet defect note (§3.3, p. 75): each magnet is composed of two radial
+blocks with a joint parallel to the machine radius. The joint reduces flux
+and causes a flat-topped back-EMF waveform. The fundamental amplitude
+(211 V) is unaffected, but the cogging torque is ~2x the defect-free
+prediction because the joint aligns with slot openings.
+"""

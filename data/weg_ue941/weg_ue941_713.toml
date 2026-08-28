@@ -1,0 +1,42 @@
+# WEG UE 941/713 — 4-pole PMSM synchronous motor (bench load motor)
+# Nr. 3186512, the physical high-power SKU in the frame-80 family.
+#
+# Source: nameplate / test bench documentation.
+#   kT = 1.86 Nm/A, peak torque 28.5 Nm (PRS 3x overload row).
+#   I_max = 20 A.
+#
+# This is the higher-power companion to the UE 921 series. Different
+# winding from the 921 pair (higher kT, higher current capacity).
+# No published electrical datasheet (L_d, L_q, psi_f, R_s unknown
+# from published sources).
+
+[motor]
+name = "WEG UE 941/713"
+type = "PMSM (4-pole IEC frame-80, high-power SKU)"
+
+[circuit]
+n_p = 2                # 4 poles (same family as UE 921)
+I_rated_rms = 20.0     # A rms (I_max from table; actual S1 continuous unknown)
+# R_s, L_d, L_q, psi_f: NOT published for this motor
+# kT = 1.86 Nm/A (peak torque / peak current relationship, from PRS)
+
+[rated]
+torque_Nm = 28.5       # peak (PRS 3x overload row)
+# speed_rpm, frequency_Hz: not published independently
+
+[provenance]
+source = "WEG nameplate + PRS D0019499 rev 2.00 overload table, Nr. 3186512"
+motor_model = "WEG UE 941/713 (IEC frame 80, high-power SKU)"
+duty = "S2 intermittent (3x overload row in PRS)"
+notes = """
+High-power bench load motor. The 28.5 Nm is a PEAK from the PRS 3x
+overload row, not an S1 continuous rating. kT = 1.86 Nm/A is derived
+from peak torque / peak current; the relationship at rated continuous
+load may differ (saturation, thermal derating).
+
+No published R_s, L_d, L_q, or psi_f. Cannot run any d-q solver.
+
+Eligible for: nameplate reference / kT sanity check only.
+Not eligible for: rated_torque, stall_torque, torque_speed, drive_sim,
+  analytical, FEM.
+"""

@@ -34,6 +34,14 @@ RECORD = DATA / "b_core_calibration.record.json"
 # matching comment in motors/creator_case_pmsm.toml. This is the only code
 # definition; tests/test_iron_loss.py imports the function below rather than
 # repeating the arithmetic.
+# KNOWN STALE: this value came from a linear solve of the pre-inset
+# CREATOR config. A fem v8 open-circuit nonlinear inset solve (trapezoid
+# of the positive Br lobes over the revolution / n_p, times
+# r_ag * L_stk; Newton and Picard agree to 1e-6) measures 177.92e-6.
+# Adopting it requires regenerating b_core_calibration.record.json,
+# which needs the fetched iron_loss_noload dataset — fold the refresh
+# into the CREATOR data-fetch work, updating the 0.273/0.183 W/2.7x
+# numbers here, in the motor TOML comment, and in the two test pins.
 PHI_POLE = 188.1e-6
 
 

@@ -1,30 +1,42 @@
 # phase-sweep
 
-PMSM simulation for stator/rotor design exploration. Built on
-[motulator](https://github.com/Aalto-Electric-Drives/motulator) and
-[NGSolve](https://ngsolve.org/).
+Synchronous-machine simulation for stator/rotor design exploration. Integrates
+with [motulator](https://github.com/Aalto-Electric-Drives/motulator) and
+[NGSolve](https://ngsolve.org/) through optional dependencies.
 
 ![phasesweep dashboard — CREATOR Case PMSM results](docs/images/dashboard.png)
 
+## Project status
+
+**Status as of 2026-08-30:** v0.5.0 is the latest release, and development
+continues on `main`. Requires Python 3.12+.
+
+See the [CHANGELOG](CHANGELOG.md) for release history.
+
 ## What it does
 
-phase-sweep takes a PMSM defined in TOML and runs it through two
-independent air-gap field solvers (Zhu & Howe 2002 closed-form and
-NGSolve 2D FEM with nonlinear iron) that solve the same motor and can be
-compared directly. Circuit-parameter models add torque-speed envelopes,
+phase-sweep takes a synchronous motor defined in TOML and runs it through
+topology-appropriate field solvers. For supported radial-flux motors, the
+independent Zhu & Howe (2002) closed-form and NGSolve 2D FEM solvers analyze
+the same motor and can be compared directly. Circuit-parameter models add
+torque-speed envelopes,
 drive simulation (motulator), and thermal modeling from datasheet values
-alone, no geometry required. The repo includes 23 reference motors
-across 13 sources, geometry sweeps, and a browser dashboard for running
-jobs and comparing results against imported measurements. Every result is
-hashed against its inputs into an append-only JSONL store.
+alone, no geometry required. The repo includes example and validation motors
+spanning SPM, IPM, outrunner, SynRM, Halbach, inset, and axial-flux topologies,
+with published or measured references where available. It also provides
+geometry sweeps and a browser dashboard for running jobs and comparing results
+against imported measurements. Every result is hashed against its inputs into
+an append-only JSONL store.
 
 ## Features
 
 **Field solvers**
 - Zhu & Howe (2002) closed-form air-gap field — inrunner and outrunner
-- NGSolve 2D FEM — smooth-bore and slotted stators (OCC boolean geometry, exact arc-bounded slots), linear or nonlinear iron (Picard iteration), armature reaction, Maxwell-stress torque
+- NGSolve 2D FEM — smooth-bore and slotted stators (OCC boolean geometry, exact arc-bounded slots), linear or nonlinear iron (damped Newton by default, with Picard startup/fallback), armature reaction, Maxwell-stress torque
 - Cogging torque via FEM rotation sweep; demagnetization screen at a specified fault current
+- Axial-flux machines: quasi-3D layer model (Parviainen) and multi-plane 2D Cartesian FEM, sharing the same TOML/registry/result-store pipeline
 - Spatial-FFT harmonic decomposition (optional CuPy GPU path, falls back to NumPy)
+- Independent-code verification: the radial and axial FEM solvers are cross-checked against [ElmerFEM](https://www.elmerfem.org/) using a different code, mesh, basis, and nonlinear linearization — see the [validation report](docs/validation-report.md)
 
 **Circuit-parameter models**
 - MTPA rated torque, stall torque, torque-speed envelope with field weakening (continuous and peak)
@@ -35,10 +47,10 @@ hashed against its inputs into an append-only JSONL store.
 - motulator current-vector control transients, single-mass or two-mass (compliant shaft) load
 
 **Sweeps and validation**
-- Geometry and parameter sweeps with parallel execution and crash-safe JSONL result storage
+- Geometry and parameter sweeps with parallel execution, batched model dispatch, and crash-safe JSONL result storage
 - Perturbation-based sensitivity analysis (OD, gap, L_stk, B_rem, ...)
 - Cross-validation framework: import measured data, compare against computed results across motors
-- Single-parameter calibration against measured quantities
+- Bounded multi-parameter calibration against measured quantities
 
 **Dashboard**
 - Local FastAPI server + browser dashboard: queue solver jobs, watch progress live, plot stored waveforms and envelopes, edit motor configs
@@ -50,6 +62,15 @@ hashed against its inputs into an append-only JSONL store.
 [result-store contract](docs/result-store-contract.md) |
 [glossary](docs/glossary.md) |
 [references](docs/references.md)
+
+## Scope and limitations
+
+The registered field solvers are two-dimensional; the axial models combine
+multiple two-dimensional planes. Three-dimensional effects enter through
+offline correction studies rather than the normal run path.
+
+Saturated-inductance models, AC winding losses, and magnet eddy-current losses
+are not yet implemented.
 
 ## Install
 
@@ -79,10 +100,10 @@ Optional extras:
 | `[mkl]` | Intel MKL BLAS backend for NGSolve |
 | `[test]` | pytest + plugins |
 
-NGSolve provides wheels for Linux and macOS. On Windows, install
-NGSolve separately following the [NGSolve install guide](https://ngsolve.org/downloads).
-The circuit-parameter models and CLI tools work on all platforms
-without NGSolve.
+NGSolve provides Python packages for supported Linux, macOS, and Windows
+environments. See the [NGSolve installation guide](https://ngsolve.org/installation.html)
+for current platform details.
+The circuit-parameter models and non-FEM CLI paths do not require NGSolve.
 
 Or with [uv](https://docs.astral.sh/uv/):
 
@@ -94,8 +115,8 @@ uv sync --extra all --extra test
 Run the tests:
 
 ```bash
-uv run pytest -m "not slow"   # fast suite — skips FEM integration tests
-uv run pytest                 # full suite
+uv run pytest -m "not fem and not slow"  # core CI lane
+uv run pytest                            # all tests available in this environment
 ```
 
 ## Quick start
@@ -108,28 +129,32 @@ from phasesweep import MODEL_REGISTRY, RunConfig, load_motor
 motor = load_motor("motors/prius_2004.toml")
 cfg = RunConfig(motor=motor, model="torque_speed")
 envelope = MODEL_REGISTRY["torque_speed"].fn(cfg)
-print(f"Peak torque: {envelope['tau_curve_peak'][0]:.0f} Nm")   # 905 Nm
-print(f"Peak power:  {envelope['p_max_peak']/1000:.0f} kW")     # 62 kW
+print(f"Peak torque: {envelope['tau_curve_peak'][0]:.0f} Nm")
+print(f"Peak power:  {envelope['p_max_peak']/1000:.0f} kW")
 ```
 
 Both numbers are constant-inductance over-predictions — see the
 [saturation caveat](#torque-speed-envelope-prius-2004-ipm) below.
 
 Compute the air-gap field of a motor with full geometry — analytically,
-then with the 2D FEM solver:
+then with the 2D FEM solver, and compare:
 
 ```python
-motor = load_motor("motors/creator_case_pmsm.toml")
+motor = load_motor("motors/belkhadir_outrunner.toml")
 
 cfg = RunConfig(motor=motor, model="analytical", n_theta=720)
 metrics = MODEL_REGISTRY["analytical"].fn(cfg)
-print(f"Back-EMF: {metrics['backemf_fundamental']:.1f} V")
+print(f"Analytical B1: {metrics['fundamental']:.3f} T")
+print(f"Back-EMF:      {metrics['backemf_fundamental']:.1f} V")
 
 cfg = RunConfig(motor=motor, model="fem", n_theta=720)
 metrics = MODEL_REGISTRY["fem"].fn(cfg)
-print(f"Air-gap fundamental: {metrics['fundamental']:.3f} T")
-print(f"Maxwell torque:      {metrics['tau_maxwell']:.4f} Nm")
+print(f"FEM B1:        {metrics['fundamental']:.3f} T")
 ```
+
+(The analytical solver covers surface-mounted magnets with air between
+the arcs; inset rotors like the bundled CREATOR motor are FEM-only and
+are rejected with a pointer to the `fem` model.)
 
 Launch the dashboard (needs the `[server]` extra):
 
@@ -141,6 +166,17 @@ It reads `motors/*.toml` and the result store in `output/`, queues
 solver jobs across worker processes, streams progress over WebSocket,
 and plots stored waveforms, harmonics, and envelopes in the browser.
 
+## CLI tools
+
+| Command | Purpose |
+|---------|---------|
+| `phasesweep-import` | Import measured data (JSON) into the result store |
+| `phasesweep-crossval` | Compare computed vs measured results across motors |
+| `phasesweep-calibrate` | Fit motor parameters to measured quantities |
+| `phasesweep-server` | Local FastAPI server + browser dashboard |
+
+Each takes `--help`.
+
 ## Available models
 
 `RunConfig(motor=..., model=<key>)` dispatches through `MODEL_REGISTRY`.
@@ -150,7 +186,9 @@ a motor missing a required field fails validation before any solve.
 | Key | Cost | Computes | Requires |
 |-----|------|----------|----------|
 | `analytical` | fast | Air-gap B_r waveform, fundamental, THD, back-EMF, flux linkage | geometry, magnet (`B_rem`, `alpha_p`, `mu_r_pm`) |
-| `fem` | slow | B_r waveform, \|B\| field grid, Maxwell-stress torque, peak iron flux density | geometry, magnet, `mu_r_fe` |
+| `fem` | slow | No-load B_r waveform, \|B\| field grid, fundamental, peak iron flux density; Maxwell-stress torque only when armature excitation (`j_s`) is supplied | geometry, magnet, `mu_r_fe`; winding/current info to derive a loaded `j_s` |
+| `analytical_axial` | fast | Air-gap B_z waveform, fundamental, THD, flux linkage (quasi-3D layer model) | axial geometry, magnet |
+| `fem_axial` | slow | B_z waveform and fundamental from multi-plane Cartesian FEM | axial geometry, magnet, `mu_r_fe` |
 | `cogging_torque` | slow | Peak-to-peak cogging torque, dominant harmonic order | geometry, magnet, `mu_r_fe` |
 | `demag_screen` | slow | Minimum magnet flux density vs knee at fault current, demag margin | geometry, magnet, winding (`N`, `k_w`, `coils_series`), `B_knee`; `i_fault` per run |
 | `drive_sim` | medium | Speed/torque/current transients, settling time, droop | `R_s`, `L_d`, `L_q`, `psi_f`, `J` |
@@ -161,8 +199,13 @@ a motor missing a required field fails validation before any solve.
 | `thermal_duty` | fast | S1 verdict, copper loss, winding temperature over a duty profile | `psi_f`, `R_s`, duty profile |
 | `iron_loss` | fast | Hysteresis + eddy core loss at a given speed | `[iron]` section (`k_h`, `k_e`, `alpha_fe`, `m_core`, `B_core`) |
 
-Six more registry keys (`backemf_capture`, `inductance_test`,
-`resistance_test`, `torque_test`, `iron_loss_test`, `airgap_flux_test`)
+The `fem` quick-start call above is a no-load field solve and does not
+return loaded torque. See
+[docs/add-a-radial-pmsm.md](docs/add-a-radial-pmsm.md) for the staged
+new-motor workflow.
+
+The registry keys `backemf_capture`, `inductance_test`,
+`resistance_test`, `torque_test`, `iron_loss_test`, and `airgap_flux_test`
 are measured-record types with no compute function — they are imported
 with `phasesweep-import` and anchor the cross-validation comparisons.
 
@@ -192,10 +235,10 @@ MAX_I_S = 30.0   # A peak
 ```
 
 Sections, fields, units, and defaults are documented in
-[docs/motor-toml.md](docs/motor-toml.md). The bundled
-[`motors/`](motors/) files (Prius 2004, CREATOR, 14 mm outrunner,
-three published outrunners) are worked examples with full provenance
-comments.
+[docs/motor-toml.md](docs/motor-toml.md). The bundled [`motors/`](motors/)
+files are worked examples with provenance comments. To add a new motor and
+check it honestly, follow [docs/add-a-radial-pmsm.md](docs/add-a-radial-pmsm.md)
+and `scripts/check_motor.py`.
 
 ## Verification and validation
 
@@ -205,111 +248,52 @@ The torque and field-weakening models are validated against the Toyota
 Prius 2004 traction motor (50 kW, 8-pole, V-shape NdFeB). Circuit
 parameters from ORNL teardown and dynamometer reports
 ([OSTI 885676](https://www.osti.gov/biblio/885676),
-[OSTI 890029](https://www.osti.gov/biblio/890029)). The stall torque
-bound (≥ 340 Nm at 250 A) and MTPA angle are cross-validated in the
-test suite; the constant-inductance model over-predicts at high
+[OSTI 890029](https://www.osti.gov/biblio/890029)). Stall torque and the
+MTPA angle are cross-validated in the test suite; the constant-inductance
+model over-predicts at high
 current (L_q saturates), which is a documented limitation. See
 [docs/validation-report.md](docs/validation-report.md) for details.
 
 ### Solver verification (Zhu & Howe)
 
 The NGSolve FEM solver is verified against the Zhu & Howe (2002) closed-form
-air-gap field solution. The fundamental agrees within 1% on the Zhu & Howe
-reference configurations and within 2% across the other tested inrunner and
-outrunner configurations (test-enforced bounds).
+air-gap field solution across reference inrunner and outrunner configurations.
+The enforced bounds and current results live in the requirements and
+validation report.
+
+It is also cross-checked against [ElmerFEM](https://www.elmerfem.org/) —
+an independent code with its own mesher, basis, and nonlinear
+linearization — on smooth-bore, discrete-arc, nonlinear-BH, slotted, and
+armature-current cases, with an equivalent check for the axial solver.
+The comparison JSONs are pinned in
+`scripts/elmer_radial/` and `scripts/elmer_axial/` and re-validated by
+the fast test suite on every run; regenerating them requires a local
+ElmerSolver (see the harness READMEs).
 
 ### Back-EMF and torque validation (CREATOR benchmark)
 
 Cross-checked against the [CREATOR](https://doi.org/10.3217/sns1d-77m43)
-open-benchmark PMSM (70 W, 4-pole, 6-slot, sintered ferrite — Dhakal et
-al., COMPEL 2025):
+open-benchmark PMSM (sintered-ferrite inrunner; Dhakal et al., COMPEL
+2025). Exact computed, published, tolerance, and error values live in the
+[validation report](docs/validation-report.md).
 
-| Test | Computed | Published | Error |
-|------|----------|-----------|-------|
-| Back-EMF (E_0) | 47.91 V | 47.37 V | 1.1% |
-| Rated torque (MTPA at I_rated) | 0.107 Nm | 0.100 Nm | 6.8% |
-| Max torque (MTPA at I_max) | 0.157 Nm | 0.150 Nm | 4.7% |
-
-![CREATOR back-EMF — measured waveform vs analytical fundamental](docs/images/backemf_waveform.png)
+![CREATOR back-EMF — measured waveform and circuit-model fundamental](docs/images/backemf_waveform.png)
 
 CREATOR is specified by its published circuit parameters, so its flux
-linkage ψ_f is taken directly from the benchmark. These figures therefore
-validate the back-EMF and torque pipeline — electrical-speed conversion,
+linkage ψ_f is taken directly from the benchmark. The comparison therefore
+validates the back-EMF and torque pipeline — electrical-speed conversion,
 `E = ω_e·ψ_f`, and the MTPA torque solve — against an independent
 measured-plus-published reference; they do **not** test the field solver's
-own prediction of ψ_f. (Push CREATOR's geometry through the field solver
-and ψ_f comes out ~7% high, in line with the ~6–7% over-prediction the 2D
-field model shows on the other geometry-driven benchmarks.)
+own prediction of ψ_f. The nonlinear FEM field prediction and its remaining
+bias are tracked in the validation report.
 
 The trapezoidal measured waveform reflects the near-rectangular ferrite
-magnets — consistent with the square-wave magnetization convention both
-solvers use; the analytical comparison is fundamental-only because the
-analytical waveform output does not yet include the higher spatial
-harmonics.
+magnets, consistent with the square-wave magnetization convention used by
+both field solvers. The computed back-EMF comparison is fundamental-only
+because the model currently reports a scalar fundamental rather than a
+predicted back-EMF waveform.
 
 ![Verification and validation summary](docs/images/multimotor_validation.png)
-
-## Package layout
-
-```
-phasesweep/
-├── machines/           # motor definitions
-│   ├── motor.py        #   Motor frozen dataclass (Geometry + electrical/winding/material)
-│   ├── geometry.py     #   Geometry dataclass, inrunner/outrunner factories, OCC mesh builder
-│   ├── configs.py      #   TOML loader (load_motor, load_motors)
-│   └── perturbation.py #   perturbation sweep definitions
-├── solvers/            # field solvers
-│   ├── analytical.py   #   Zhu & Howe (2002) closed-form air-gap field
-│   ├── fem_field.py    #   NGSolve 2D magnetostatic solver
-│   ├── fem_runner.py   #   subprocess isolation for NGSolve
-│   ├── fem_wedge.py    #   axial wedge model for end-effect studies
-│   ├── cogging.py      #   FEM rotation sweep
-│   └── harmonics.py    #   spatial FFT (CuPy optional)
-├── models/             # circuit-parameter models
-│   ├── rated_torque.py #   MTPA rated/stall torque (Morimoto quadratic)
-│   ├── torque_speed.py #   field-weakening envelope
-│   ├── thermal_duty.py #   copper-loss S1 budget screen
-│   ├── iron_loss.py    #   Bertotti two-term core loss
-│   └── demag_screen.py #   fault-current demagnetization check
-├── simulation/         # motulator drive simulation (sim.py, sim_runner.py)
-├── validation/         # crossval framework, measured-data import, calibration, CLIs
-├── vis/                # matplotlib plotting
-├── server/             # FastAPI local server + job queue
-├── dashboard/          # browser dashboard (static JS, served by the server)
-├── registry.py         # MODEL_REGISTRY: model metadata + dispatch
-├── solver_params.py    # validated solver param types + prepare_* factories
-├── sweep_types.py      # RunConfig, RunResult, run-id hashing
-├── result_store.py     # JSONL append-only store with crash-safe index
-├── geo_parallel.py     # geometry sweep grids + parallel execution
-├── defaults.py         # loads defaults.toml
-└── defaults.toml       # default solver parameters
-scripts/                # validation report, sensitivity analysis, cache population
-tests/                  # pytest suite (FEM integration tests marked slow)
-data/                   # reference data (Prius, CREATOR, Belkhadir, Awan, Deylami, 14 mm outrunner variants)
-motors/                 # motor parameter files (TOML)
-```
-
-## CLI tools
-
-| Command | Purpose |
-|---------|---------|
-| `phasesweep-import` | Import measured data (JSON) into the result store |
-| `phasesweep-crossval` | Compare computed vs measured results across motors |
-| `phasesweep-calibrate` | Fit a motor parameter (e.g. `B_rem`) to measured quantities |
-| `phasesweep-server` | Local FastAPI server + browser dashboard |
-
-Each takes `--help`.
-
-## Dependencies
-
-| Package | Purpose | License |
-|---------|---------|---------|
-| [NumPy](https://numpy.org/) / [SciPy](https://scipy.org/) | Numerical computation | BSD-3-Clause |
-| [motulator](https://github.com/Aalto-Electric-Drives/motulator) (optional) | Synchronous machine drive simulation | MIT |
-| [NGSolve](https://ngsolve.org/) (optional) | 2D finite element field solver | LGPL-2.1 |
-| [Matplotlib](https://matplotlib.org/) (optional) | Plotting | PSF (BSD-compatible) |
-| [FastAPI](https://fastapi.tiangolo.com/) + uvicorn (optional) | Local server + dashboard | MIT / BSD-3-Clause |
-| [CuPy](https://cupy.dev/) (optional) | GPU-accelerated harmonic decomposition | MIT |
 
 ## Reference data
 
@@ -325,13 +309,37 @@ The `data/creator_case_pmsm/` directory contains reference data from the
 **CC BY-NC-ND 4.0**. See [`data/creator_case_pmsm/README.md`](data/creator_case_pmsm/README.md)
 for full attribution and citation info.
 
-## Status
+## Dependencies
 
-Current release: **v0.4.0**. Actively developed. The field solvers are
-2D only — 3D effects are handled via end-effect correction factors, not
-a 3D mesh. Saturated-inductance models, AC winding losses, and magnet
-eddy-current losses are not yet implemented. See the
-[CHANGELOG](CHANGELOG.md) for version history.
+| Package | Purpose | License |
+|---------|---------|---------|
+| [NumPy](https://numpy.org/) / [SciPy](https://scipy.org/) | Numerical computation | BSD-3-Clause |
+| [motulator](https://github.com/Aalto-Electric-Drives/motulator) (optional) | Synchronous machine drive simulation | MIT |
+| [NGSolve](https://ngsolve.org/) (optional) | 2D finite element field solver | LGPL-2.1 |
+| [Matplotlib](https://matplotlib.org/) (optional) | Plotting | PSF (BSD-compatible) |
+| [FastAPI](https://fastapi.tiangolo.com/) + uvicorn (optional) | Local server + dashboard | MIT / BSD-3-Clause |
+| [CuPy](https://cupy.dev/) (optional) | GPU-accelerated harmonic decomposition | MIT |
+
+## Package layout
+
+```
+phasesweep/
+├── machines/           # motor definitions and TOML loading
+├── solvers/            # analytical and FEM field solvers
+├── models/             # circuit-parameter models
+├── simulation/         # motulator drive simulation
+├── validation/         # measured-data import, comparison, and calibration
+├── vis/                # matplotlib plotting
+├── server/             # FastAPI server and job queue
+├── dashboard/          # browser dashboard assets
+├── registry.py         # model metadata and dispatch
+├── sweep_types.py      # run configuration, results, and identifiers
+└── result_store.py     # append-only JSONL result store
+scripts/                # validation and maintenance tools
+tests/                  # pytest suite, with dedicated FEM and slow markers
+data/                   # published, measured, and derived validation data
+motors/                 # motor parameter files
+```
 
 ## Contributing
 
@@ -346,7 +354,7 @@ Questions and discrepancy reports:
 
 If you use phasesweep in a report or publication:
 
-> J. Lay, *phasesweep: PMSM simulation for stator/rotor design
+> J. Lay, *phasesweep: synchronous-machine simulation for stator/rotor design
 > exploration*, 2026. https://github.com/jonelay/phase-sweep
 
 ## License
@@ -361,4 +369,4 @@ licensed under
 see [`data/creator_case_pmsm/README.md`](data/creator_case_pmsm/README.md).
 Other data files contain parameter values transcribed from the cited
 publications, or lab measurements by the project authors, and are
-covered by the MIT license.
+covered by the LGPL-2.1 license.

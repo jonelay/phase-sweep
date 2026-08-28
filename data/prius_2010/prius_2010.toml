@@ -1,0 +1,123 @@
+# Toyota Prius 2010 (Gen3 XW30) — 60 kW IPM traction motor
+# 8-pole, 48-slot, V-shape NdFeB interior magnets, distributed winding
+#
+# Primary source (physical teardown + electrical measurements):
+#   Burress et al., ORNL/TM-2010/253, March 2011
+#   "Evaluation of the 2010 Toyota Prius Hybrid Synergy Drive System"
+#   https://info.ornl.gov/sites/publications/files/Pub26762.pdf
+#
+# GEOMETRY-RICH MOTOR — complete physical dimensions from ORNL teardown
+# (Table 2.7), including stator/rotor radii, airgap, slot dimensions,
+# magnet dimensions, and mass breakdowns. This is the generation AFTER
+# the 2004 Prius already in the repo.
+#
+# CIRCUIT PARAMETERS NOT PUBLISHED: the ORNL report characterizes the
+# motor physically (teardown, back-EMF graph, locked-rotor torque curves,
+# efficiency maps) but does NOT tabulate L_d, L_q, or psi_f. Those
+# require FEA extraction from the published geometry — available from
+# secondary sources (Kuptsov-style parameterization, EMWorks, Pyleecan
+# community models) but not from this primary source alone.
+#
+# Key design differences from 2004 Prius:
+#   - Higher power: 60 kW vs 50 kW
+#   - Shorter stack: 50.8 mm vs 84 mm (stator), despite larger power
+#   - Fewer winding turns: 11 vs 9 per coil (but 12 parallel wires vs 13)
+#   - Smaller magnets: 49.3 × 17.88 × 7.16 mm vs 83.1 × 18.9 × 6.5 mm
+#   - Higher speed: 13,500 rpm vs 6,000 rpm
+#   - Higher boost voltage: 650 Vdc vs 500 Vdc
+#   - Same stator/rotor diameters as the 2007 Camry (264 mm / 160.4 mm)
+#
+# Locked-rotor torque (Fig. 3.7, dc current):
+#   250 A → ~225 Nm peak
+#   200 A → ~175 Nm peak
+#   150 A → ~135 Nm peak
+#   100 A → ~95 Nm peak
+# For all current levels, 2010 Prius produces greater torque than Camry
+# and LS 600h at the same current (Fig. 3.9).
+
+[motor]
+name = "Toyota Prius 2010 IPM"
+type = "IPMSM"
+topology = "inrunner"
+
+[geometry]
+r_outer = 0.1320       # m, stator OD/2 = 264.0 mm / 2 (Table 2.7)
+r_stator = 0.08095     # m, stator ID/2 = 161.9 mm / 2 (Table 2.7)
+r_magnet = 0.08020     # m, rotor OD/2 = 160.4 mm / 2 (Table 2.7)
+r_rotor = 0.07304      # m, rotor OD/2 - magnet_thickness = 80.20 - 7.16 mm
+                       # NOTE: this is approximate — the V-shape IPM rotor
+                       # does not have a simple cylindrical magnet boundary.
+                       # r_rotor = effective iron boundary behind V-magnets.
+r_inner = 0.0255       # m, rotor lamination ID/2 = 51.0 mm / 2 (Table 2.7)
+L_stk = 0.0508         # m, stator stack length = 50.8 mm (Table 2.7)
+slot_opening_width = 0.00188  # m, 1.88 mm (Table 2.7)
+
+[winding]
+n_slots = 48           # Table 2.7
+N = 11                 # turns per coil (Table 2.7)
+coils_series = 8       # 8 coils in series per phase (Table 2.7)
+
+[circuit]
+n_p = 4                # 8 poles (Table 2.1)
+R_s = 0.077            # Ohm per phase at 21°C (Table 2.7)
+# L_d, L_q, psi_f: NOT PUBLISHED in ORNL/TM-2010/253.
+# The back-EMF is provided as a graph only (Fig. 3.6), not tabulated.
+# FEA-based extraction needed — see Kuptsov et al. (2019) for the 2004
+# Prius methodology; no equivalent published parameterization exists
+# for the 2010 Prius in open-access literature found in this search.
+
+[materials]
+magnet_type = "NdFeB"
+mu_r_pm = 1.05
+# B_rem measured via Walker Scientific hysteresis (Fig. 2.72):
+# at 121°C, B_r ≈ 1.08 T; at 215°C, B_r ≈ 0.89 T
+# Room temperature B_rem not explicitly tabulated but from Fig. 2.72:
+# approximately 1.17 T at 20°C (interpolated from temperature curve)
+B_rem = 1.17           # T at 20°C, estimated from Fig. 2.72 temperature curve
+
+[drive]
+U_DC = 650.0           # V, maximum boost converter output (Table 2.1)
+# MAX_I_S, W_REF: not explicitly published; locked-rotor tests go to 250 A dc
+
+[rated]
+power_kW = 60.0        # Table 2.1
+speed_rpm = 13500      # max speed (Table 2.1)
+torque_Nm = 207.0      # peak torque (Table 2.1)
+
+[provenance]
+source = "Burress et al., ORNL/TM-2010/253, March 2011"
+url = "https://info.ornl.gov/sites/publications/files/Pub26762.pdf"
+motor_model = "2010 Toyota Prius (Gen3 XW30) MG2 traction motor"
+references = [
+    "Burress et al., ORNL/TM-2010/253, OSTI 1007833, 2011 (teardown + benchmark)",
+]
+notes = """
+The 2010 Prius (Gen3) is the second Toyota traction motor generation with a
+complete ORNL physical characterization. Unlike the 2004 Prius (already in the
+repo as a circuit-only motor), this entry includes the FULL GEOMETRY from the
+ORNL teardown — stator/rotor radii, airgap, slot dimensions, magnet dimensions.
+
+However, the ORNL report does not extract d-q circuit parameters (L_d, L_q,
+psi_f). The back-EMF data is presented as a graph (Fig. 3.6) without tabulated
+values, and the locked-rotor torque data (Fig. 3.7, 3.9) is graphical only.
+No secondary source was found with a published L_d/L_q parameterization for
+this specific motor generation.
+
+GEOMETRY CAVEAT: r_rotor (73.04 mm) is an approximation. The actual V-shape
+IPM rotor has magnets embedded in V-shaped slots — the "iron boundary behind
+magnets" is not a simple cylinder. For proper FEM modeling of this topology,
+the actual V-shape geometry (magnet angle, bridge thickness, barrier shape)
+would be needed, which requires the rotor lamination drawing (visible in
+Fig. 2.63 but not dimensioned beyond OD/ID).
+
+Eligible for: analytical (with geometry caveat — the V-IPM radii model is
+  approximate), FEM (same caveat), field solvers at the geometry level.
+Not eligible for: rated_torque, stall_torque, torque_speed, drive_sim
+  (no L_d, L_q, psi_f).
+
+Key measured data (ORNL, graphical only):
+  Back-EMF: Fig. 3.6, L-N rms vs speed, linear to ~13,500 rpm
+  Locked-rotor: Fig. 3.7, torque vs position at 25-250 A dc
+  Efficiency: Figs. 3.11-3.17, contour maps at 225/500/650 Vdc
+  Continuous duration: Figs. 3.22-3.30
+"""

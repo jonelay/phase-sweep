@@ -1,16 +1,25 @@
-"""Motor perturbation functions for sensitivity analysis."""
+"""Motor perturbation functions for sensitivity analysis.
+
+Motor.k_end is deliberately NOT invalidated by the geometry-affecting
+perturbations (OD, gap, L_stk), even though the computed value is tied
+to the source geometry: a near-constant multiplicative factor cancels in
+relative sensitivity, while dropping it would put an on/off k_end jump
+into every perturbed-vs-base delta. Its true geometry dependence is
+second-order at sweep deltas (±5%).
+"""
 
 from __future__ import annotations
 
 import dataclasses as dc
 from typing import Any, Literal
 
-from phasesweep.machines.geometry import inrunner, outrunner
+from phasesweep.machines.geometry import AxialFluxGeometry, inrunner, outrunner
 from phasesweep.machines.motor import Motor
 
 PerturbParam = Literal[
     "OD", "gap", "L_stk", "B_rem", "k_w", "psi_f", "R_s", "L_d", "L_q",
     "B_core",
+    "R_2", "L_m", "L_sigma_s", "L_sigma_r",
 ]
 
 # Circuit- and iron-tier scalars: perturbed by direct scaling, no geometry
@@ -18,6 +27,17 @@ PerturbParam = Literal[
 # geometry produces, so nothing downstream is invalidated by scaling it.
 _SCALAR_PARAMS: frozenset[str] = frozenset(
     {"psi_f", "R_s", "L_d", "L_q", "B_core"})
+
+# Induction-circuit scalars, nested on Motor.induction. Each has a
+# matching deep-bar/saturation table; the table's y-values are scaled by
+# the same factor so the scalar reference and the table stay consistent
+# (perturbing only the f=0 anchor of a deep-bar cage would be a lie).
+_INDUCTION_PARAMS: dict[str, str] = {
+    "R_2": "R_2_vs_f",
+    "L_m": "L_m_vs_i",
+    "L_sigma_s": "L_sigma_s_vs_f",
+    "L_sigma_r": "L_sigma_r_vs_f",
+}
 
 
 def scale_inductances(motor: Motor, factor: float) -> dict[str, Any]:
@@ -31,6 +51,24 @@ def scale_inductances(motor: Motor, factor: float) -> dict[str, Any]:
 
 
 def perturb_motor(motor: Motor, param: PerturbParam, delta: float) -> Motor | None:
+    if param in _INDUCTION_PARAMS:
+        if motor.induction is None:
+            return None
+        val = getattr(motor.induction, param)
+        if val is None:
+            return None
+        factor = 1.0 + delta
+        new_val = val * factor
+        if new_val <= 0:
+            return None
+        kw: dict[str, Any] = {param: new_val}
+        table_name = _INDUCTION_PARAMS[param]
+        table = getattr(motor.induction, table_name)
+        if table is not None:
+            kw[table_name] = tuple((x, y * factor) for x, y in table)
+        return dc.replace(motor, induction=dc.replace(motor.induction, **kw),
+                          name=f"{motor.name} [{param} {delta:+.1%}]")
+
     if param in _SCALAR_PARAMS:
         val = getattr(motor, param)
         if val is None:
@@ -41,7 +79,7 @@ def perturb_motor(motor: Motor, param: PerturbParam, delta: float) -> Motor | No
         return dc.replace(motor, **{param: new_val},
                           name=f"{motor.name} [{param} {delta:+.1%}]")
 
-    if motor.geometry is None:
+    if motor.geometry is None or isinstance(motor.geometry, AxialFluxGeometry):
         return None
     geo = motor.geometry
     topo = geo.topology
@@ -169,7 +207,7 @@ def perturb_motor(motor: Motor, param: PerturbParam, delta: float) -> Motor | No
         # NOTE: L_d and L_q are NOT scaled here. Magnetizing inductance scales
         # as k_w² but total L includes leakage (typically 15–25% of total) which
         # is k_w-independent. Without leakage decomposition the correct scaling
-        # factor is unknown. This is a documented limitation.
+        # factor is unknown. A documented model limitation.
         # Impact: k_w sensitivity on torque/back-EMF is correct (via psi_f
         # re-derivation); sensitivity on current-loop dynamics (L_d/L_q) is
         # underestimated.

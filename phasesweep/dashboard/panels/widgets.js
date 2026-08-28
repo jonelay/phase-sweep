@@ -21,8 +21,8 @@ export function statStrip(host, items) {
 }
 
 // Provenance stamp for a routed full result: `model vN · timestamp ·
-// result_id[:8]`. model_version is the save-time registry stamp;
-// the read side filters stale records, so a visible
+// result_id[:8]`. model_version is the save-time registry stamp
+//; the read side filters stale records, so a visible
 // result's stamp always matches the live registry — "v?" means a
 // record served by a server predating the stamp.
 export function provenanceText(result) {

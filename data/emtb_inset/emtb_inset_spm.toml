@@ -1,0 +1,100 @@
+# Goh et al. e-MTB Surface-Inset PMSM — 14-pole mid-drive prototype
+# First surface-inset magnet motor in the repo: tapered magnets recessed
+# into the rotor surface, flush with the rotor OD. Bridges SPM simplicity
+# with IPM-like reluctance torque contribution.
+#
+# Source: Goh, Xie, Wang, Zhu, Yu, Lee (2025), "Development of a
+#   Surface-Inset Permanent Magnet Motor for Enhanced Torque Density in
+#   Electric Mountain Bikes," Energies 18(14):3709.
+#   DOI: 10.3390/en18143709
+#   Institution: Nanyang Technological University, Singapore.
+#   Funded by Specialized Asia Pacific Pte. Ltd. (Grant 04IDS001538C140).
+#
+# Table 2 (proposed prototype, from physical teardown of a commercial
+# mid-drive motor baseline + NTU redesign):
+#   12 slots / 14 poles (7 pole pairs), single-layer concentrated winding
+#   Stator OD 91 mm, stator ID 57 mm, stack 25 mm
+#   PM: N48 NdFeB, thickness 2.18 mm, pole arc 19.3 deg mechanical
+#   Steel: 50JN1300 (JFE 0.50 mm non-oriented Si steel)
+#   Winding factor 0.933, slot filling factor 0.4
+#   Gear ratio 27.1 (mid-drive, not hub motor)
+#
+# Table 3 (experimental results — HBM torque transducer + LeCroy MDA
+# 8108HD oscilloscope, dynamometer test at 500 r/min with 29.3 A peak):
+#   Peak torque: 4.62 Nm (measured), 4.9 Nm (FEA) — 5.7% deviation
+#   Peak power: 726 W (measured), 770 W (FEA) — 5.7% deviation
+#   Efficiency: 80% (measured), 84% (FEA) — gap attributed to bearing
+#     drag, shaft misalignment, and real-material batch variation
+#   Torque density: 28.41 kNm/m3 (measured), 30.14 (FEA)
+#   Torque/PM volume: 635 Nm/L (measured)
+#
+# Back-EMF (Section 5): measured 3-phase waveforms confirm symmetry
+# and sinusoidal distribution. Fundamental deviation vs FEA: 5%.
+# Speed at which back-EMF was recorded is NOT stated in the paper.
+#
+# WHAT'S NOT PUBLISHED (verified against full Energies paper):
+#   R_s, L_d, L_q, psi_f — NONE tabulated. This is a design paper, not
+#   a characterization paper. The inset topology creates saliency
+#   (L_q > L_d) but the values are unknown from this source.
+#   Rotor OD, airgap, shaft diameter — NOT tabulated. Only stator
+#   dimensions and magnet thickness are given.
+#   Number of turns per coil, coils per phase — NOT tabulated.
+#   Back-EMF test speed — NOT stated (on-load test is at 500 r/min).
+#
+# NOTE: Table 2 gives slot filling factor 0.4, but the text (Section 4,
+#   p9) states 0.45 for the proposed design. Table 2 value used here.
+
+[motor]
+name = "NTU e-MTB Surface-Inset PMSM"
+type = "surface-inset PMSM (12s/14p mid-drive, tapered magnets flush with rotor)"
+
+[circuit]
+n_p = 7                # 14 poles (Table 2)
+# R_s: NOT published
+# L_d, L_q: NOT published (inset topology → saliency, L_q > L_d)
+# psi_f: NOT published
+
+[winding]
+k_w = 0.933            # Table 2
+
+[materials]
+B_rem = 1.40           # T, typical N48 NdFeB at 20 C (grade stated, value not measured)
+mu_r_pm = 1.05
+
+[rated]
+speed_rpm = 1500       # Table 3
+torque_Nm = 4.62       # measured peak (Table 3)
+power_kW = 0.726       # measured peak (Table 3)
+
+[provenance]
+source = "Goh, Xie, Wang, Zhu, Yu, Lee (2025), Energies 18(14):3709"
+doi = "10.3390/en18143709"
+institution = "Nanyang Technological University, Singapore"
+motor_model = "NTU surface-inset PMSM prototype for e-MTB mid-drive"
+duty = "intermittent peak (e-MTB mid-drive, gear ratio 27.1)"
+notes = """
+First surface-inset PMSM in the repo. The topology recesses tapered
+magnets into rotor pockets, flush with the rotor surface. This
+eliminates the retaining sleeve needed for conventional SPM at high
+speed, and introduces geometric saliency for reluctance torque (+20%
+peak torque vs baseline SPM, -33% current density at peak).
+
+The on-load test was conducted at 500 r/min with 29.3 A phase current
+amplitude. The measured average torque of 4.62 Nm is 5% below FEA,
+attributed to bearing friction, shaft misalignment, and manufacturing
+tolerances in the laminations vs idealized 50JN1300 steel data.
+
+The paper compares proposed inset vs baseline SPM (Table 2 has both).
+Baseline SPM: 12s/14p, stator OD 91 mm, stator ID 54.5 mm, N42UH
+magnets 3 mm thick, peak torque 4 Nm, efficiency 83%.
+
+Table 3 performance (measured): efficiency 80%, peak power 726 W,
+torque density 28.41 kNm/m3, torque/PM volume 635 Nm/L.
+FEA-only: copper losses 85 W, efficiency 84%.
+
+This is a TOPOLOGY REFERENCE, not a circuit-tier anchor.
+Eligible for: nameplate reference, torque density benchmark, topology
+  demonstration (inset magnet saliency + reluctance torque).
+Not eligible for: rated_torque, stall_torque, torque_speed, drive_sim,
+  analytical, FEM (no R_s, L_d, L_q, psi_f, no rotor dimensions).
+"""

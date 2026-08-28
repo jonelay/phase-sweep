@@ -1,0 +1,112 @@
+! Radial PMSM 2D magnetostatics — filled by run_elmer_radial.py
+! (str.format; literal MATC braces are doubled).
+Header
+  CHECK KEYWORDS Warn
+  Mesh DB "." "mesh"
+End
+
+Simulation
+  Coordinate System = Cartesian 2D
+  Simulation Type = Steady State
+  Steady State Max Iterations = 1
+  Output Intervals = 0
+  Max Output Level = 4
+End
+
+Constants
+  Permeability of Vacuum = 1.25663706143592e-6
+End
+
+Body 1
+  Name = "shaft"
+  Equation = 1
+  Material = 1
+End
+Body 2
+  Name = "pm"
+  Equation = 1
+  Material = 2
+End
+Body 3
+  Name = "airgap"
+  Equation = 1
+  Material = 3
+End
+Body 4
+  Name = "stator"
+  Equation = 1
+  Material = 1
+End
+Body 5
+  Name = "pm_gap"
+  Equation = 1
+  Material = 3
+End
+Body 6
+  Name = "slot"
+  Equation = 1
+  Material = 3
+{body6_extra}End
+{bodyforce_section}
+Equation 1
+  Active Solvers(3) = 1 2 3
+End
+
+Solver 1
+  Equation = MgDyn2D
+  Procedure = "MagnetoDynamics2D" "MagnetoDynamics2D"
+  Variable = A
+  Linear System Solver = Direct
+  Linear System Direct Method = umfpack
+  Steady State Convergence Tolerance = 1e-9
+{nl_block}End
+
+Solver 2
+  Equation = CalcFields
+  Procedure = "MagnetoDynamics" "MagnetoDynamicsCalcFields"
+  Potential Variable = "A"
+  Calculate Magnetic Flux Density = Logical True
+  Linear System Solver = Iterative
+  Linear System Iterative Method = CG
+  Linear System Max Iterations = 2000
+  Linear System Convergence Tolerance = 1e-12
+End
+
+Solver 3
+  Equation = SaveLine
+  Procedure = "SaveData" "SaveLine"
+  Exec Solver = After All
+  Filename = "gapline.dat"
+End
+
+! Iron (shaft + stator yoke): linear permeability or H-B curve
+Material 1
+{iron_block}End
+
+! Permanent magnet: square-wave radial magnetization, per-pole sign
+! sign(cos(n_p*theta)). Elmer convention B = mu0*mu_r*(H + M), so
+! M = B_rem/(mu0*mu_r_pm) [A/m]. Must live in Material — in a Body
+! Force it is silently ignored (axial README trap 1).
+Material 2
+  Relative Permeability = {mu_r_pm:.6e}
+  Magnetization 1 = Variable Coordinate 1, Coordinate 2
+    Real MATC "r=sqrt(tx(0)*tx(0)+tx(1)*tx(1)); s=1; if(cos({n_p}*atan2(tx(1),tx(0)))<0) {{s=-1;}}; {M:.10e}*s*tx(0)/r"
+  Magnetization 2 = Variable Coordinate 1, Coordinate 2
+    Real MATC "r=sqrt(tx(0)*tx(0)+tx(1)*tx(1)); s=1; if(cos({n_p}*atan2(tx(1),tx(0)))<0) {{s=-1;}}; {M:.10e}*s*tx(1)/r"
+End
+
+Material 3
+  Relative Permeability = 1.0
+End
+
+Boundary Condition 1
+  Name = "outer"
+  Target Boundaries(1) = 1
+  A = Real 0.0
+End
+
+Boundary Condition 2
+  Name = "midgap"
+  Target Boundaries(1) = 2
+  Save Line = Logical True
+End
