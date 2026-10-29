@@ -22,68 +22,43 @@ budget path.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from math import sqrt
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
+from phasesweep.defaults import COPPER_TEMP_COEFF
 from phasesweep.models.rated_torque import magnet_torque_constant, mtpa_gamma, mtpa_torque
-from phasesweep.solver_params import _reject_induction, _resolve_psi_f, _salient_pair
+from phasesweep.solver_params import (
+    MAGNET_REF_TEMP_C,
+    R_S_REF_TEMP_C,
+    derate_motor,
+    psi_f_at_magnet_temp,
+    r_s_at_operating_temp,
+    reject_induction,
+    resolve_psi_f,
+    salient_pair,
+)
 
 if TYPE_CHECKING:
     from phasesweep.machines.motor import Motor
     from phasesweep.sweep_types import RunConfig
 
-# Copper resistivity temperature coefficient (per K) and the reference
-# temperature of a datasheet R_s. 20 °C matches the back-EMF derating
-# reference; a 25 °C datasheet differs by ~2%, negligible
-# beside the ~50% rise to a class-F winding limit.
-from phasesweep.defaults import COPPER_TEMP_COEFF
-
-R_S_REF_TEMP_C: float = 20.0
-
-# Reference temperature of a datasheet B_rem / psi_f (magnet derating). Same 20 °C convention as R_S_REF_TEMP_C; unlike copper's
-# universal alpha, the magnet coefficient is grade-specific and lives on
-# Motor.alpha_Br.
-MAGNET_REF_TEMP_C: float = 20.0
-
-
-def psi_f_at_magnet_temp(
-    psi_f_ref: float, magnet_temp: float | None, alpha_Br: float | None,
-) -> float:
-    """psi_f (Wb, peak) derated to the magnet operating temperature.
-
-    psi_f(T) = psi_f_ref · [1 + alpha_Br·(T_magnet − T_ref)] — B_rem and
-    psi_f share the linear coefficient since psi_f is linear in B_rem.
-    With no magnet_temp there is nothing to derate to (cold reference
-    returned); alpha_Br alone is inert material data. The magnet runs
-    cooler than the winding hot-spot, so magnet_temp is its own field,
-    not winding_temp_limit. The (-0.01, 0) range check on alpha_Br lives
-    in Motor.__post_init__; combined with plausible temperatures the
-    factor stays well above zero.
-    """
-    if magnet_temp is None or alpha_Br is None:
-        return psi_f_ref
-    return psi_f_ref * (1.0 + alpha_Br * (magnet_temp - MAGNET_REF_TEMP_C))
-
-
-def r_s_at_operating_temp(
-    R_s_ref: float, winding_temp_limit: float | None,
-) -> float:
-    """R_s (Ω) derated to the winding temperature limit (worst-case S1).
-
-    R_s(T) = R_s_ref · [1 + α_cu·(T_limit − T_ref)]. At the S1 thermal
-    steady state the winding sits at winding_temp_limit, so this is the
-    conservative operating resistance with no fixed-point solve. With no
-    winding_temp_limit there is nothing to derate to, so R_s_ref is returned
-    unchanged (cold). winding_temp_limit is an insulation hot-spot, marginally
-    above the mean winding temperature that sets bulk R_s, so this slightly
-    over-estimates R_s (conservative). Where derating affects the verdict vs.
-    merely rescaling watts is documented at _resolve_thermal_budget.
-    """
-    if winding_temp_limit is None:
-        return R_s_ref
-    return R_s_ref * (1.0 + COPPER_TEMP_COEFF * (winding_temp_limit - R_S_REF_TEMP_C))
-
+# The derating helpers and their 20 °C references live in solver_params
+# (shared by every circuit model); re-exported here for existing callers.
+__all__ = [
+    "COPPER_TEMP_COEFF",
+    "MAGNET_REF_TEMP_C",
+    "R_S_REF_TEMP_C",
+    "ThermalDutyParams",
+    "copper_loss",
+    "current_for_torque",
+    "prepare_thermal_duty",
+    "psi_f_at_magnet_temp",
+    "r_s_at_operating_temp",
+    "run_thermal_duty",
+    "transient_peak",
+]
 
 def copper_loss(R_s: float, i_peak: float) -> float:
     """3-phase copper loss (W) at peak phase current: 1.5·R_s·I_peak².
@@ -158,7 +133,7 @@ def transient_peak(
     a_tot = 1.0
     b_tot = 0.0
     factors = []
-    for u_k, dt in zip(u, dts):
+    for u_k, dt in zip(u, dts, strict=True):
         a_k = exp(-dt / tau)
         factors.append(a_k)
         b_tot = a_k * b_tot + u_k * (1.0 - a_k)
@@ -167,11 +142,11 @@ def transient_peak(
         # tau >> cycle time beyond float resolution: x is flat at the
         # time-averaged loading
         total = sum(dts)
-        x = sum(u_k * dt for u_k, dt in zip(u, dts)) / total
+        x = sum(u_k * dt for u_k, dt in zip(u, dts, strict=True)) / total
         return x
     x = b_tot / (1.0 - a_tot)
     x_peak = x
-    for u_k, a_k in zip(u, factors):
+    for u_k, a_k in zip(u, factors, strict=True):
         x = u_k + (x - u_k) * a_k
         x_peak = max(x_peak, x)
     return x_peak
@@ -252,6 +227,8 @@ def run_thermal_duty(config: RunConfig) -> dict[str, Any]:
     return result
 
 
+BudgetSource = Literal["thermal_resistance", "rated_current"]
+
 @dataclass(frozen=True)
 class ThermalDutyParams:
     """Validated inputs for thermal-duty (copper-loss budget) computation.
@@ -285,7 +262,7 @@ class ThermalDutyParams:
     psi_f: float
     R_s: float
     p_s1_budget: float
-    budget_source: str
+    budget_source: BudgetSource
     duty_profile: tuple[tuple[float, float], ...]
     L_d: float | None = None
     L_q: float | None = None
@@ -294,7 +271,17 @@ class ThermalDutyParams:
     ambient_temp: float | None = None
     temp_rise_limit: float | None = None
 
+    @property
+    def is_reluctance(self) -> bool:
+        return self.psi_f == 0.0
+
     def __post_init__(self) -> None:
+        # NaN passes every inequality below, so finiteness comes first.
+        non_finite = [f for f in ('psi_f', 'R_s', 'p_s1_budget', 'L_d', 'L_q', 'p_fe', 'thermal_time_constant', 'ambient_temp', 'temp_rise_limit')
+                      if getattr(self, f) is not None
+                      and not math.isfinite(getattr(self, f))]
+        if non_finite:
+            raise ValueError(f"thermal_duty got non-finite {', '.join(non_finite)}")
         if self.n_p < 2:
             raise ValueError(f"n_p must be >= 2, got {self.n_p}")
         if self.psi_f < 0:
@@ -306,6 +293,8 @@ class ThermalDutyParams:
         if not self.duty_profile:
             raise ValueError("duty_profile must have at least one segment")
         for tau, dt in self.duty_profile:
+            if not (math.isfinite(tau) and math.isfinite(dt)):
+                raise ValueError(f"duty segment must be finite, got {(tau, dt)}")
             if dt <= 0:
                 raise ValueError(f"duty segment duration must be > 0, got {dt}")
         if self.L_d is not None and self.L_d <= 0:
@@ -327,7 +316,7 @@ class ThermalDutyParams:
 
 def _resolve_thermal_budget(
     motor: Motor, R_s_op: float, p_fe: float,
-) -> tuple[float, str]:
+) -> tuple[float, BudgetSource]:
     """S1 continuous loss budget (W) and its source.
 
     R_s_op is the operating-temperature stator resistance (already derated);
@@ -402,28 +391,20 @@ def _thermal_duty_p_fe(motor: Motor) -> float:
 
 def _check_thermal_duty_motor(
     motor: Motor,
-) -> tuple[float, float, float, str, float]:
+) -> tuple[float, float, float, BudgetSource, float]:
     """Resolve psi_f (magnet-temp derated), operating R_s, S1 budget, p_fe.
 
     Raises on gaps. magnet_temp without alpha_Br is a loud error rather than
     a silent skip — the coefficient is grade-specific (NdFeB ≈ -0.0012/K,
-    SmCo ≈ -0.0003/K), so there is no safe default.
+    SmCo ≈ -0.0003/K), so there is no safe default (solver_params.derate).
     """
-    _reject_induction(motor, "thermal_duty")
-    psi_f = _resolve_psi_f(motor)
-    if motor.magnet_temp is not None and motor.alpha_Br is None:
-        raise ValueError(
-            f"Motor '{motor.name}': magnet_temp is set but alpha_Br is not — "
-            f"the B_rem temperature coefficient is grade-specific "
-            f"(per K, e.g. NdFeB N42 -0.0012, SmCo -0.0003); set alpha_Br "
-            f"or drop magnet_temp"
-        )
-    psi_f = psi_f_at_magnet_temp(psi_f, motor.magnet_temp, motor.alpha_Br)
+    reject_induction(motor, "thermal_duty")
     if motor.R_s is None or motor.R_s <= 0:
         raise ValueError(
             f"Motor '{motor.name}': thermal_duty needs R_s > 0"
         )
-    R_s_op = r_s_at_operating_temp(motor.R_s, motor.winding_temp_limit)
+    R_s_op, psi_f = derate_motor(motor, motor.R_s, resolve_psi_f(motor))
+    assert R_s_op is not None
     p_fe = _thermal_duty_p_fe(motor)
     budget, source = _resolve_thermal_budget(motor, R_s_op, p_fe)
     return psi_f, R_s_op, budget, source, p_fe
@@ -435,7 +416,7 @@ def prepare_thermal_duty(
     """Derive, validate, and extract thermal-duty params from a Motor + profile."""
     psi_f, R_s, budget, source, p_fe = _check_thermal_duty_motor(motor)
 
-    L_d, L_q = _salient_pair(motor)
+    L_d, L_q = salient_pair(motor)
 
     ambient = None
     rise = None

@@ -10,6 +10,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from phasesweep.sweep_types import RunResult
 
+__all__ = [
+    "main",
+]
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -25,7 +29,7 @@ def main() -> None:
                              "(CI regression gate)")
     args = parser.parse_args()
 
-    from phasesweep.result_store import ResultStore, version_current
+    from phasesweep.result_store import ResultStore
     from phasesweep.validation.crossval import (
         compare_all,
         diagnose,
@@ -34,13 +38,9 @@ def main() -> None:
     )
 
     store = ResultStore(args.output_dir)
-    # H1 staleness rule (same as load_slim / _dedupe_for_matrix): computed
-    # records with a superseded model version must not reach PASS/FAIL or
-    # the --strict exit code; measured/published describe hardware, not
-    # physics code, and always serve.
-    results = [r for r in store.load_results()
-               if r.source != "computed"
-               or version_current(r.model, r.model_version)]
+    # superseded computed records must not reach PASS/FAIL or the
+    # --strict exit code
+    results = store.load_results(current_only=True)
     if not results:
         print(f"No results found in {args.output_dir}", file=sys.stderr)
         sys.exit(1)
@@ -58,6 +58,7 @@ def main() -> None:
         groups.setdefault(r.motor_config_id, []).append(r)
 
     all_ok = True
+    n_compared = 0
     for group in groups.values():
         motor_name = group[0].config.motor.name
         models = sorted({r.model for r in group})
@@ -68,7 +69,9 @@ def main() -> None:
 
         diag = diagnose(group)
         print(f"\nDiagnosis: {diag}\n")
-        if args.strict and not diagnose_detailed(group).all_pass:
+        summary = diagnose_detailed(group)
+        n_compared += summary.total
+        if args.strict and not summary.all_pass:
             all_ok = False
 
     if args.plot:
@@ -76,6 +79,10 @@ def main() -> None:
 
     if args.strict and not all_ok:
         print("STRICT: at least one comparison failed", file=sys.stderr)
+        sys.exit(1)
+    if args.strict and n_compared == 0:
+        # all() over no rows is True; nothing compared is not a pass.
+        print("STRICT: no comparisons were made", file=sys.stderr)
         sys.exit(1)
 
 

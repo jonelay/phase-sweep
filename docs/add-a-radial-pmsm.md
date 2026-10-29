@@ -1,7 +1,7 @@
 # Add a radial PMSM
 
-A procedural path from a new motor TOML to an honest statement of what has
-been checked. Field-by-field schema reference:
+A step-by-step path from a new motor TOML to a clear record of the checks you
+ran. Field-by-field schema reference:
 [motor-toml.md](motor-toml.md). This page covers the geometry-led path; it
 does not teach motor design.
 
@@ -25,25 +25,24 @@ Copy the intentionally hypothetical starter:
 cp motors/examples/starter_radial_spm.toml motors/my_motor.toml
 ```
 
-Every value in it is a labeled assumption, and its header states what the
-staged check is expected to report (including a saturation warning that
-coexists with ~1% solver agreement - the false-confidence trap this
-workflow exists to avoid). Replace assumptions with sourced values and
-keep unknown optional fields out rather than guessing; the checker
-reports what each omission disables. The bundled [`motors/`](../motors/)
-files are real measured motors with provenance and make better reading
-than templates once your file loads.
+Every value in it is labeled as an assumption. The starter intentionally
+produces a saturation warning even though the analytical and FEM results agree
+within about 1%: solver agreement does not mean the design is physically
+sound. Replace assumptions with sourced values, and omit optional fields you
+do not know instead of guessing. The checker reports which models each
+omission disables. Once your file loads, the sourced motor files in
+[`motors/`](../motors/) are better examples than the starter template; each
+header records whether its values are measured, published, or estimated.
 
 ## 3. Run the staged check
 
 ```bash
-uv run python scripts/check_motor.py motors/my_motor.toml
+phasesweep-check-motor motors/my_motor.toml
 ```
 
-This reports, in order: load and structural checks, `psi_f`/`B_rem`
-authority and derived values, model applicability (with the reason each
-inapplicable model is skipped), fast-model results with finite-output
-checks, provenance presence, and a five-dimension status summary:
+The checker reports structural errors, the relationship between `psi_f` and
+`B_rem`, applicable models, fast-model results, and available provenance or
+measurement data. It ends with this summary:
 
 ```text
 CONFIG:      valid
@@ -53,16 +52,15 @@ CROSS-CHECK: not run
 MEASUREMENT: not assessed
 ```
 
-A `CONFIG: valid` result establishes schema and objective invariants only.
-Warnings (voltage headroom, saturation, missing provenance) are engineering
-concerns to resolve by judgment; they do not fail the check. The exit code
-is nonzero only for objective failures: schema errors, solver exceptions,
-non-finite outputs.
+`CONFIG: valid` means the file is well formed; it does not mean the motor is a
+sound design. Voltage-headroom, saturation, and provenance warnings require
+engineering judgment but do not make the command fail. Schema errors, solver
+exceptions, and non-finite outputs produce a nonzero exit code.
 
 ## 4. Cross-check the field solution
 
 ```bash
-uv run python scripts/check_motor.py motors/my_motor.toml --fem quick
+phasesweep-check-motor motors/my_motor.toml --fem quick
 ```
 
 This runs a deliberately coarse no-load FEM solve (settings are printed)
@@ -83,8 +81,8 @@ uv run mypy
 
 ## 6. State the evidence level
 
-A contribution should say the highest level actually reached and what is
-missing, using this vocabulary:
+When contributing a motor, state the highest level reached and what remains
+unchecked:
 
 | Level | Established by |
 |---|---|
@@ -93,7 +91,7 @@ missing, using this vocabulary:
 | `NUMERICALLY CROSS-CHECKED` | independent solvers agree at declared settings |
 | `MEASUREMENT-VALIDATED` | a registered dataset with provenance and committed tolerance passes `phasesweep-crossval` |
 
-Each level includes the ones above it and claims nothing more. In
-particular: passing every check on this page means the file is internally
-consistent and the software can solve it. It does not establish that the
-motor is manufacturable or that the models predict measured performance.
+Each level includes the ones above it. Passing every check on this page means
+the file is internally consistent and the software can solve it. It does not
+show that the motor is manufacturable or that the models match measured
+performance.

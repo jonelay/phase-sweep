@@ -19,6 +19,18 @@ from phasesweep.defaults import COPPER_TEMP_COEFF
 from phasesweep.sweep_types import RunResult
 from phasesweep.validation.measured import BoundRef, CurveRef, KeyMapping
 
+__all__ = [
+    "DEFAULT_TOLERANCE_PCT",
+    "ComparisonRow",
+    "DiagnosisSummary",
+    "compare_all",
+    "compare_results",
+    "diagnose",
+    "diagnose_detailed",
+    "format_diagnosis",
+    "format_table",
+]
+
 # ---------------------------------------------------------------------------
 # Tolerance tables
 # ---------------------------------------------------------------------------
@@ -55,14 +67,6 @@ TOLERANCES_MODEL_TO_PUBLISHED: dict[str, float] = {
 
 DEFAULT_TOLERANCE_PCT = 10.0
 
-# Waveform-shape scalars have no meaningful value on a fundamental-only
-# model (its THD is identically 0 by construction), so a direct delta row
-# would be a guaranteed ~100% FAIL that says nothing about physics — and
-# would flip diagnose() to "models disagree". No current registry model is
-# fundamental-only (analytical v4 emits the full odd-harmonic series); the
-# skip machinery stays for future fundamental-only entries.
-SHAPE_SCALARS: frozenset[str] = frozenset(
-    {"thd_pct", "sh_pct", "sh_upper_pct", "peak_Br"})
 
 
 # ---------------------------------------------------------------------------
@@ -93,14 +97,16 @@ def _pick_tolerance(
     tol_a: dict[str, float] | None = None,
     tol_b: dict[str, float] | None = None,
 ) -> float:
-    # Tier 1: per-dataset tolerances (widest wins if both present)
+    # Tier 1: per-dataset tolerances (tightest wins if both present: a
+    # dataset's tolerance is its author's confidence, and the comparison
+    # is only as loose as the stricter side allows)
     vals = []
     if tol_a and quantity in tol_a:
         vals.append(tol_a[quantity])
     if tol_b and quantity in tol_b:
         vals.append(tol_b[quantity])
     if vals:
-        return max(vals)
+        return min(vals)
     # Tier 2: caller-supplied overrides
     if overrides and quantity in overrides:
         return overrides[quantity]
@@ -216,12 +222,6 @@ def _get_metadata(metrics: dict[str, Any] | None, key: str) -> dict[str, Any]:
     return metrics.get(key, {})
 
 
-def _fundamental_only(model: str) -> bool:
-    from phasesweep.registry import MODEL_REGISTRY
-    info = MODEL_REGISTRY.get(model)
-    return bool(info and info.fundamental_only)
-
-
 def _resolve_bound_compare(
     measured: RunResult, computed: RunResult,
 ) -> list[ComparisonRow]:
@@ -241,8 +241,10 @@ def _resolve_bound_compare(
             passed = comp_val <= meas_val
         elif ref.relation == "gt":
             passed = comp_val > meas_val
-        else:  # lt
+        elif ref.relation == "lt":
             passed = comp_val < meas_val
+        else:  # unreachable: BoundRef validates relation
+            raise ValueError(f"unknown bound relation {ref.relation!r}")
         # margin: positive = passing direction
         if ref.relation in ("gte", "gt"):
             margin = (comp_val - meas_val) / abs(meas_val) * 100 if abs(meas_val) > 1e-12 else 0.0
@@ -271,28 +273,10 @@ def _resolve_curve_compare(
     if not meta or not measured.metrics or not computed.metrics:
         return []
     rows: list[ComparisonRow] = []
-    fundamental_only = _fundamental_only(computed.model)
     for meas_key, ref_dict in meta.items():
         ref = CurveRef.from_dict(ref_dict)
         meas_val = measured.metrics.get(meas_key)
         if meas_val is None:
-            continue
-        # A fundamental-only waveform has no meaningful shape extremum:
-        # its max IS the fundamental, incommensurate with a published peak.
-        # Surfaced as a "skipped" row so the comparison doesn't vanish.
-        if ref.extract in ("max", "min") and fundamental_only:
-            rows.append(ComparisonRow(
-                quantity=meas_key,
-                model_a=measured.model,
-                val_a=meas_val,
-                model_b=computed.model,
-                val_b=float("nan"),
-                delta=float("nan"),
-                rel_pct=0.0,
-                tol_pct=0.0,
-                passed=True,
-                comparison_type="skipped",
-            ))
             continue
         curve_x = computed.metrics.get(ref.curve_x)
         curve_y = computed.metrics.get(ref.curve_y)
@@ -302,16 +286,24 @@ def _resolve_curve_compare(
         y_arr = np.asarray(curve_y, dtype=float)
         extrapolated = False
         if ref.extract == "interp":
-            if ref.at_x is None:
-                continue
-            extrapolated = bool(ref.at_x < x_arr.min() or ref.at_x > x_arr.max())
-            comp_val = float(np.interp(ref.at_x, x_arr, y_arr))
+            if np.any(np.diff(x_arr) <= 0):
+                # np.interp silently returns wrong values otherwise
+                raise ValueError(
+                    f"{computed.model}: curve_x '{ref.curve_x}' for "
+                    f"'{meas_key}' is not strictly ascending"
+                )
+            at_x = ref.at_x
+            assert at_x is not None  # CurveRef rejects interp without at_x
+            extrapolated = bool(at_x < x_arr.min() or at_x > x_arr.max())
+            comp_val = float(np.interp(at_x, x_arr, y_arr))
         elif ref.extract == "max":
             comp_val = float(y_arr.max())
         elif ref.extract == "min":
             comp_val = float(y_arr.min())
-        else:  # rms
+        elif ref.extract == "rms":
             comp_val = float(np.sqrt(np.mean(y_arr**2)))
+        else:  # unreachable: CurveRef validates extract
+            raise ValueError(f"unknown curve extract {ref.extract!r}")
         delta, rel_pct = _rel_pct(meas_val, comp_val)
         tol = _pick_tolerance(meas_key, measured.source, computed.source, tolerances,
                               tol_a=measured.tolerances, tol_b=computed.tolerances)
@@ -434,24 +426,6 @@ def compare_results(
 
     for q in shared:
         va, vb = scalars_a[q], scalars_b[q]
-        if q in SHAPE_SCALARS and (
-            _fundamental_only(a.model) or _fundamental_only(b.model)
-        ):
-            # Surfaced as "skipped" so the comparison doesn't vanish
-            # (precedent: _resolve_curve_compare max/min extracts).
-            rows.append(ComparisonRow(
-                quantity=q,
-                model_a=a.model,
-                val_a=va,
-                model_b=b.model,
-                val_b=vb,
-                delta=vb - va,
-                rel_pct=0.0,
-                tol_pct=0.0,
-                passed=True,
-                comparison_type="skipped",
-            ))
-            continue
         if q == "R_s":
             va, vb = _r_s_common_temp(a, va, b, vb)
         delta, rel_pct = _rel_pct(va, vb)

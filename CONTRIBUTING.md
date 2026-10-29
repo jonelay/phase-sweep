@@ -42,8 +42,8 @@ and `scripts/elmer_axial/README.md`.
 
 ## Running tests
 
-Start with the core lane - the same selector the merge-request CI lane
-uses. It completes in a few minutes:
+Start with the core lane, the same selector the pull-request CI lane
+uses:
 
 ```bash
 uv run pytest -m "not fem and not slow" --tb=short -q
@@ -56,11 +56,9 @@ uv run pytest
 ```
 
 Expect it to run an order of magnitude longer than the core lane. The
-FEM solver families (`tests/fem*`, crossval FEM cases) dominate the
-runtime (`-m fem`-marked tests under `tests/solvers/` and
-`tests/crossval/`) and can be silent for minutes per test while a solve
-converges -
-a quiet interval is not necessarily a hang.
+`fem`-marked tests under `tests/solvers/` and `tests/crossval/` dominate
+the runtime and can be silent for minutes per test while a solve
+converges; a quiet interval is not necessarily a hang.
 
 ## Linting and type checking
 
@@ -104,8 +102,9 @@ Assisted-by: <tool>
 
 ## Scope
 
-phase-sweep is a synchronous-machine simulation toolkit for stator/rotor design
-exploration — field solvers (analytical and 2D FEM), drive simulation,
+phase-sweep is a PMSM and induction-machine simulation toolkit for stator/rotor
+design exploration — field solvers (analytical and 2D FEM), induction
+equivalent-circuit and FEM models, drive simulation,
 thermal-duty screening, torque and iron-loss models, sensitivity sweeps,
 and a cross-validation CLI. Contributions that extend these capabilities
 — bug fixes, new validation anchors, documentation improvements, and
@@ -116,5 +115,6 @@ tools) should start as an issue discussion before any code is written.
 
 ## License
 
-By contributing you agree that your contributions are licensed under the
-[GNU Lesser General Public License v2.1](LICENSE).
+This project is licensed under the [Apache License 2.0](LICENSE).
+By contributing you agree that your contributions are licensed under
+the same terms.

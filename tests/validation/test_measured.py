@@ -10,6 +10,7 @@ from phasesweep.validation.measured import (
     BoundRef,
     CurveRef,
     KeyMapping,
+    MeasuredFormatError,
     MeasuredResult,
     MeasurementConditions,
     import_measured,
@@ -205,6 +206,14 @@ _EMF_CONSTANT_DATASETS = [
     "data/tecnotion_qtr/backemf_from_ke.json",
 ]
 
+# Raw measurement records, read directly by crossval tests and scripts;
+# not the measured import format.
+_RAW_RECORDS = {
+    "data/jmt_1806/backemf_speed_sweep.json",
+    "data/outrunner_14mm_steel/backemf_speed_sweep.json",
+    "data/outrunner_14mm_aluminum/torque_constant_sweep.json",
+}
+
 
 class TestCommittedDatasets:
     """Every data/ JSON with a registered measured test_type must import
@@ -226,6 +235,18 @@ class TestCommittedDatasets:
         expected = set(_EMF_CONSTANT_DATASETS) | {
             "data/outrunner_14mm_steel/backemf_measured.json"}
         assert expected <= found
+
+    def test_unregistered_test_types_are_known_raw_records(self):
+        """A test_type outside the registry is skipped by the import scan;
+        pin which files that is, so a typo cannot silently drop a dataset."""
+        raw_records = set()
+        for path in sorted((REPO_ROOT / "data").rglob("*.json")):
+            raw = json.loads(path.read_text())
+            if isinstance(raw, dict) and "test_type" in raw \
+                    and raw["test_type"] not in MODEL_REGISTRY:
+                raw_records.add(str(path.relative_to(REPO_ROOT)))
+        # A release tree may omit a dataset; a present file must be listed.
+        assert raw_records == {p for p in _RAW_RECORDS if (REPO_ROOT / p).exists()}
 
     @pytest.mark.parametrize("rel", _EMF_CONSTANT_DATASETS)
     def test_emf_constant_datasets_tagged(self, rel):
@@ -425,3 +446,47 @@ class TestDataFixtures:
         validate_measured(data)
         assert data.source == "published"
         assert data.quantities["tau_rated"] == 14.0
+
+
+class TestMalformedInput:
+    """Malformed refs and values raise before anything is persisted."""
+
+    def test_unknown_relation_rejected(self):
+        with pytest.raises(MeasuredFormatError, match="relation"):
+            BoundRef("tau_mtpa", "ge")  # type: ignore[arg-type]
+
+    def test_unknown_extract_rejected(self):
+        with pytest.raises(MeasuredFormatError, match="extract"):
+            CurveRef("x", "y", extract="mean")  # type: ignore[arg-type]
+
+    def test_interp_without_at_x_rejected(self):
+        with pytest.raises(MeasuredFormatError, match="at_x"):
+            CurveRef("x", "y")
+
+    @pytest.mark.parametrize("section,value", [
+        ("quantities", "47.4"), ("quantities", float("nan")),
+        ("quantities", True), ("uncertainty", "0.5"),
+        ("tolerances", float("inf")),
+    ])
+    def test_non_numeric_values_rejected(self, section, value):
+        data = _measured(**{section: {"backemf_fundamental": value}})
+        with pytest.raises(MeasuredFormatError, match=section):
+            validate_measured(data)
+
+    def test_non_numeric_condition_rejected(self):
+        data = _measured(conditions=_conditions(speed_rpm="2000"))
+        with pytest.raises(MeasuredFormatError, match="speed_rpm"):
+            validate_measured(data)
+
+    def test_from_dict_wraps_missing_key(self):
+        raw = _measured().to_dict()
+        del raw["conditions"]["speed_rpm"]
+        with pytest.raises(MeasuredFormatError, match="speed_rpm"):
+            MeasuredResult.from_dict(raw)
+
+    def test_from_dict_wraps_bad_ref(self):
+        raw = _measured().to_dict()
+        raw["bound_compare"] = {"backemf_fundamental":
+                                {"computed_key": "k", "relation": "ge"}}
+        with pytest.raises(MeasuredFormatError, match="relation"):
+            MeasuredResult.from_dict(raw)

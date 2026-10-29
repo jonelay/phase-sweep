@@ -19,15 +19,23 @@ non-passing or qualified results are explained after the table.
 | CREATOR Case PMSM | MTPA angle at 0.30 A | 20.6° | 20° | 3.2% | 15% | PASS | arXiv:2501.15921 |
 | CREATOR Case PMSM | rated torque (Nm) | 0.107 | ≥ 0.10 | +6.8% | bound | PASS | arXiv:2501.15921 |
 | Belkhadir ER-PMSM | B_ag fundamental (T) | 1.026 | 0.963 | 6.6% | 10% | PASS | IECON 2023 |
-| Belkhadir ER-PMSM | back-EMF peak (V) | 67.5 | 67.5 | 0.0% | 8% | PASS | IECON 2023 |
+| Belkhadir ER-PMSM | back-EMF peak (V) | 67.5 | 67.5 | 0.0% | 8% | by construction (fitted `psi_f`) | IECON 2023 |
 | Belkhadir ER-PMSM | flux linkage (Wb) | 0.097 | 0.100 | 3.0% | 30% | PASS | IECON 2023 |
-| Belkhadir ER-PMSM | B_ag (FEM, T) | 1.020 | 0.963 | 5.9% | 10% | PASS | IECON 2023 |
+| Belkhadir ER-PMSM | B_ag (FEM, T) | 1.020 | 0.963 | 6.0% | 10% | PASS | IECON 2023 |
 | Belkhadir ER-PMSM | rated torque (Nm) | 25.1 | ≥ 24 | +4.5% | bound | PASS | IECON 2023 |
 | Deylami Fan | B_ag peak (FEM, T) | 0.408 | 0.49 | 16.7% | 25% | PASS | TechRxiv |
 | Deylami Fan | B_ag peak (analytical, T) | 0.365 | 0.49 | 25.5% | 25% | FAIL | TechRxiv |
 | 14 mm Outrunner (Steel) | back-EMF (V) | 1.97 | 1.68 | 16.9% | 1% | FAIL | bench (ODrive) |
 
 ### Notes on Partial Results
+
+**Belkhadir back-EMF:** `psi_f = 0.0977 Wb` in
+`motors/belkhadir_outrunner.toml` is fitted to this 67.5 V reading, and the
+analytical model reports `backemf_fundamental` from `psi_f` when it is set
+(`backemf_source = "psi_f"`), so the 0.0% row is a consistency check, not a
+validation. With `psi_f` unset, the field model's own back-EMF is 67.0 V
+(−0.7%). The flux-linkage row is computed from `B_rem` and does not use
+`psi_f`.
 
 **Deylami Fan analytical B_ag_peak:** The analytical model slightly exceeds
 tolerance for this simplified slot geometry, while the FEM model passes. The
@@ -51,8 +59,8 @@ configurations:
 |-------|-------------------|------------|-------|
 | 14 mm Outrunner (Steel) | 1.004 | 0.998 | 0.5% |
 | Belkhadir 22p/24s ER-PMSM | 1.026 | 1.020 | 0.6% |
-| Deylami 8p/12s Cooling Fan | 0.453 | 0.445 | 1.7% |
-| FEMM LRK 14p/12s | 0.950 | 0.945 | 0.6% |
+| Deylami 8p/12s Cooling Fan | 0.453 | 0.445 | 1.6% |
+| FEMM LRK 14p/12s | 0.950 | 0.945 | 0.5% |
 | Zhu & Howe 8-pole inrunner | 0.565 | 0.564 | 0.2% |
 | Zhu & Howe 8-pole outrunner | 0.552 | 0.552 | 0.0% |
 
@@ -74,7 +82,8 @@ Validated on MTPA angle and rated torque. The rotor uses inset magnets
 (interpole iron), so only the nonlinear FEM solver applies — the earlier
 analytical back-EMF comparison was retired when the magnet mount was
 corrected; the measured back-EMF capture remains in the anchor set as an
-import gate. (Iron loss excluded: `B_core` was
+import gate (that JSON is generated locally by `scripts/fetch_creator_dataset.py`
+and is not shipped). (Iron loss excluded: `B_core` was
 calibrated against the same measured loss curve — see CHANGELOG 0.3.0.)
 
 ![Airgap flux density waveform — CREATOR Case PMSM](images/validation/br_waveform_creator_case_pmsm.png)
@@ -88,8 +97,13 @@ calibrated against the same measured loss curve — see CHANGELOG 0.3.0.)
 ### Belkhadir 22p/24s ER-PMSM
 
 22-pole / 24-slot external-rotor PMSM from Belkhadir et al. (IECON 2023).
-Validated on airgap flux, back-EMF, flux linkage, and rated torque — all
-passing within tolerance for both analytical and FEM solvers.
+All rows pass, but none is an independent measured comparison. The air-gap
+reference (0.963 T) is the paper's flat-top formula value (0.776 T)
+converted to a fundamental with this project's own (4/π)·sin(π·α_p/2)
+factor; the back-EMF row matches by construction (fitted `psi_f`); the
+flux-linkage tolerance is 30 % because the fundamental model misses this
+fractional-slot topology's sub-harmonic coupling; and rated torque is a
+one-sided bound.
 
 ![Airgap flux density waveform — Belkhadir ER-PMSM](images/validation/br_waveform_belkhadir_22p_24s_er_pmsm.png)
 
@@ -111,7 +125,7 @@ airgap flux comparison; the analytical model slightly exceeds the tolerance.
 ### 14 mm Outrunner (Steel)
 
 12-pole / 9-slot outrunner (bench-measured with RTB2004 oscilloscope).
-The remaining, end-effect-corrected back-EMF discrepancy reflects the gap
+Most of the remaining, end-effect-corrected back-EMF discrepancy reflects the gap
 between nominal and calibrated effective remanence, not a measurement error.
 
 ![Airgap flux density waveform — 14 mm Outrunner (Steel)](images/validation/br_waveform_outrunner_14mm_steel.png)
@@ -130,13 +144,15 @@ figures above:
 |-------|--------|-------------------|
 | Toyota Prius 2004 IPM | ORNL/TM-2004/185 | stall torque ≥ 340 Nm, MTPA angle |
 | Awan 2.2 kW IPM | Aalto dissertation | saliency ratio, rated torque ≥ 14 Nm |
-| ETEL TMB (5 sizes) | ETEL datasheet | back-EMF from Ku (5 winding variants) |
-| Rexroth MS2N04 | Bosch Rexroth manual | back-EMF from KE |
-| Tecnotion QTR-A-105 | Tecnotion datasheet | back-EMF from KE |
+| ETEL TMB (5 sizes) | ETEL datasheet | `psi_f` fitted from Ku (back-EMF equal by construction, not a validation); tested: base/max-speed envelope bands, copper loss vs datasheet Pc and R_th budget, reverse-salient MTPA, stall-torque bounds |
+| Rexroth MS2N04 | Bosch Rexroth manual | `psi_f` fitted from KE (back-EMF equal by construction, not a validation); tested: KE/KM convention consistency, rated-point voltage feasibility, envelope corner |
+| Tecnotion QTR-A-105 | Tecnotion datasheet | `psi_f` fitted from Ke (back-EMF equal by construction, not a validation); tested: hot-R reconstruction from Pc, max speed at two DC-bus voltages |
 | JMT 1806 2400KV | bench measurement | back-EMF speed sweep (8 speeds) |
 | Parviainen 5 kW AFPM | LUT D.Sc. thesis | back-EMF 211 V (`analytical_axial`); `fem_axial` bracket only — see below |
-| NWPU 12 kW Halbach SPM | WEVJ 16(8):413 (2025) | measured back-EMF 75.2 V peak (FEM + analytical) |
+| CREATOR Case IM | TU Graz CREATOR dataset (DOI 10.3217/kh3v7-dhn98) | locked-rotor current (45 points, ≤2.5%), torque-slip (hot-parameter agreement; +34% at 20 °C pinned as a finding), nameplate, no-load friction/windage. Machine-level iron loss is not validated: the M800-50A table fit is pinned, but the stator-core estimate under-predicts the measured no-load loss by ~3.9× (pinned shortfall) |
+| NWPU 12 kW Halbach SPM | WEVJ 16(8):413 (2025) | `psi_f` fitted from the measured 75.2 V line-peak back-EMF at 1000 rpm (reproduces it by construction); tested: Halbach vs radial FEM B1 and THD, and an arithmetic consistency check of the paper's own numbers (the fitted `psi_f` reproduces its FEM back-EMF at 5000 rpm within 5%; no phasesweep model runs in that check) (the paper's own FEM 74.4 V / analytical 76.4 V at 1000 rpm cited for context) |
 | Jilin 5.5 kW SynRM | PMC11679518 (2024) | reluctance-only MTPA through rated_torque/torque_speed/thermal_duty/drive_sim |
+| BMW i3 2016 IPM | Gierczynski & Grzesiak 2021 (FEM flux map), Burress 2017 (ORNL) | numeric MTPA on the flux map within 1% of the source torque sheet; hot peak torque bracketed by the unknown map temperature; `motor_thermal` fit to the 7000 rpm continuous test is a pin of the fit, not a validation |
 
 ### Axial-Flux FEM (`fem_axial`)
 
@@ -147,7 +163,7 @@ than by a measured back-EMF gate:
 |---|---|
 | Mirror BC vs true periodic identification | 2–3·10⁻⁵ on B1 |
 | Slotless plane vs analytical layer model | 0.06% |
-| Cross-code vs Elmer (independent solver) | 0.42% |
+| Cross-code vs Elmer (independent solver) | 0.39% at the motor's mu_r_fe = 1000; 0.001% with ideal iron |
 | 1D magnetic-circuit limit | 0.06% |
 
 It is **not** gated on the Parviainen E_PM: that anchor does not

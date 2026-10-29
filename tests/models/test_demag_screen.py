@@ -115,6 +115,18 @@ def test_margin_monotonic_in_fault_current(creator, screen_at_drive_limit):
     assert out2["margin"] < screen_at_drive_limit["margin"]
 
 
+@pytest.mark.parametrize("bad", [0.0, -1.0])
+def test_nonpositive_i_fault_raises(creator, bad):
+    with pytest.raises(ValueError, match="i_fault must be > 0"):
+        run_demag_screen(RunConfig(motor=creator, model="demag_screen", i_fault=bad))
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_nonfinite_i_fault_rejected_by_run_config(creator, bad):
+    with pytest.raises(ValueError, match="i_fault must be a finite number"):
+        RunConfig(motor=creator, model="demag_screen", i_fault=bad)
+
+
 def test_run_id_hashes_i_fault(creator):
     rc_a = RunConfig(motor=creator, model="demag_screen", i_fault=0.42)
     rc_b = RunConfig(motor=creator, model="demag_screen", i_fault=0.84)

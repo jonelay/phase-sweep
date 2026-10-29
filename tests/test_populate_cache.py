@@ -54,6 +54,23 @@ def test_metric_diff_nan_matches_nan():
     assert pc._metric_diff(float("nan"), float("nan"), 1e-9) is None
 
 
+@pytest.mark.parametrize("a, b", [
+    (float("nan"), 1.0),
+    (1.0, float("nan")),
+    (float("inf"), 1.0),
+    (float("inf"), float("-inf")),
+])
+def test_metric_diff_non_finite_against_other_is_a_mismatch(a, b):
+    """The relative deviation is NaN for these pairs, and NaN > rtol is
+    False — without the explicit check they read as agreement."""
+    assert pc._metric_diff(a, b, 1e-9) is not None
+    assert pc._metric_diff([1.0, a], [1.0, b], 1e-9) is not None
+
+
+def test_metric_diff_inf_matches_same_inf():
+    assert pc._metric_diff(float("inf"), float("inf"), 1e-9) is None
+
+
 def test_metric_diff_zero_pair_is_equal():
     assert pc._metric_diff(0.0, 0.0, 1e-9) is None
 
@@ -105,6 +122,15 @@ def test_verify_catches_cross_assigned_metrics(store_dir):
     """The bad batch: a record whose metrics belong to another model."""
     rows = ResultStore(store_dir).load_all()
     rows[0]["metrics"] = {"tau_mtpa": 1.0, "k_T": 2.0}
+    _rewrite(store_dir, rows)
+    assert pc._verify(store_dir, 1e-9, include_fem=False)[0] == {0}
+
+
+def test_verify_catches_run_id_that_no_longer_matches_config(store_dir):
+    """A row filed under an ID its stored config does not hash to."""
+    rows = ResultStore(store_dir).load_all()
+    assert rows[0].get("run_id")
+    rows[0]["run_id"] = "000000000000"
     _rewrite(store_dir, rows)
     assert pc._verify(store_dir, 1e-9, include_fem=False)[0] == {0}
 

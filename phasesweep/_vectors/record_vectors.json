@@ -1,0 +1,3047 @@
+{
+ "cases": [
+  {
+   "expected": {
+    "config": {
+     "duty_profile": [
+      [
+       0.10192519986735371,
+       60.0
+      ]
+     ],
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "thermal_duty",
+     "motor": {
+      "B_core": 0.4974,
+      "B_knee": 0.0,
+      "B_rem": 0.415,
+      "I_rated": 0.29698484809834996,
+      "J": 0.00011348,
+      "L_d": 0.2055,
+      "L_q": 0.332,
+      "L_stk": 0.0301,
+      "N": 328,
+      "R_s": 8.9462,
+      "alpha_fe": 1.62,
+      "alpha_p": 0.5,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 0.42,
+       "U_DC": 326.0,
+       "W_REF": 209.4
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "inset",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 6,
+       "r_ag": 0.0237,
+       "r_inner": 0.008,
+       "r_magnet": 0.0235,
+       "r_outer": 0.0565,
+       "r_rotor": 0.01915,
+       "r_stator": 0.0239,
+       "skew_angle": null,
+       "slot_depth": 0.0196,
+       "slot_opening_width": 0.00323,
+       "slot_width_ratio": 0.61,
+       "topology": "inrunner"
+      },
+      "k_e": 6.35e-05,
+      "k_h": 0.0153,
+      "k_w": 0.866,
+      "m_core": 1.2516,
+      "mu_r_fe": 5000,
+      "mu_r_pm": 1.1,
+      "n_p": 2,
+      "name": "CREATOR Case PMSM",
+      "psi_f": 0.1144
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "motor": {
+     "B_core": 0.4974,
+     "B_knee": 0.0,
+     "B_rem": 0.415,
+     "I_rated": 0.29698484809834996,
+     "J": 0.00011348,
+     "L_d": 0.2055,
+     "L_q": 0.332,
+     "L_stk": 0.0301,
+     "N": 328,
+     "R_s": 8.9462,
+     "alpha_fe": 1.62,
+     "alpha_p": 0.5,
+     "coils_series": 2,
+     "drive": {
+      "MAX_I_S": 0.42,
+      "U_DC": 326.0,
+      "W_REF": 209.4
+     },
+     "geometry": {
+      "back_iron_thickness": null,
+      "bar_bridge_thickness": 0.0,
+      "bar_height": 0.0,
+      "bar_opening_width": 0.0,
+      "bar_shape": "rectangular",
+      "bar_width": 0.0,
+      "bridge_thickness": null,
+      "end_ring_axial_length": null,
+      "end_ring_radial_height": null,
+      "magnet_mount": "inset",
+      "magnet_overhang": null,
+      "n_bars": 0,
+      "n_slots": 6,
+      "r_ag": 0.0237,
+      "r_inner": 0.008,
+      "r_magnet": 0.0235,
+      "r_outer": 0.0565,
+      "r_rotor": 0.01915,
+      "r_stator": 0.0239,
+      "skew_angle": null,
+      "slot_depth": 0.0196,
+      "slot_opening_width": 0.00323,
+      "slot_width_ratio": 0.61,
+      "topology": "inrunner"
+     },
+     "k_e": 6.35e-05,
+     "k_h": 0.0153,
+     "k_w": 0.866,
+     "m_core": 1.2516,
+     "mu_r_fe": 5000,
+     "mu_r_pm": 1.1,
+     "n_p": 2,
+     "name": "CREATOR Case PMSM",
+     "psi_f": 0.1144
+    },
+    "run_id": "34585e999510"
+   },
+   "label": "creator-thermal-duty",
+   "stored": {
+    "config": {
+     "duty_profile": [
+      [
+       0.10192519986735371,
+       60.0
+      ]
+     ],
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "thermal_duty",
+     "motor": {
+      "B_core": 0.4974,
+      "B_knee": 0.0,
+      "B_rem": 0.415,
+      "I_rated": 0.29698484809834996,
+      "J": 0.00011348,
+      "L_d": 0.2055,
+      "L_q": 0.332,
+      "L_stk": 0.0301,
+      "N": 328,
+      "R_s": 8.9462,
+      "alpha_fe": 1.62,
+      "alpha_p": 0.5,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 0.42,
+       "U_DC": 326.0,
+       "W_REF": 209.4
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bridge_thickness": null,
+       "magnet_mount": "inset",
+       "magnet_overhang": null,
+       "n_slots": 6,
+       "r_ag": 0.0237,
+       "r_inner": 0.008,
+       "r_magnet": 0.0235,
+       "r_outer": 0.0565,
+       "r_rotor": 0.01915,
+       "r_stator": 0.0239,
+       "slot_depth": 0.0196,
+       "slot_opening_width": 0.00323,
+       "slot_width_ratio": 0.61,
+       "topology": "inrunner"
+      },
+      "k_e": 6.35e-05,
+      "k_h": 0.0153,
+      "k_w": 0.866,
+      "m_core": 1.2516,
+      "mu_r_fe": 5000,
+      "mu_r_pm": 1.1,
+      "n_p": 2,
+      "name": "CREATOR Case PMSM",
+      "psi_f": 0.1144
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "elapsed_s": 0.0005317950854077935,
+    "error_msg": null,
+    "metrics": {
+     "p_cu_avg": 1.084691045467158,
+     "p_cu_peak": 1.084691045467158,
+     "p_fe": 0.4991211998658849,
+     "p_s1_budget": 1.6827034598658848,
+     "p_total_avg": 1.583812245333043
+    },
+    "model": "thermal_duty",
+    "model_version": 3,
+    "motor_config_id": "8d2936820a5d",
+    "schema_version": "v2.1",
+    "source": "computed",
+    "status": "OK",
+    "timestamp": "2026-08-25T23:13:58.345084"
+   }
+  },
+  {
+   "expected": {
+    "config": {
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "fem",
+     "motor": {
+      "B_rem": 1.265,
+      "I_rated": 4.666904755831213,
+      "L_stk": 0.005,
+      "N": 15,
+      "alpha_p": 0.788,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 5.66,
+       "U_DC": 12.0,
+       "W_REF": 523.6
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "surface",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 12,
+       "r_ag": 0.01302,
+       "r_inner": 0.0065,
+       "r_magnet": 0.01324,
+       "r_outer": 0.01539,
+       "r_rotor": 0.01414,
+       "r_stator": 0.0128,
+       "skew_angle": null,
+       "slot_depth": 0.00455,
+       "slot_opening_width": 0.0016,
+       "slot_width_ratio": 0.4,
+       "topology": "outrunner"
+      },
+      "k_w": 0.966,
+      "mu_r_fe": 4416,
+      "mu_r_pm": 1.05,
+      "n_p": 7,
+      "name": "FEMM LRK 14p/12s Outrunner"
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "motor": {
+     "B_rem": 1.265,
+     "I_rated": 4.666904755831213,
+     "L_stk": 0.005,
+     "N": 15,
+     "alpha_p": 0.788,
+     "coils_series": 2,
+     "drive": {
+      "MAX_I_S": 5.66,
+      "U_DC": 12.0,
+      "W_REF": 523.6
+     },
+     "geometry": {
+      "back_iron_thickness": null,
+      "bar_bridge_thickness": 0.0,
+      "bar_height": 0.0,
+      "bar_opening_width": 0.0,
+      "bar_shape": "rectangular",
+      "bar_width": 0.0,
+      "bridge_thickness": null,
+      "end_ring_axial_length": null,
+      "end_ring_radial_height": null,
+      "magnet_mount": "surface",
+      "magnet_overhang": null,
+      "n_bars": 0,
+      "n_slots": 12,
+      "r_ag": 0.01302,
+      "r_inner": 0.0065,
+      "r_magnet": 0.01324,
+      "r_outer": 0.01539,
+      "r_rotor": 0.01414,
+      "r_stator": 0.0128,
+      "skew_angle": null,
+      "slot_depth": 0.00455,
+      "slot_opening_width": 0.0016,
+      "slot_width_ratio": 0.4,
+      "topology": "outrunner"
+     },
+     "k_w": 0.966,
+     "mu_r_fe": 4416,
+     "mu_r_pm": 1.05,
+     "n_p": 7,
+     "name": "FEMM LRK 14p/12s Outrunner"
+    },
+    "run_id": "cd7a1d3ff601"
+   },
+   "label": "lrk-outrunner-fem",
+   "stored": {
+    "config": {
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "fem",
+     "motor": {
+      "B_rem": 1.265,
+      "I_rated": 4.666904755831213,
+      "L_stk": 0.005,
+      "N": 15,
+      "alpha_p": 0.788,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 5.66,
+       "U_DC": 12.0,
+       "W_REF": 523.6
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bridge_thickness": null,
+       "magnet_mount": "surface",
+       "magnet_overhang": null,
+       "n_slots": 12,
+       "r_ag": 0.01302,
+       "r_inner": 0.0065,
+       "r_magnet": 0.01324,
+       "r_outer": 0.01539,
+       "r_rotor": 0.01414,
+       "r_stator": 0.0128,
+       "slot_depth": 0.00455,
+       "slot_opening_width": 0.0016,
+       "slot_width_ratio": 0.4,
+       "topology": "outrunner"
+      },
+      "k_w": 0.966,
+      "mu_r_fe": 4416,
+      "mu_r_pm": 1.05,
+      "n_p": 7,
+      "name": "FEMM LRK 14p/12s Outrunner"
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "elapsed_s": 1.8445262770401314,
+    "error_msg": null,
+    "metrics": {
+     "fundamental": 0.9496542782969914,
+     "peak_Br": 0.9254026266794322,
+     "sh_pct": 4.723532048448957,
+     "sh_upper_pct": 6.284569031276171,
+     "thd_pct": 21.295764234173443
+    },
+    "model": "fem",
+    "model_version": 8,
+    "motor_config_id": "c4fa12248dfa",
+    "schema_version": "v2.1",
+    "source": "computed",
+    "status": "OK",
+    "timestamp": "2026-08-26T15:48:32.608962"
+   }
+  },
+  {
+   "expected": {
+    "config": {
+     "dataset_id": "airgap_flux_published",
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "airgap_flux_test",
+     "motor": {
+      "B_rem": 1.26,
+      "I_rated": 15.556349186104047,
+      "L_stk": 0.035,
+      "N": 22,
+      "alpha_p": 0.855,
+      "coils_series": 8,
+      "drive": {
+       "MAX_I_S": 15.56,
+       "U_DC": 200.0,
+       "W_REF": 62.832
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "surface",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 24,
+       "r_ag": 0.0893175,
+       "r_inner": 0.056,
+       "r_magnet": 0.09,
+       "r_outer": 0.1,
+       "r_rotor": 0.093,
+       "r_stator": 0.088635,
+       "skew_angle": null,
+       "slot_depth": 0.02,
+       "slot_opening_width": 0.003828757141700306,
+       "slot_width_ratio": 0.36,
+       "topology": "outrunner"
+      },
+      "k_w": 0.949,
+      "mu_r_fe": 4000,
+      "mu_r_pm": 1.05,
+      "n_p": 11,
+      "name": "Belkhadir 22p/24s ER-PMSM",
+      "psi_f": 0.0977
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "motor": {
+     "B_rem": 1.26,
+     "I_rated": 15.556349186104047,
+     "L_stk": 0.035,
+     "N": 22,
+     "alpha_p": 0.855,
+     "coils_series": 8,
+     "drive": {
+      "MAX_I_S": 15.56,
+      "U_DC": 200.0,
+      "W_REF": 62.832
+     },
+     "geometry": {
+      "back_iron_thickness": null,
+      "bar_bridge_thickness": 0.0,
+      "bar_height": 0.0,
+      "bar_opening_width": 0.0,
+      "bar_shape": "rectangular",
+      "bar_width": 0.0,
+      "bridge_thickness": null,
+      "end_ring_axial_length": null,
+      "end_ring_radial_height": null,
+      "magnet_mount": "surface",
+      "magnet_overhang": null,
+      "n_bars": 0,
+      "n_slots": 24,
+      "r_ag": 0.0893175,
+      "r_inner": 0.056,
+      "r_magnet": 0.09,
+      "r_outer": 0.1,
+      "r_rotor": 0.093,
+      "r_stator": 0.088635,
+      "skew_angle": null,
+      "slot_depth": 0.02,
+      "slot_opening_width": 0.003828757141700306,
+      "slot_width_ratio": 0.36,
+      "topology": "outrunner"
+     },
+     "k_w": 0.949,
+     "mu_r_fe": 4000,
+     "mu_r_pm": 1.05,
+     "n_p": 11,
+     "name": "Belkhadir 22p/24s ER-PMSM",
+     "psi_f": 0.0977
+    },
+    "run_id": "db9d23f6bbae"
+   },
+   "label": "belkhadir-airgap-published",
+   "stored": {
+    "config": {
+     "dataset_id": "airgap_flux_published",
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "airgap_flux_test",
+     "motor": {
+      "B_rem": 1.26,
+      "I_rated": 15.556349186104047,
+      "L_stk": 0.035,
+      "N": 22,
+      "alpha_p": 0.855,
+      "coils_series": 8,
+      "drive": {
+       "I_LIMIT": null,
+       "MAX_I_S": 15.56,
+       "U_DC": 200.0,
+       "W_REF": 62.832
+      },
+      "geometry": {
+       "n_slots": 24,
+       "r_ag": 0.0893175,
+       "r_inner": 0.056,
+       "r_magnet": 0.09,
+       "r_outer": 0.1,
+       "r_rotor": 0.093,
+       "r_stator": 0.088635,
+       "slot_depth": 0.02,
+       "slot_opening_width": 0.003828757141700306,
+       "slot_width_ratio": 0.36,
+       "topology": "outrunner"
+      },
+      "k_w": 0.949,
+      "mu_r_fe": 4000,
+      "mu_r_pm": 1.05,
+      "n_p": 11,
+      "name": "Belkhadir 22p/24s ER-PMSM",
+      "psi_f": 0.0977
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "elapsed_s": 0.0,
+    "error_msg": null,
+    "metrics": {
+     "B_ag_peak": 0.776,
+     "backemf_peak": 67.5,
+     "flux_linkage_peak": 0.1
+    },
+    "model": "airgap_flux_test",
+    "motor_config_id": "e3f053e4cdce",
+    "schema_version": "v2.0",
+    "source": "published",
+    "status": "OK",
+    "timestamp": "2026-06-12T13:10:47.833833",
+    "tolerances": {
+     "B_ag_peak": 20.0,
+     "backemf_peak": 8.0,
+     "flux_linkage_peak": 30.0
+    }
+   }
+  },
+  {
+   "expected": {
+    "config": {
+     "dataset_id": "fem_flux_published",
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "airgap_flux_test",
+     "motor": {
+      "B_rem": 0.41,
+      "I_rated": 20.7889393668845,
+      "L_stk": 0.03,
+      "N": 17,
+      "alpha_p": 0.95,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 27.2,
+       "U_DC": 13.5,
+       "W_REF": 314.16
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "surface",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 12,
+       "r_ag": 0.0397,
+       "r_inner": 0.0184,
+       "r_magnet": 0.0402,
+       "r_outer": 0.05,
+       "r_rotor": 0.0462,
+       "r_stator": 0.0392,
+       "skew_angle": null,
+       "slot_depth": 0.017,
+       "slot_opening_width": 0.0036945129606215966,
+       "slot_width_ratio": 0.67,
+       "topology": "outrunner"
+      },
+      "k_w": 0.866,
+      "mu_r_fe": 3000,
+      "mu_r_pm": 1.1,
+      "n_p": 4,
+      "name": "Deylami 8p/12s Cooling Fan"
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "motor": {
+     "B_rem": 0.41,
+     "I_rated": 20.7889393668845,
+     "L_stk": 0.03,
+     "N": 17,
+     "alpha_p": 0.95,
+     "coils_series": 2,
+     "drive": {
+      "MAX_I_S": 27.2,
+      "U_DC": 13.5,
+      "W_REF": 314.16
+     },
+     "geometry": {
+      "back_iron_thickness": null,
+      "bar_bridge_thickness": 0.0,
+      "bar_height": 0.0,
+      "bar_opening_width": 0.0,
+      "bar_shape": "rectangular",
+      "bar_width": 0.0,
+      "bridge_thickness": null,
+      "end_ring_axial_length": null,
+      "end_ring_radial_height": null,
+      "magnet_mount": "surface",
+      "magnet_overhang": null,
+      "n_bars": 0,
+      "n_slots": 12,
+      "r_ag": 0.0397,
+      "r_inner": 0.0184,
+      "r_magnet": 0.0402,
+      "r_outer": 0.05,
+      "r_rotor": 0.0462,
+      "r_stator": 0.0392,
+      "skew_angle": null,
+      "slot_depth": 0.017,
+      "slot_opening_width": 0.0036945129606215966,
+      "slot_width_ratio": 0.67,
+      "topology": "outrunner"
+     },
+     "k_w": 0.866,
+     "mu_r_fe": 3000,
+     "mu_r_pm": 1.1,
+     "n_p": 4,
+     "name": "Deylami 8p/12s Cooling Fan"
+    },
+    "run_id": "59f4b4b6959b"
+   },
+   "label": "deylami-airgap-published-qualified",
+   "stored": {
+    "config": {
+     "dataset_id": "fem_flux_published",
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "airgap_flux_test",
+     "motor": {
+      "B_rem": 0.41,
+      "I_rated": 20.7889393668845,
+      "L_stk": 0.03,
+      "N": 17,
+      "alpha_p": 0.95,
+      "coils_series": 2,
+      "drive": {
+       "I_LIMIT": null,
+       "MAX_I_S": 27.2,
+       "U_DC": 13.5,
+       "W_REF": 314.16
+      },
+      "geometry": {
+       "n_slots": 12,
+       "r_ag": 0.0397,
+       "r_inner": 0.0184,
+       "r_magnet": 0.0402,
+       "r_outer": 0.05,
+       "r_rotor": 0.0462,
+       "r_stator": 0.0392,
+       "slot_depth": 0.017,
+       "slot_opening_width": 0.0036945129606215966,
+       "slot_width_ratio": 0.67,
+       "topology": "outrunner"
+      },
+      "k_w": 0.866,
+      "mu_r_fe": 3000,
+      "mu_r_pm": 1.1,
+      "n_p": 4,
+      "name": "Deylami 8p/12s Cooling Fan"
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "elapsed_s": 0.0,
+    "error_msg": null,
+    "metrics": {
+     "B_ag_peak": 0.49
+    },
+    "model": "airgap_flux_test",
+    "motor_config_id": "12b96d03d555",
+    "schema_version": "v2.0",
+    "source": "published (ANSYS FEM)",
+    "status": "OK",
+    "timestamp": "2026-06-12T13:10:48.514579",
+    "tolerances": {
+     "B_ag_peak": 25.0
+    }
+   }
+  },
+  {
+   "expected": {
+    "config": {
+     "dataset_id": "backemf_measured",
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "backemf_capture",
+     "motor": {
+      "B_rem": 0.415,
+      "I_rated": 0.29698484809834996,
+      "J": 0.00011348,
+      "L_d": 0.2055,
+      "L_q": 0.332,
+      "L_stk": 0.0301,
+      "N": 328,
+      "R_s": 8.9462,
+      "alpha_p": 0.5,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 0.42,
+       "U_DC": 326.0,
+       "W_REF": 209.4
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "surface",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 6,
+       "r_ag": 0.0237,
+       "r_inner": 0.008,
+       "r_magnet": 0.0235,
+       "r_outer": 0.0565,
+       "r_rotor": 0.01915,
+       "r_stator": 0.0239,
+       "skew_angle": null,
+       "slot_depth": 0.0196,
+       "slot_opening_width": 0.00323,
+       "slot_width_ratio": 0.61,
+       "topology": "inrunner"
+      },
+      "k_w": 0.866,
+      "mu_r_fe": 5000,
+      "mu_r_pm": 1.1,
+      "n_p": 2,
+      "name": "CREATOR Case PMSM",
+      "psi_f": 0.1144
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "motor": {
+     "B_rem": 0.415,
+     "I_rated": 0.29698484809834996,
+     "J": 0.00011348,
+     "L_d": 0.2055,
+     "L_q": 0.332,
+     "L_stk": 0.0301,
+     "N": 328,
+     "R_s": 8.9462,
+     "alpha_p": 0.5,
+     "coils_series": 2,
+     "drive": {
+      "MAX_I_S": 0.42,
+      "U_DC": 326.0,
+      "W_REF": 209.4
+     },
+     "geometry": {
+      "back_iron_thickness": null,
+      "bar_bridge_thickness": 0.0,
+      "bar_height": 0.0,
+      "bar_opening_width": 0.0,
+      "bar_shape": "rectangular",
+      "bar_width": 0.0,
+      "bridge_thickness": null,
+      "end_ring_axial_length": null,
+      "end_ring_radial_height": null,
+      "magnet_mount": "surface",
+      "magnet_overhang": null,
+      "n_bars": 0,
+      "n_slots": 6,
+      "r_ag": 0.0237,
+      "r_inner": 0.008,
+      "r_magnet": 0.0235,
+      "r_outer": 0.0565,
+      "r_rotor": 0.01915,
+      "r_stator": 0.0239,
+      "skew_angle": null,
+      "slot_depth": 0.0196,
+      "slot_opening_width": 0.00323,
+      "slot_width_ratio": 0.61,
+      "topology": "inrunner"
+     },
+     "k_w": 0.866,
+     "mu_r_fe": 5000,
+     "mu_r_pm": 1.1,
+     "n_p": 2,
+     "name": "CREATOR Case PMSM",
+     "psi_f": 0.1144
+    },
+    "run_id": "40d79c2e9201"
+   },
+   "label": "creator-backemf-measured",
+   "stored": {
+    "config": {
+     "dataset_id": "backemf_measured",
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "backemf_capture",
+     "motor": {
+      "B_rem": 0.415,
+      "I_rated": 0.29698484809834996,
+      "J": 0.00011348,
+      "L_d": 0.2055,
+      "L_q": 0.332,
+      "L_stk": 0.0301,
+      "N": 328,
+      "R_s": 8.9462,
+      "alpha_p": 0.5,
+      "coils_series": 2,
+      "drive": {
+       "I_LIMIT": null,
+       "MAX_I_S": 0.42,
+       "U_DC": 326.0,
+       "W_REF": 209.4
+      },
+      "geometry": {
+       "n_slots": 6,
+       "r_ag": 0.0237,
+       "r_inner": 0.008,
+       "r_magnet": 0.0235,
+       "r_outer": 0.0565,
+       "r_rotor": 0.01915,
+       "r_stator": 0.0239,
+       "slot_depth": 0.0196,
+       "slot_opening_width": 0.00323,
+       "slot_width_ratio": 0.61,
+       "topology": "inrunner"
+      },
+      "k_w": 0.866,
+      "mu_r_fe": 5000,
+      "mu_r_pm": 1.1,
+      "n_p": 2,
+      "name": "CREATOR Case PMSM",
+      "psi_f": 0.1144
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "elapsed_s": 0.0,
+    "error_msg": null,
+    "metrics": {
+     "backemf_fundamental": 47.37
+    },
+    "model": "backemf_capture",
+    "motor_config_id": "0695927c78da",
+    "schema_version": "v2.0",
+    "source": "measured",
+    "status": "OK",
+    "timestamp": "2026-06-12T13:10:48.126597"
+   }
+  },
+  {
+   "expected": {
+    "config": {
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "stall_torque",
+     "motor": {
+      "B_rem": 1.24,
+      "L_d": 7.12e-05,
+      "L_q": 0.0001413,
+      "L_stk": 0.1323,
+      "N": 9,
+      "R_s": 0.0053,
+      "alpha_Br": -0.0012,
+      "alpha_p": 0.75,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 565.7,
+       "U_DC": 355.0
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "inset",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 72,
+       "r_ag": 0.08965000000000001,
+       "r_inner": 0.06515,
+       "r_magnet": 0.0893,
+       "r_outer": 0.12105,
+       "r_rotor": 0.07299,
+       "r_stator": 0.09,
+       "skew_angle": null,
+       "slot_depth": 0.022,
+       "slot_opening_width": 0.0017,
+       "slot_width_ratio": 0.6,
+       "topology": "inrunner"
+      },
+      "k_w": 0.966,
+      "mu_r_fe": 2500,
+      "mu_r_pm": 1.05,
+      "n_p": 6,
+      "name": "BMW i3 2016 IPM",
+      "psi_f": 0.0436
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "motor": {
+     "B_rem": 1.24,
+     "L_d": 7.12e-05,
+     "L_q": 0.0001413,
+     "L_stk": 0.1323,
+     "N": 9,
+     "R_s": 0.0053,
+     "alpha_Br": -0.0012,
+     "alpha_p": 0.75,
+     "coils_series": 2,
+     "drive": {
+      "MAX_I_S": 565.7,
+      "U_DC": 355.0
+     },
+     "geometry": {
+      "back_iron_thickness": null,
+      "bar_bridge_thickness": 0.0,
+      "bar_height": 0.0,
+      "bar_opening_width": 0.0,
+      "bar_shape": "rectangular",
+      "bar_width": 0.0,
+      "bridge_thickness": null,
+      "end_ring_axial_length": null,
+      "end_ring_radial_height": null,
+      "magnet_mount": "inset",
+      "magnet_overhang": null,
+      "n_bars": 0,
+      "n_slots": 72,
+      "r_ag": 0.08965000000000001,
+      "r_inner": 0.06515,
+      "r_magnet": 0.0893,
+      "r_outer": 0.12105,
+      "r_rotor": 0.07299,
+      "r_stator": 0.09,
+      "skew_angle": null,
+      "slot_depth": 0.022,
+      "slot_opening_width": 0.0017,
+      "slot_width_ratio": 0.6,
+      "topology": "inrunner"
+     },
+     "k_w": 0.966,
+     "mu_r_fe": 2500,
+     "mu_r_pm": 1.05,
+     "n_p": 6,
+     "name": "BMW i3 2016 IPM",
+     "psi_f": 0.0436
+    },
+    "run_id": "eee335fd7d6e"
+   },
+   "label": "i3-stall-torque-stored-run-id",
+   "stored": {
+    "config": {
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "stall_torque",
+     "motor": {
+      "B_rem": 1.24,
+      "L_d": 7.12e-05,
+      "L_q": 0.0001413,
+      "L_stk": 0.1323,
+      "N": 9,
+      "R_s": 0.0053,
+      "alpha_Br": -0.0012,
+      "alpha_p": 0.75,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 565.7,
+       "U_DC": 355.0
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "inset",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 72,
+       "r_ag": 0.08965000000000001,
+       "r_inner": 0.06515,
+       "r_magnet": 0.0893,
+       "r_outer": 0.12105,
+       "r_rotor": 0.07299,
+       "r_stator": 0.09,
+       "skew_angle": null,
+       "slot_depth": 0.022,
+       "slot_opening_width": 0.0017,
+       "slot_width_ratio": 0.6,
+       "topology": "inrunner"
+      },
+      "k_w": 0.966,
+      "mu_r_fe": 2500,
+      "mu_r_pm": 1.05,
+      "n_p": 6,
+      "name": "BMW i3 2016 IPM",
+      "psi_f": 0.0436
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "elapsed_s": 0.00016530099674127996,
+    "error_msg": null,
+    "metrics": {
+     "I_stall": 565.7,
+     "gamma_opt_deg": 28.93286481286361,
+     "k_T": 0.39239999999999997,
+     "k_T_effective": 0.49453566180749436,
+     "tau_stall": 279.7588238844996
+    },
+    "model": "stall_torque",
+    "model_version": 6,
+    "motor_config_id": "0e5977b4879d",
+    "run_id": "eee335fd7d6e",
+    "schema_version": "v2.1",
+    "source": "computed",
+    "status": "OK",
+    "timestamp": "2026-09-16T20:40:38.423012"
+   }
+  },
+  {
+   "expected": {
+    "config": {
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "torque_speed",
+     "motor": {
+      "B_core": 1.0,
+      "B_rem": 1.24,
+      "L_d": 7.12e-05,
+      "L_q": 0.0001413,
+      "L_stk": 0.1323,
+      "N": 9,
+      "R_s": 0.0053,
+      "alpha_Br": -0.0012,
+      "alpha_fe": 1.78,
+      "alpha_p": 0.75,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 565.7,
+       "U_DC": 355.0
+      },
+      "flux_map": {
+       "i_d_A": [
+        -600.0,
+        -500.0,
+        -400.0,
+        -300.0,
+        -200.0,
+        -100.0,
+        0.0
+       ],
+       "i_q_A": [
+        0.0,
+        100.0,
+        200.0,
+        300.0,
+        400.0,
+        500.0,
+        600.0
+       ],
+       "psi_d_Wb": [
+        [
+         0.0010218,
+         0.0076612,
+         0.0144783,
+         0.0214557,
+         0.0285953,
+         0.0359145,
+         0.0435964
+        ],
+        [
+         0.0013343,
+         0.0079851,
+         0.0148077,
+         0.0218019,
+         0.028999,
+         0.0364885,
+         0.0443812
+        ],
+        [
+         0.0019804,
+         0.008553,
+         0.0153238,
+         0.022321,
+         0.0295379,
+         0.0369563,
+         0.0439535
+        ],
+        [
+         0.0026644,
+         0.0089904,
+         0.0154411,
+         0.0221675,
+         0.0290021,
+         0.0356273,
+         0.0414912
+        ],
+        [
+         0.0031529,
+         0.0091178,
+         0.0151318,
+         0.0212774,
+         0.0275595,
+         0.0336089,
+         0.0390065
+        ],
+        [
+         0.00341,
+         0.0090128,
+         0.0146421,
+         0.0203229,
+         0.0260257,
+         0.0315452,
+         0.0366149
+        ],
+        [
+         0.0035505,
+         0.0087863,
+         0.0140559,
+         0.0193649,
+         0.0246518,
+         0.0297585,
+         0.0345145
+        ]
+       ],
+       "psi_q_Wb": [
+        [
+         -0.0002424,
+         -0.0002314,
+         -0.0002163,
+         -0.000188,
+         -0.000148,
+         -0.0001013,
+         -5.18e-05
+        ],
+        [
+         0.0188342,
+         0.0198098,
+         0.0207967,
+         0.0217814,
+         0.0227827,
+         0.023888,
+         0.0248878
+        ],
+        [
+         0.035245,
+         0.0368345,
+         0.0381858,
+         0.039389,
+         0.0403085,
+         0.0408374,
+         0.0400903
+        ],
+        [
+         0.0473874,
+         0.0488867,
+         0.0499061,
+         0.050207,
+         0.0499273,
+         0.0487675,
+         0.0466984
+        ],
+        [
+         0.0553626,
+         0.0562638,
+         0.0565729,
+         0.0562571,
+         0.0551608,
+         0.053421,
+         0.0512694
+        ],
+        [
+         0.0599484,
+         0.06029,
+         0.0601684,
+         0.0595502,
+         0.0584684,
+         0.056879,
+         0.0548343
+        ],
+        [
+         0.0626875,
+         0.0628228,
+         0.0625225,
+         0.0618313,
+         0.0607704,
+         0.0593472,
+         0.0575737
+        ]
+       ]
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "inset",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 72,
+       "r_ag": 0.08965000000000001,
+       "r_inner": 0.06515,
+       "r_magnet": 0.0893,
+       "r_outer": 0.12105,
+       "r_rotor": 0.07299,
+       "r_stator": 0.09,
+       "skew_angle": null,
+       "slot_depth": 0.022,
+       "slot_opening_width": 0.0017,
+       "slot_width_ratio": 0.6,
+       "topology": "inrunner"
+      },
+      "k_e": 6.149e-05,
+      "k_h": 0.02127,
+      "k_w": 0.966,
+      "m_core": 13.7,
+      "mu_r_fe": 2500,
+      "mu_r_pm": 1.05,
+      "n_p": 6,
+      "name": "BMW i3 2016 IPM",
+      "psi_f": 0.0436
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "motor": {
+     "B_core": 1.0,
+     "B_rem": 1.24,
+     "L_d": 7.12e-05,
+     "L_q": 0.0001413,
+     "L_stk": 0.1323,
+     "N": 9,
+     "R_s": 0.0053,
+     "alpha_Br": -0.0012,
+     "alpha_fe": 1.78,
+     "alpha_p": 0.75,
+     "coils_series": 2,
+     "drive": {
+      "MAX_I_S": 565.7,
+      "U_DC": 355.0
+     },
+     "flux_map": {
+      "i_d_A": [
+       -600.0,
+       -500.0,
+       -400.0,
+       -300.0,
+       -200.0,
+       -100.0,
+       0.0
+      ],
+      "i_q_A": [
+       0.0,
+       100.0,
+       200.0,
+       300.0,
+       400.0,
+       500.0,
+       600.0
+      ],
+      "psi_d_Wb": [
+       [
+        0.0010218,
+        0.0076612,
+        0.0144783,
+        0.0214557,
+        0.0285953,
+        0.0359145,
+        0.0435964
+       ],
+       [
+        0.0013343,
+        0.0079851,
+        0.0148077,
+        0.0218019,
+        0.028999,
+        0.0364885,
+        0.0443812
+       ],
+       [
+        0.0019804,
+        0.008553,
+        0.0153238,
+        0.022321,
+        0.0295379,
+        0.0369563,
+        0.0439535
+       ],
+       [
+        0.0026644,
+        0.0089904,
+        0.0154411,
+        0.0221675,
+        0.0290021,
+        0.0356273,
+        0.0414912
+       ],
+       [
+        0.0031529,
+        0.0091178,
+        0.0151318,
+        0.0212774,
+        0.0275595,
+        0.0336089,
+        0.0390065
+       ],
+       [
+        0.00341,
+        0.0090128,
+        0.0146421,
+        0.0203229,
+        0.0260257,
+        0.0315452,
+        0.0366149
+       ],
+       [
+        0.0035505,
+        0.0087863,
+        0.0140559,
+        0.0193649,
+        0.0246518,
+        0.0297585,
+        0.0345145
+       ]
+      ],
+      "psi_q_Wb": [
+       [
+        -0.0002424,
+        -0.0002314,
+        -0.0002163,
+        -0.000188,
+        -0.000148,
+        -0.0001013,
+        -5.18e-05
+       ],
+       [
+        0.0188342,
+        0.0198098,
+        0.0207967,
+        0.0217814,
+        0.0227827,
+        0.023888,
+        0.0248878
+       ],
+       [
+        0.035245,
+        0.0368345,
+        0.0381858,
+        0.039389,
+        0.0403085,
+        0.0408374,
+        0.0400903
+       ],
+       [
+        0.0473874,
+        0.0488867,
+        0.0499061,
+        0.050207,
+        0.0499273,
+        0.0487675,
+        0.0466984
+       ],
+       [
+        0.0553626,
+        0.0562638,
+        0.0565729,
+        0.0562571,
+        0.0551608,
+        0.053421,
+        0.0512694
+       ],
+       [
+        0.0599484,
+        0.06029,
+        0.0601684,
+        0.0595502,
+        0.0584684,
+        0.056879,
+        0.0548343
+       ],
+       [
+        0.0626875,
+        0.0628228,
+        0.0625225,
+        0.0618313,
+        0.0607704,
+        0.0593472,
+        0.0575737
+       ]
+      ]
+     },
+     "geometry": {
+      "back_iron_thickness": null,
+      "bar_bridge_thickness": 0.0,
+      "bar_height": 0.0,
+      "bar_opening_width": 0.0,
+      "bar_shape": "rectangular",
+      "bar_width": 0.0,
+      "bridge_thickness": null,
+      "end_ring_axial_length": null,
+      "end_ring_radial_height": null,
+      "magnet_mount": "inset",
+      "magnet_overhang": null,
+      "n_bars": 0,
+      "n_slots": 72,
+      "r_ag": 0.08965000000000001,
+      "r_inner": 0.06515,
+      "r_magnet": 0.0893,
+      "r_outer": 0.12105,
+      "r_rotor": 0.07299,
+      "r_stator": 0.09,
+      "skew_angle": null,
+      "slot_depth": 0.022,
+      "slot_opening_width": 0.0017,
+      "slot_width_ratio": 0.6,
+      "topology": "inrunner"
+     },
+     "k_e": 6.149e-05,
+     "k_h": 0.02127,
+     "k_w": 0.966,
+     "m_core": 13.7,
+     "mu_r_fe": 2500,
+     "mu_r_pm": 1.05,
+     "n_p": 6,
+     "name": "BMW i3 2016 IPM",
+     "psi_f": 0.0436
+    },
+    "run_id": "f080df9ea5f6"
+   },
+   "label": "i3-torque-speed-flux-map",
+   "stored": {
+    "config": {
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "torque_speed",
+     "motor": {
+      "B_core": 1.0,
+      "B_rem": 1.24,
+      "L_d": 7.12e-05,
+      "L_q": 0.0001413,
+      "L_stk": 0.1323,
+      "N": 9,
+      "R_s": 0.0053,
+      "alpha_Br": -0.0012,
+      "alpha_fe": 1.78,
+      "alpha_p": 0.75,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 565.7,
+       "U_DC": 355.0
+      },
+      "flux_map": {
+       "i_d_A": [
+        -600.0,
+        -500.0,
+        -400.0,
+        -300.0,
+        -200.0,
+        -100.0,
+        0.0
+       ],
+       "i_q_A": [
+        0.0,
+        100.0,
+        200.0,
+        300.0,
+        400.0,
+        500.0,
+        600.0
+       ],
+       "psi_d_Wb": [
+        [
+         0.0010218,
+         0.0076612,
+         0.0144783,
+         0.0214557,
+         0.0285953,
+         0.0359145,
+         0.0435964
+        ],
+        [
+         0.0013343,
+         0.0079851,
+         0.0148077,
+         0.0218019,
+         0.028999,
+         0.0364885,
+         0.0443812
+        ],
+        [
+         0.0019804,
+         0.008553,
+         0.0153238,
+         0.022321,
+         0.0295379,
+         0.0369563,
+         0.0439535
+        ],
+        [
+         0.0026644,
+         0.0089904,
+         0.0154411,
+         0.0221675,
+         0.0290021,
+         0.0356273,
+         0.0414912
+        ],
+        [
+         0.0031529,
+         0.0091178,
+         0.0151318,
+         0.0212774,
+         0.0275595,
+         0.0336089,
+         0.0390065
+        ],
+        [
+         0.00341,
+         0.0090128,
+         0.0146421,
+         0.0203229,
+         0.0260257,
+         0.0315452,
+         0.0366149
+        ],
+        [
+         0.0035505,
+         0.0087863,
+         0.0140559,
+         0.0193649,
+         0.0246518,
+         0.0297585,
+         0.0345145
+        ]
+       ],
+       "psi_q_Wb": [
+        [
+         -0.0002424,
+         -0.0002314,
+         -0.0002163,
+         -0.000188,
+         -0.000148,
+         -0.0001013,
+         -5.18e-05
+        ],
+        [
+         0.0188342,
+         0.0198098,
+         0.0207967,
+         0.0217814,
+         0.0227827,
+         0.023888,
+         0.0248878
+        ],
+        [
+         0.035245,
+         0.0368345,
+         0.0381858,
+         0.039389,
+         0.0403085,
+         0.0408374,
+         0.0400903
+        ],
+        [
+         0.0473874,
+         0.0488867,
+         0.0499061,
+         0.050207,
+         0.0499273,
+         0.0487675,
+         0.0466984
+        ],
+        [
+         0.0553626,
+         0.0562638,
+         0.0565729,
+         0.0562571,
+         0.0551608,
+         0.053421,
+         0.0512694
+        ],
+        [
+         0.0599484,
+         0.06029,
+         0.0601684,
+         0.0595502,
+         0.0584684,
+         0.056879,
+         0.0548343
+        ],
+        [
+         0.0626875,
+         0.0628228,
+         0.0625225,
+         0.0618313,
+         0.0607704,
+         0.0593472,
+         0.0575737
+        ]
+       ]
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "inset",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 72,
+       "r_ag": 0.08965000000000001,
+       "r_inner": 0.06515,
+       "r_magnet": 0.0893,
+       "r_outer": 0.12105,
+       "r_rotor": 0.07299,
+       "r_stator": 0.09,
+       "skew_angle": null,
+       "slot_depth": 0.022,
+       "slot_opening_width": 0.0017,
+       "slot_width_ratio": 0.6,
+       "topology": "inrunner"
+      },
+      "k_e": 6.149e-05,
+      "k_h": 0.02127,
+      "k_w": 0.966,
+      "m_core": 13.7,
+      "mu_r_fe": 2500,
+      "mu_r_pm": 1.05,
+      "n_p": 6,
+      "name": "BMW i3 2016 IPM",
+      "psi_f": 0.0436
+     },
+     "n_theta": 360,
+     "nonlinear": false
+    },
+    "elapsed_s": 0.4035028170037549,
+    "error_msg": null,
+    "metrics": {
+     "I_env_peak": 565.7,
+     "base_speed_peak": 573.3449434066569,
+     "max_speed_peak": 10421.182248121999,
+     "p_max_peak": 171367.9646148157,
+     "u_max": 204.95934556231717
+    },
+    "model": "torque_speed",
+    "model_version": 5,
+    "motor_config_id": "7ad71e6a99b6",
+    "run_id": "f080df9ea5f6",
+    "schema_version": "v2.1",
+    "source": "computed",
+    "status": "OK",
+    "timestamp": "2026-09-16T20:30:45.623033"
+   }
+  },
+  {
+   "expected": {
+    "config": {
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "operating_point",
+     "motor": {
+      "B_core": 1.0,
+      "B_rem": 1.24,
+      "L_d": 7.12e-05,
+      "L_q": 0.0001413,
+      "L_stk": 0.1323,
+      "N": 9,
+      "R_s": 0.0053,
+      "alpha_Br": -0.0012,
+      "alpha_fe": 1.78,
+      "alpha_p": 0.75,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 565.7,
+       "U_DC": 355.0
+      },
+      "flux_map": {
+       "i_d_A": [
+        -600.0,
+        -500.0,
+        -400.0,
+        -300.0,
+        -200.0,
+        -100.0,
+        0.0
+       ],
+       "i_q_A": [
+        0.0,
+        100.0,
+        200.0,
+        300.0,
+        400.0,
+        500.0,
+        600.0
+       ],
+       "psi_d_Wb": [
+        [
+         0.0010218,
+         0.0076612,
+         0.0144783,
+         0.0214557,
+         0.0285953,
+         0.0359145,
+         0.0435964
+        ],
+        [
+         0.0013343,
+         0.0079851,
+         0.0148077,
+         0.0218019,
+         0.028999,
+         0.0364885,
+         0.0443812
+        ],
+        [
+         0.0019804,
+         0.008553,
+         0.0153238,
+         0.022321,
+         0.0295379,
+         0.0369563,
+         0.0439535
+        ],
+        [
+         0.0026644,
+         0.0089904,
+         0.0154411,
+         0.0221675,
+         0.0290021,
+         0.0356273,
+         0.0414912
+        ],
+        [
+         0.0031529,
+         0.0091178,
+         0.0151318,
+         0.0212774,
+         0.0275595,
+         0.0336089,
+         0.0390065
+        ],
+        [
+         0.00341,
+         0.0090128,
+         0.0146421,
+         0.0203229,
+         0.0260257,
+         0.0315452,
+         0.0366149
+        ],
+        [
+         0.0035505,
+         0.0087863,
+         0.0140559,
+         0.0193649,
+         0.0246518,
+         0.0297585,
+         0.0345145
+        ]
+       ],
+       "psi_q_Wb": [
+        [
+         -0.0002424,
+         -0.0002314,
+         -0.0002163,
+         -0.000188,
+         -0.000148,
+         -0.0001013,
+         -5.18e-05
+        ],
+        [
+         0.0188342,
+         0.0198098,
+         0.0207967,
+         0.0217814,
+         0.0227827,
+         0.023888,
+         0.0248878
+        ],
+        [
+         0.035245,
+         0.0368345,
+         0.0381858,
+         0.039389,
+         0.0403085,
+         0.0408374,
+         0.0400903
+        ],
+        [
+         0.0473874,
+         0.0488867,
+         0.0499061,
+         0.050207,
+         0.0499273,
+         0.0487675,
+         0.0466984
+        ],
+        [
+         0.0553626,
+         0.0562638,
+         0.0565729,
+         0.0562571,
+         0.0551608,
+         0.053421,
+         0.0512694
+        ],
+        [
+         0.0599484,
+         0.06029,
+         0.0601684,
+         0.0595502,
+         0.0584684,
+         0.056879,
+         0.0548343
+        ],
+        [
+         0.0626875,
+         0.0628228,
+         0.0625225,
+         0.0618313,
+         0.0607704,
+         0.0593472,
+         0.0575737
+        ]
+       ]
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "inset",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 72,
+       "r_ag": 0.08965000000000001,
+       "r_inner": 0.06515,
+       "r_magnet": 0.0893,
+       "r_outer": 0.12105,
+       "r_rotor": 0.07299,
+       "r_stator": 0.09,
+       "skew_angle": null,
+       "slot_depth": 0.022,
+       "slot_opening_width": 0.0017,
+       "slot_width_ratio": 0.6,
+       "topology": "inrunner"
+      },
+      "k_e": 6.149e-05,
+      "k_h": 0.02127,
+      "k_w": 0.966,
+      "m_core": 13.7,
+      "mu_r_fe": 2500,
+      "mu_r_pm": 1.05,
+      "n_p": 6,
+      "name": "BMW i3 2016 IPM",
+      "psi_f": 0.0436
+     },
+     "n_theta": 360,
+     "nonlinear": false,
+     "tau_ref": 125.0,
+     "w_mech": 502.6548245743669
+    },
+    "motor": {
+     "B_core": 1.0,
+     "B_rem": 1.24,
+     "L_d": 7.12e-05,
+     "L_q": 0.0001413,
+     "L_stk": 0.1323,
+     "N": 9,
+     "R_s": 0.0053,
+     "alpha_Br": -0.0012,
+     "alpha_fe": 1.78,
+     "alpha_p": 0.75,
+     "coils_series": 2,
+     "drive": {
+      "MAX_I_S": 565.7,
+      "U_DC": 355.0
+     },
+     "flux_map": {
+      "i_d_A": [
+       -600.0,
+       -500.0,
+       -400.0,
+       -300.0,
+       -200.0,
+       -100.0,
+       0.0
+      ],
+      "i_q_A": [
+       0.0,
+       100.0,
+       200.0,
+       300.0,
+       400.0,
+       500.0,
+       600.0
+      ],
+      "psi_d_Wb": [
+       [
+        0.0010218,
+        0.0076612,
+        0.0144783,
+        0.0214557,
+        0.0285953,
+        0.0359145,
+        0.0435964
+       ],
+       [
+        0.0013343,
+        0.0079851,
+        0.0148077,
+        0.0218019,
+        0.028999,
+        0.0364885,
+        0.0443812
+       ],
+       [
+        0.0019804,
+        0.008553,
+        0.0153238,
+        0.022321,
+        0.0295379,
+        0.0369563,
+        0.0439535
+       ],
+       [
+        0.0026644,
+        0.0089904,
+        0.0154411,
+        0.0221675,
+        0.0290021,
+        0.0356273,
+        0.0414912
+       ],
+       [
+        0.0031529,
+        0.0091178,
+        0.0151318,
+        0.0212774,
+        0.0275595,
+        0.0336089,
+        0.0390065
+       ],
+       [
+        0.00341,
+        0.0090128,
+        0.0146421,
+        0.0203229,
+        0.0260257,
+        0.0315452,
+        0.0366149
+       ],
+       [
+        0.0035505,
+        0.0087863,
+        0.0140559,
+        0.0193649,
+        0.0246518,
+        0.0297585,
+        0.0345145
+       ]
+      ],
+      "psi_q_Wb": [
+       [
+        -0.0002424,
+        -0.0002314,
+        -0.0002163,
+        -0.000188,
+        -0.000148,
+        -0.0001013,
+        -5.18e-05
+       ],
+       [
+        0.0188342,
+        0.0198098,
+        0.0207967,
+        0.0217814,
+        0.0227827,
+        0.023888,
+        0.0248878
+       ],
+       [
+        0.035245,
+        0.0368345,
+        0.0381858,
+        0.039389,
+        0.0403085,
+        0.0408374,
+        0.0400903
+       ],
+       [
+        0.0473874,
+        0.0488867,
+        0.0499061,
+        0.050207,
+        0.0499273,
+        0.0487675,
+        0.0466984
+       ],
+       [
+        0.0553626,
+        0.0562638,
+        0.0565729,
+        0.0562571,
+        0.0551608,
+        0.053421,
+        0.0512694
+       ],
+       [
+        0.0599484,
+        0.06029,
+        0.0601684,
+        0.0595502,
+        0.0584684,
+        0.056879,
+        0.0548343
+       ],
+       [
+        0.0626875,
+        0.0628228,
+        0.0625225,
+        0.0618313,
+        0.0607704,
+        0.0593472,
+        0.0575737
+       ]
+      ]
+     },
+     "geometry": {
+      "back_iron_thickness": null,
+      "bar_bridge_thickness": 0.0,
+      "bar_height": 0.0,
+      "bar_opening_width": 0.0,
+      "bar_shape": "rectangular",
+      "bar_width": 0.0,
+      "bridge_thickness": null,
+      "end_ring_axial_length": null,
+      "end_ring_radial_height": null,
+      "magnet_mount": "inset",
+      "magnet_overhang": null,
+      "n_bars": 0,
+      "n_slots": 72,
+      "r_ag": 0.08965000000000001,
+      "r_inner": 0.06515,
+      "r_magnet": 0.0893,
+      "r_outer": 0.12105,
+      "r_rotor": 0.07299,
+      "r_stator": 0.09,
+      "skew_angle": null,
+      "slot_depth": 0.022,
+      "slot_opening_width": 0.0017,
+      "slot_width_ratio": 0.6,
+      "topology": "inrunner"
+     },
+     "k_e": 6.149e-05,
+     "k_h": 0.02127,
+     "k_w": 0.966,
+     "m_core": 13.7,
+     "mu_r_fe": 2500,
+     "mu_r_pm": 1.05,
+     "n_p": 6,
+     "name": "BMW i3 2016 IPM",
+     "psi_f": 0.0436
+    },
+    "run_id": "9e4911dfbf60"
+   },
+   "label": "i3-operating-point-flux-map",
+   "stored": {
+    "config": {
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "operating_point",
+     "motor": {
+      "B_core": 1.0,
+      "B_rem": 1.24,
+      "L_d": 7.12e-05,
+      "L_q": 0.0001413,
+      "L_stk": 0.1323,
+      "N": 9,
+      "R_s": 0.0053,
+      "alpha_Br": -0.0012,
+      "alpha_fe": 1.78,
+      "alpha_p": 0.75,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 565.7,
+       "U_DC": 355.0
+      },
+      "flux_map": {
+       "i_d_A": [
+        -600.0,
+        -500.0,
+        -400.0,
+        -300.0,
+        -200.0,
+        -100.0,
+        0.0
+       ],
+       "i_q_A": [
+        0.0,
+        100.0,
+        200.0,
+        300.0,
+        400.0,
+        500.0,
+        600.0
+       ],
+       "psi_d_Wb": [
+        [
+         0.0010218,
+         0.0076612,
+         0.0144783,
+         0.0214557,
+         0.0285953,
+         0.0359145,
+         0.0435964
+        ],
+        [
+         0.0013343,
+         0.0079851,
+         0.0148077,
+         0.0218019,
+         0.028999,
+         0.0364885,
+         0.0443812
+        ],
+        [
+         0.0019804,
+         0.008553,
+         0.0153238,
+         0.022321,
+         0.0295379,
+         0.0369563,
+         0.0439535
+        ],
+        [
+         0.0026644,
+         0.0089904,
+         0.0154411,
+         0.0221675,
+         0.0290021,
+         0.0356273,
+         0.0414912
+        ],
+        [
+         0.0031529,
+         0.0091178,
+         0.0151318,
+         0.0212774,
+         0.0275595,
+         0.0336089,
+         0.0390065
+        ],
+        [
+         0.00341,
+         0.0090128,
+         0.0146421,
+         0.0203229,
+         0.0260257,
+         0.0315452,
+         0.0366149
+        ],
+        [
+         0.0035505,
+         0.0087863,
+         0.0140559,
+         0.0193649,
+         0.0246518,
+         0.0297585,
+         0.0345145
+        ]
+       ],
+       "psi_q_Wb": [
+        [
+         -0.0002424,
+         -0.0002314,
+         -0.0002163,
+         -0.000188,
+         -0.000148,
+         -0.0001013,
+         -5.18e-05
+        ],
+        [
+         0.0188342,
+         0.0198098,
+         0.0207967,
+         0.0217814,
+         0.0227827,
+         0.023888,
+         0.0248878
+        ],
+        [
+         0.035245,
+         0.0368345,
+         0.0381858,
+         0.039389,
+         0.0403085,
+         0.0408374,
+         0.0400903
+        ],
+        [
+         0.0473874,
+         0.0488867,
+         0.0499061,
+         0.050207,
+         0.0499273,
+         0.0487675,
+         0.0466984
+        ],
+        [
+         0.0553626,
+         0.0562638,
+         0.0565729,
+         0.0562571,
+         0.0551608,
+         0.053421,
+         0.0512694
+        ],
+        [
+         0.0599484,
+         0.06029,
+         0.0601684,
+         0.0595502,
+         0.0584684,
+         0.056879,
+         0.0548343
+        ],
+        [
+         0.0626875,
+         0.0628228,
+         0.0625225,
+         0.0618313,
+         0.0607704,
+         0.0593472,
+         0.0575737
+        ]
+       ]
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "inset",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 72,
+       "r_ag": 0.08965000000000001,
+       "r_inner": 0.06515,
+       "r_magnet": 0.0893,
+       "r_outer": 0.12105,
+       "r_rotor": 0.07299,
+       "r_stator": 0.09,
+       "skew_angle": null,
+       "slot_depth": 0.022,
+       "slot_opening_width": 0.0017,
+       "slot_width_ratio": 0.6,
+       "topology": "inrunner"
+      },
+      "k_e": 6.149e-05,
+      "k_h": 0.02127,
+      "k_w": 0.966,
+      "m_core": 13.7,
+      "mu_r_fe": 2500,
+      "mu_r_pm": 1.05,
+      "n_p": 6,
+      "name": "BMW i3 2016 IPM",
+      "psi_f": 0.0436
+     },
+     "n_theta": 360,
+     "nonlinear": false,
+     "tau_ref": 125.0,
+     "w_mech": 502.6548245743669
+    },
+    "elapsed_s": 1.482387755997479,
+    "error_msg": null,
+    "metrics": {
+     "I_s_peak": 267.95713526676644,
+     "I_s_rms": 189.47430741445152,
+     "R_s_op": 0.0053,
+     "f_e_Hz": 479.99999999999994,
+     "gamma_deg": 30.95368913418529,
+     "i_d": -137.8224336543386,
+     "i_q": 229.7955681077588,
+     "m_index": 0.953119150332977,
+     "op_source": "flux_map",
+     "p_cu": 570.8181594059588,
+     "p_elec": 63402.67123120182,
+     "p_shaft": 62831.853071795864,
+     "pf": 0.9324067684984617,
+     "psi_f_op": 0.0435964,
+     "regime": "mtpa",
+     "tau": 125.0,
+     "u_d": -133.56967803962684,
+     "u_mag": 169.17864918410342,
+     "u_max": 204.95934556231717,
+     "u_q": 103.82945847951038,
+     "w_mech": 502.6548245743669
+    },
+    "model": "operating_point",
+    "model_version": 2,
+    "motor_config_id": "7ad71e6a99b6",
+    "run_id": "9e4911dfbf60",
+    "schema_version": "v2.1",
+    "source": "computed",
+    "status": "OK",
+    "timestamp": "2026-09-15T21:09:31.803027"
+   }
+  },
+  {
+   "expected": {
+    "config": {
+     "T_coolant": 60.0,
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "motor_thermal",
+     "motor": {
+      "B_core": 1.0,
+      "B_rem": 1.24,
+      "L_d": 7.12e-05,
+      "L_q": 0.0001413,
+      "L_stk": 0.1323,
+      "N": 9,
+      "R_s": 0.0053,
+      "alpha_Br": -0.0012,
+      "alpha_fe": 1.78,
+      "alpha_p": 0.75,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 565.7,
+       "U_DC": 355.0
+      },
+      "flux_map": {
+       "i_d_A": [
+        -600.0,
+        -500.0,
+        -400.0,
+        -300.0,
+        -200.0,
+        -100.0,
+        0.0
+       ],
+       "i_q_A": [
+        0.0,
+        100.0,
+        200.0,
+        300.0,
+        400.0,
+        500.0,
+        600.0
+       ],
+       "psi_d_Wb": [
+        [
+         0.0010218,
+         0.0076612,
+         0.0144783,
+         0.0214557,
+         0.0285953,
+         0.0359145,
+         0.0435964
+        ],
+        [
+         0.0013343,
+         0.0079851,
+         0.0148077,
+         0.0218019,
+         0.028999,
+         0.0364885,
+         0.0443812
+        ],
+        [
+         0.0019804,
+         0.008553,
+         0.0153238,
+         0.022321,
+         0.0295379,
+         0.0369563,
+         0.0439535
+        ],
+        [
+         0.0026644,
+         0.0089904,
+         0.0154411,
+         0.0221675,
+         0.0290021,
+         0.0356273,
+         0.0414912
+        ],
+        [
+         0.0031529,
+         0.0091178,
+         0.0151318,
+         0.0212774,
+         0.0275595,
+         0.0336089,
+         0.0390065
+        ],
+        [
+         0.00341,
+         0.0090128,
+         0.0146421,
+         0.0203229,
+         0.0260257,
+         0.0315452,
+         0.0366149
+        ],
+        [
+         0.0035505,
+         0.0087863,
+         0.0140559,
+         0.0193649,
+         0.0246518,
+         0.0297585,
+         0.0345145
+        ]
+       ],
+       "psi_q_Wb": [
+        [
+         -0.0002424,
+         -0.0002314,
+         -0.0002163,
+         -0.000188,
+         -0.000148,
+         -0.0001013,
+         -5.18e-05
+        ],
+        [
+         0.0188342,
+         0.0198098,
+         0.0207967,
+         0.0217814,
+         0.0227827,
+         0.023888,
+         0.0248878
+        ],
+        [
+         0.035245,
+         0.0368345,
+         0.0381858,
+         0.039389,
+         0.0403085,
+         0.0408374,
+         0.0400903
+        ],
+        [
+         0.0473874,
+         0.0488867,
+         0.0499061,
+         0.050207,
+         0.0499273,
+         0.0487675,
+         0.0466984
+        ],
+        [
+         0.0553626,
+         0.0562638,
+         0.0565729,
+         0.0562571,
+         0.0551608,
+         0.053421,
+         0.0512694
+        ],
+        [
+         0.0599484,
+         0.06029,
+         0.0601684,
+         0.0595502,
+         0.0584684,
+         0.056879,
+         0.0548343
+        ],
+        [
+         0.0626875,
+         0.0628228,
+         0.0625225,
+         0.0618313,
+         0.0607704,
+         0.0593472,
+         0.0575737
+        ]
+       ]
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "inset",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 72,
+       "r_ag": 0.08965000000000001,
+       "r_inner": 0.06515,
+       "r_magnet": 0.0893,
+       "r_outer": 0.12105,
+       "r_rotor": 0.07299,
+       "r_stator": 0.09,
+       "skew_angle": null,
+       "slot_depth": 0.022,
+       "slot_opening_width": 0.0017,
+       "slot_width_ratio": 0.6,
+       "topology": "inrunner"
+      },
+      "k_e": 6.149e-05,
+      "k_h": 0.02127,
+      "k_w": 0.966,
+      "m_core": 13.7,
+      "mu_r_fe": 2500,
+      "mu_r_pm": 1.05,
+      "n_p": 6,
+      "name": "BMW i3 2016 IPM",
+      "psi_f": 0.0436,
+      "thermal_network": {
+       "C_Fe": 6302.0,
+       "C_M": 6532.0,
+       "C_W": 2733.5,
+       "G_FeM": 8.2,
+       "G_FeS": 39.0,
+       "G_WFe": 42.55
+      }
+     },
+     "n_theta": 360,
+     "nonlinear": false,
+     "tau_ref": 125.0,
+     "w_mech": 502.6548245743669
+    },
+    "motor": {
+     "B_core": 1.0,
+     "B_rem": 1.24,
+     "L_d": 7.12e-05,
+     "L_q": 0.0001413,
+     "L_stk": 0.1323,
+     "N": 9,
+     "R_s": 0.0053,
+     "alpha_Br": -0.0012,
+     "alpha_fe": 1.78,
+     "alpha_p": 0.75,
+     "coils_series": 2,
+     "drive": {
+      "MAX_I_S": 565.7,
+      "U_DC": 355.0
+     },
+     "flux_map": {
+      "i_d_A": [
+       -600.0,
+       -500.0,
+       -400.0,
+       -300.0,
+       -200.0,
+       -100.0,
+       0.0
+      ],
+      "i_q_A": [
+       0.0,
+       100.0,
+       200.0,
+       300.0,
+       400.0,
+       500.0,
+       600.0
+      ],
+      "psi_d_Wb": [
+       [
+        0.0010218,
+        0.0076612,
+        0.0144783,
+        0.0214557,
+        0.0285953,
+        0.0359145,
+        0.0435964
+       ],
+       [
+        0.0013343,
+        0.0079851,
+        0.0148077,
+        0.0218019,
+        0.028999,
+        0.0364885,
+        0.0443812
+       ],
+       [
+        0.0019804,
+        0.008553,
+        0.0153238,
+        0.022321,
+        0.0295379,
+        0.0369563,
+        0.0439535
+       ],
+       [
+        0.0026644,
+        0.0089904,
+        0.0154411,
+        0.0221675,
+        0.0290021,
+        0.0356273,
+        0.0414912
+       ],
+       [
+        0.0031529,
+        0.0091178,
+        0.0151318,
+        0.0212774,
+        0.0275595,
+        0.0336089,
+        0.0390065
+       ],
+       [
+        0.00341,
+        0.0090128,
+        0.0146421,
+        0.0203229,
+        0.0260257,
+        0.0315452,
+        0.0366149
+       ],
+       [
+        0.0035505,
+        0.0087863,
+        0.0140559,
+        0.0193649,
+        0.0246518,
+        0.0297585,
+        0.0345145
+       ]
+      ],
+      "psi_q_Wb": [
+       [
+        -0.0002424,
+        -0.0002314,
+        -0.0002163,
+        -0.000188,
+        -0.000148,
+        -0.0001013,
+        -5.18e-05
+       ],
+       [
+        0.0188342,
+        0.0198098,
+        0.0207967,
+        0.0217814,
+        0.0227827,
+        0.023888,
+        0.0248878
+       ],
+       [
+        0.035245,
+        0.0368345,
+        0.0381858,
+        0.039389,
+        0.0403085,
+        0.0408374,
+        0.0400903
+       ],
+       [
+        0.0473874,
+        0.0488867,
+        0.0499061,
+        0.050207,
+        0.0499273,
+        0.0487675,
+        0.0466984
+       ],
+       [
+        0.0553626,
+        0.0562638,
+        0.0565729,
+        0.0562571,
+        0.0551608,
+        0.053421,
+        0.0512694
+       ],
+       [
+        0.0599484,
+        0.06029,
+        0.0601684,
+        0.0595502,
+        0.0584684,
+        0.056879,
+        0.0548343
+       ],
+       [
+        0.0626875,
+        0.0628228,
+        0.0625225,
+        0.0618313,
+        0.0607704,
+        0.0593472,
+        0.0575737
+       ]
+      ]
+     },
+     "geometry": {
+      "back_iron_thickness": null,
+      "bar_bridge_thickness": 0.0,
+      "bar_height": 0.0,
+      "bar_opening_width": 0.0,
+      "bar_shape": "rectangular",
+      "bar_width": 0.0,
+      "bridge_thickness": null,
+      "end_ring_axial_length": null,
+      "end_ring_radial_height": null,
+      "magnet_mount": "inset",
+      "magnet_overhang": null,
+      "n_bars": 0,
+      "n_slots": 72,
+      "r_ag": 0.08965000000000001,
+      "r_inner": 0.06515,
+      "r_magnet": 0.0893,
+      "r_outer": 0.12105,
+      "r_rotor": 0.07299,
+      "r_stator": 0.09,
+      "skew_angle": null,
+      "slot_depth": 0.022,
+      "slot_opening_width": 0.0017,
+      "slot_width_ratio": 0.6,
+      "topology": "inrunner"
+     },
+     "k_e": 6.149e-05,
+     "k_h": 0.02127,
+     "k_w": 0.966,
+     "m_core": 13.7,
+     "mu_r_fe": 2500,
+     "mu_r_pm": 1.05,
+     "n_p": 6,
+     "name": "BMW i3 2016 IPM",
+     "psi_f": 0.0436,
+     "thermal_network": {
+      "C_Fe": 6302.0,
+      "C_M": 6532.0,
+      "C_W": 2733.5,
+      "G_FeM": 8.2,
+      "G_FeS": 39.0,
+      "G_WFe": 42.55
+     }
+    },
+    "run_id": "2bbd7a4bbb90"
+   },
+   "label": "i3-motor-thermal-flux-map",
+   "stored": {
+    "config": {
+     "T_coolant": 60.0,
+     "j_s": 0.0,
+     "maxh_fraction": 0.05,
+     "model": "motor_thermal",
+     "motor": {
+      "B_core": 1.0,
+      "B_rem": 1.24,
+      "L_d": 7.12e-05,
+      "L_q": 0.0001413,
+      "L_stk": 0.1323,
+      "N": 9,
+      "R_s": 0.0053,
+      "alpha_Br": -0.0012,
+      "alpha_fe": 1.78,
+      "alpha_p": 0.75,
+      "coils_series": 2,
+      "drive": {
+       "MAX_I_S": 565.7,
+       "U_DC": 355.0
+      },
+      "flux_map": {
+       "i_d_A": [
+        -600.0,
+        -500.0,
+        -400.0,
+        -300.0,
+        -200.0,
+        -100.0,
+        0.0
+       ],
+       "i_q_A": [
+        0.0,
+        100.0,
+        200.0,
+        300.0,
+        400.0,
+        500.0,
+        600.0
+       ],
+       "psi_d_Wb": [
+        [
+         0.0010218,
+         0.0076612,
+         0.0144783,
+         0.0214557,
+         0.0285953,
+         0.0359145,
+         0.0435964
+        ],
+        [
+         0.0013343,
+         0.0079851,
+         0.0148077,
+         0.0218019,
+         0.028999,
+         0.0364885,
+         0.0443812
+        ],
+        [
+         0.0019804,
+         0.008553,
+         0.0153238,
+         0.022321,
+         0.0295379,
+         0.0369563,
+         0.0439535
+        ],
+        [
+         0.0026644,
+         0.0089904,
+         0.0154411,
+         0.0221675,
+         0.0290021,
+         0.0356273,
+         0.0414912
+        ],
+        [
+         0.0031529,
+         0.0091178,
+         0.0151318,
+         0.0212774,
+         0.0275595,
+         0.0336089,
+         0.0390065
+        ],
+        [
+         0.00341,
+         0.0090128,
+         0.0146421,
+         0.0203229,
+         0.0260257,
+         0.0315452,
+         0.0366149
+        ],
+        [
+         0.0035505,
+         0.0087863,
+         0.0140559,
+         0.0193649,
+         0.0246518,
+         0.0297585,
+         0.0345145
+        ]
+       ],
+       "psi_q_Wb": [
+        [
+         -0.0002424,
+         -0.0002314,
+         -0.0002163,
+         -0.000188,
+         -0.000148,
+         -0.0001013,
+         -5.18e-05
+        ],
+        [
+         0.0188342,
+         0.0198098,
+         0.0207967,
+         0.0217814,
+         0.0227827,
+         0.023888,
+         0.0248878
+        ],
+        [
+         0.035245,
+         0.0368345,
+         0.0381858,
+         0.039389,
+         0.0403085,
+         0.0408374,
+         0.0400903
+        ],
+        [
+         0.0473874,
+         0.0488867,
+         0.0499061,
+         0.050207,
+         0.0499273,
+         0.0487675,
+         0.0466984
+        ],
+        [
+         0.0553626,
+         0.0562638,
+         0.0565729,
+         0.0562571,
+         0.0551608,
+         0.053421,
+         0.0512694
+        ],
+        [
+         0.0599484,
+         0.06029,
+         0.0601684,
+         0.0595502,
+         0.0584684,
+         0.056879,
+         0.0548343
+        ],
+        [
+         0.0626875,
+         0.0628228,
+         0.0625225,
+         0.0618313,
+         0.0607704,
+         0.0593472,
+         0.0575737
+        ]
+       ]
+      },
+      "geometry": {
+       "back_iron_thickness": null,
+       "bar_bridge_thickness": 0.0,
+       "bar_height": 0.0,
+       "bar_opening_width": 0.0,
+       "bar_shape": "rectangular",
+       "bar_width": 0.0,
+       "bridge_thickness": null,
+       "end_ring_axial_length": null,
+       "end_ring_radial_height": null,
+       "magnet_mount": "inset",
+       "magnet_overhang": null,
+       "n_bars": 0,
+       "n_slots": 72,
+       "r_ag": 0.08965000000000001,
+       "r_inner": 0.06515,
+       "r_magnet": 0.0893,
+       "r_outer": 0.12105,
+       "r_rotor": 0.07299,
+       "r_stator": 0.09,
+       "skew_angle": null,
+       "slot_depth": 0.022,
+       "slot_opening_width": 0.0017,
+       "slot_width_ratio": 0.6,
+       "topology": "inrunner"
+      },
+      "k_e": 6.149e-05,
+      "k_h": 0.02127,
+      "k_w": 0.966,
+      "m_core": 13.7,
+      "mu_r_fe": 2500,
+      "mu_r_pm": 1.05,
+      "n_p": 6,
+      "name": "BMW i3 2016 IPM",
+      "psi_f": 0.0436,
+      "thermal_network": {
+       "C_Fe": 6302.0,
+       "C_M": 6532.0,
+       "C_W": 2733.5,
+       "G_FeM": 8.2,
+       "G_FeS": 39.0,
+       "G_WFe": 42.55
+      }
+     },
+     "n_theta": 360,
+     "nonlinear": false,
+     "tau_ref": 125.0,
+     "w_mech": 502.6548245743669
+    },
+    "elapsed_s": 12.715863649995299,
+    "error_msg": null,
+    "metrics": {
+     "I_s_peak": 285.8102844388,
+     "R_s_op": 0.00731068164918891,
+     "T_coolant": 60.0,
+     "T_iron": 95.48788866354785,
+     "T_magnet": 95.48788866354786,
+     "T_winding": 116.54046600298312,
+     "f_e_Hz": 479.99999999999994,
+     "i_d": -157.81141532355986,
+     "i_q": 238.29199710557356,
+     "iterations": 17,
+     "m_index": 0.9145632575580396,
+     "op_source": "flux_map",
+     "p_cu": 895.7871657929705,
+     "p_elec": 64215.88072967423,
+     "p_fe": 488.24049208539714,
+     "p_shaft": 62831.853071795864,
+     "psi_f_op": 0.039647405906574076,
+     "psi_ratio": 1.2201052044514131,
+     "psi_s": 0.05319219453534559,
+     "regime": "mtpa",
+     "residual_K": 0.007668019934953918,
+     "u_mag": 162.33497821655203
+    },
+    "model": "motor_thermal",
+    "model_version": 2,
+    "motor_config_id": "5ad38a9c71e2",
+    "run_id": "2bbd7a4bbb90",
+    "schema_version": "v2.1",
+    "source": "computed",
+    "status": "OK",
+    "timestamp": "2026-09-17T08:29:07.328007"
+   }
+  }
+ ],
+ "description": "Real store rows pinned against phasesweep.record_schema"
+}

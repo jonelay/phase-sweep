@@ -16,7 +16,12 @@ tests skip when the extracts are absent.
 import numpy as np
 import pytest
 
-from phasesweep.models.iron_loss import bertotti_loss_density, fit_bertotti
+from phasesweep.models.iron_loss import (
+    bertotti_loss_density,
+    fit_bertotti,
+    run_iron_loss,
+)
+from phasesweep.sweep_types import RunConfig
 from tests.conftest import CREATOR_IM_SKIP, REPO_ROOT
 
 IM_DIR = REPO_ROOT / "data/creator_case_im/Induction_motor"
@@ -166,3 +171,127 @@ class TestImNoLoadIronLoss:
                 (k_e * 50.0**2 * B**2)
                 / bertotti_loss_density(50.0, B, k_h, k_e, alpha))
         assert min(shares) - 0.05 < share < max(shares) + 0.05
+
+
+class TestCreatorImIronBlock:
+    """The shipped [iron] block on data/creator_case_im/creator_case_im.toml
+    is DERIVED (geometry, winding, steel tables) — not calibrated — and
+    runs through the slip-aware stator lump. These tests
+    hold the derivation to its inputs and pin the shortfall against the
+    measured no-load separation so the file cannot quietly become an
+    agreement claim.
+    """
+
+    GEOM_CSV = IM_DIR / "Design_parameters/Motor_geometry/Geometry_parameters.csv"
+    RHO_STEEL = 7800.0   # kg/m³, M800-50A (EN 10106)
+    K_STACK = 0.97
+
+    @pytest.fixture(scope="class")
+    def motor(self):
+        from phasesweep.machines.configs import load_motor
+        return load_motor(REPO_ROOT / "data/creator_case_im/creator_case_im.toml")
+
+    @pytest.fixture(scope="class")
+    def geom(self):
+        if not self.GEOM_CSV.exists():
+            pytest.skip(CREATOR_IM_SKIP)
+        rows = np.genfromtxt(self.GEOM_CSV, delimiter=",", skip_header=1,
+                             dtype=str)
+        return {r[0]: float(r[1]) for r in rows if r[1]}
+
+    @pytest.fixture(scope="class")
+    def measured_slopes(self):
+        """Per-frequency P_fe / psi_rms² slopes (W/Wb²) at 10-50 Hz."""
+        if not PFE_CSV.exists():
+            pytest.skip(CREATOR_IM_SKIP)
+        d = np.genfromtxt(PFE_CSV, delimiter=",", skip_header=1)
+        slopes = {}
+        for i, f in enumerate((10.0, 20.0, 30.0, 40.0, 50.0)):
+            x, y = d[:, 2 * i], d[:, 2 * i + 1]
+            m = np.isfinite(x) & np.isfinite(y)
+            s, *_ = np.linalg.lstsq(x[m][:, None], y[m], rcond=None)
+            slopes[f] = float(s[0])
+        return slopes
+
+    def test_coefficients_are_the_in_repo_m800_fit(self, motor):
+        f, B, p = _steel_table_m800()
+        k_h, k_e, alpha = fit_bertotti(f, B, p)
+        assert (motor.k_h, motor.k_e, motor.alpha_fe) == (0.0238, 1.86e-4, 1.49)
+        assert k_h == pytest.approx(motor.k_h, rel=0.01)
+        assert k_e == pytest.approx(motor.k_e, rel=0.01)
+        assert alpha == pytest.approx(motor.alpha_fe, abs=0.005)
+
+    def test_core_mass_from_lamination_geometry(self, motor, geom):
+        od = geom["Stator iron outer diameter"]
+        id_ = geom["Stator iron inner diameter"]
+        L = geom["Length of stator iron"]
+        t_s = geom["Length of stator teeth"]
+        w_t = geom["Width of stator teeth (equivalent width)"]
+        Q = geom["No. of stator slots"]
+        r_i, r_s = id_ / 2, id_ / 2 + t_s
+        v_teeth = Q * w_t * t_s * L
+        v_yoke = np.pi * ((od / 2) ** 2 - r_s**2) * L
+        m_core = (v_teeth + v_yoke) * self.RHO_STEEL * self.K_STACK
+        assert m_core == pytest.approx(motor.m_core, rel=0.01)
+        assert r_s > r_i  # slot region is inside the yoke
+
+    def test_b_core_is_the_mass_weighted_flux_estimate(self, motor, geom):
+        # 36 slots, 2 layers x 18 turns, 3 phases -> 216 turns/phase;
+        # q = 3, 7/9 pitch -> k_w = k_p·k_d (Winding_properties_of_IM.csv)
+        Q, p_pairs, q, turns = 36, motor.n_p, 3, 18
+        N = Q * 2 * turns / (2 * 3)
+        gamma = 2 * np.pi * p_pairs / Q
+        k_w = np.sin(7 / 9 * np.pi / 2) * np.sin(q * gamma / 2) / (q * np.sin(gamma / 2))
+        assert N == 216 and k_w == pytest.approx(0.902, abs=0.001)
+        V_ph = motor.induction.V_LL_rated / np.sqrt(3)
+        psi_pk = np.sqrt(2) * V_ph / (2 * np.pi * motor.induction.f_rated)
+        phi_pole = psi_pk / (N * k_w)
+        id_ = geom["Stator iron inner diameter"]
+        od = geom["Stator iron outer diameter"]
+        L = geom["Length of stator iron"]
+        t_s = geom["Length of stator teeth"]
+        w_t = geom["Width of stator teeth (equivalent width)"]
+        tau_p = np.pi * id_ / (2 * p_pairs)
+        tau_s = np.pi * id_ / Q
+        h_y = (od - id_) / 2 - t_s
+        B_gap = phi_pole * np.pi / (2 * tau_p * L)
+        B_tooth = B_gap * tau_s / (w_t * self.K_STACK)
+        B_yoke = phi_pole / 2 / (h_y * L * self.K_STACK)
+        v_teeth = Q * w_t * t_s * L
+        v_yoke = np.pi * ((od / 2) ** 2 - (id_ / 2 + t_s) ** 2) * L
+        B_w = (B_tooth * v_teeth + B_yoke * v_yoke) / (v_teeth + v_yoke)
+        assert B_tooth == pytest.approx(1.55, abs=0.01)
+        assert B_yoke == pytest.approx(1.36, abs=0.01)
+        assert B_w == pytest.approx(motor.B_core, abs=0.005)
+
+    def test_runs_at_rated_supply(self, motor):
+        r = run_iron_loss(RunConfig(motor=motor, model="iron_loss"))
+        assert r["f_e_Hz"] == 50.0
+        assert r["f_rotor_Hz"] == pytest.approx(0.0466667 * 50.0)
+        assert r["p_fe"] == pytest.approx(33.4, abs=0.5)
+
+    def test_shortfall_is_a_constant_factor_across_frequency(
+            self, motor, measured_slopes):
+        """FINDING: measured/model ≈ 3.9 at 50 Hz rated flux, and the
+        same factor within ±7% at 10-40 Hz — the frequency dependence
+        transports (contrast the PMSM, test_iron_loss.py
+        TestCreatorTomlIronBlock), the level does not. The global
+        M800-50A fit is ~30% light at 50 Hz (TestM800Fit); the rest is
+        build factor plus rotor-surface / tooth-pulsation loss that the
+        no-load separation books as iron and a stator lump cannot carry.
+        Calibrating B_core to the level would need > 3 T."""
+        V_ph = motor.induction.V_LL_rated / np.sqrt(3)
+        psi_rms_sq = (V_ph / (2 * np.pi * 50.0)) ** 2
+        ratio = {}
+        for f, slope in measured_slopes.items():
+            model = motor.m_core * bertotti_loss_density(
+                f, motor.B_core, motor.k_h, motor.k_e, motor.alpha_fe)
+            ratio[f] = slope * psi_rms_sq / model
+        assert ratio[50.0] == pytest.approx(3.9, abs=0.15)
+        for f in (10.0, 20.0, 30.0, 40.0):
+            assert ratio[f] / ratio[50.0] == pytest.approx(1.0, abs=0.07)
+        # the level cannot be absorbed by a physical B_core
+        need = ratio[50.0] * motor.m_core * bertotti_loss_density(
+            50.0, motor.B_core, motor.k_h, motor.k_e, motor.alpha_fe)
+        assert motor.m_core * bertotti_loss_density(
+            50.0, 3.0, motor.k_h, motor.k_e, motor.alpha_fe) < need

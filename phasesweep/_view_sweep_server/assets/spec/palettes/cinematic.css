@@ -1,0 +1,86 @@
+/* Generated from spec/palettes/cinematic.toml by scripts/generate_json.py.
+   Do not edit; edit the TOML and regenerate. */
+
+:root {
+  --vs-bg: #0a0d12;
+  --vs-surface: #131820;
+  --vs-text: #d8dde6;
+  --vs-text-2: #b0b8c6;
+  --vs-text-muted: #8a93a3;
+  --vs-hairline: #1f2630;
+  --vs-accent: #6dd3c8;
+  --vs-accent-ink: #6dd3c8;
+  --vs-accent-warm: #f2a35e;
+  --vs-accent-cool: #6ea4f2;
+  --vs-warn-ink: #f2c96e;
+  --vs-banner-text: #f2c96e;
+  --vs-shadow: rgba(0, 0, 0, 0.5);
+  --vs-status-good: #5fd99c;
+  --vs-status-warning: #f2c96e;
+  --vs-status-critical: #e07b6b;
+  --vs-hoverlabel-bg: #131820;
+  --vs-legend-bg: #131820;
+  --vs-chart-bg: rgba(0, 0, 0, 0);
+  --vs-chart-text: #d8dde6;
+  --vs-chart-muted: #8a93a3;
+  --vs-chart-grid: #1f2630;
+  --vs-chart-zeroline: #2a3140;
+  --vs-chart-ink: rgba(216, 221, 230, 0.35);
+  --vs-seq-lo: #131820;
+  --vs-seq-mid: #6dd3c8;
+  --vs-seq-hi: #e6fffb;
+  --vs-font-ui: 'Iowan Old Style', 'Source Serif Pro', Georgia, serif;
+  --vs-font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --vs-font-size: 17px;
+  --vs-radius: 3px;
+  --vs-series-1: #6dd3c8;
+  --vs-series-2: #f2a35e;
+  --vs-series-3: #6ea4f2;
+  --vs-series-4: #5fd99c;
+  --vs-series-5: #f2c96e;
+  --vs-series-6: #e07b6b;
+  --vs-series-7: #b0b8c6;
+  --vs-series-8: #8a93a3;
+}
+
+:root[data-theme="dark"] {
+  --vs-bg: #0a0d12;
+  --vs-surface: #131820;
+  --vs-text: #d8dde6;
+  --vs-text-2: #b0b8c6;
+  --vs-text-muted: #8a93a3;
+  --vs-hairline: #1f2630;
+  --vs-accent: #6dd3c8;
+  --vs-accent-ink: #6dd3c8;
+  --vs-accent-warm: #f2a35e;
+  --vs-accent-cool: #6ea4f2;
+  --vs-warn-ink: #f2c96e;
+  --vs-banner-text: #f2c96e;
+  --vs-shadow: rgba(0, 0, 0, 0.5);
+  --vs-status-good: #5fd99c;
+  --vs-status-warning: #f2c96e;
+  --vs-status-critical: #e07b6b;
+  --vs-hoverlabel-bg: #131820;
+  --vs-legend-bg: #131820;
+  --vs-chart-bg: rgba(0, 0, 0, 0);
+  --vs-chart-text: #d8dde6;
+  --vs-chart-muted: #8a93a3;
+  --vs-chart-grid: #1f2630;
+  --vs-chart-zeroline: #2a3140;
+  --vs-chart-ink: rgba(216, 221, 230, 0.35);
+  --vs-seq-lo: #131820;
+  --vs-seq-mid: #6dd3c8;
+  --vs-seq-hi: #e6fffb;
+  --vs-font-ui: 'Iowan Old Style', 'Source Serif Pro', Georgia, serif;
+  --vs-font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --vs-font-size: 17px;
+  --vs-radius: 3px;
+  --vs-series-1: #6dd3c8;
+  --vs-series-2: #f2a35e;
+  --vs-series-3: #6ea4f2;
+  --vs-series-4: #5fd99c;
+  --vs-series-5: #f2c96e;
+  --vs-series-6: #e07b6b;
+  --vs-series-7: #b0b8c6;
+  --vs-series-8: #8a93a3;
+}

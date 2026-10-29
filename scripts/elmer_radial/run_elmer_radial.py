@@ -1,6 +1,6 @@
 """Elmer independent-code verification of the radial FEM solver.
 
-Runs the native ElmerSolver (no Docker on this workstation — see README)
+Runs a native ElmerSolver install (see README)
 on a structured polar mesh of the normalized Zhu baseline, runs the
 NGSolve `fem` model on the same cases, and pins the comparison in
 pinned/elmer_radial_cv.json. The committed JSON is re-checked in the CI

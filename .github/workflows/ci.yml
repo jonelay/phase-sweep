@@ -36,9 +36,34 @@ jobs:
         # STRICT_SKIP fails the run on any skip whose reason is not in the
         # conftest allowlist — an optional dependency dropping out of the CI
         # environment must not read as a green suite.
-        run: uv run pytest -m "not fem and not slow" -q -rs
+        run: >-
+          uv run pytest -m "not fem and not slow" -q -rs
+          --cov=phasesweep --cov-report=html:coverage-html --cov-report=term
         env:
           PHASESWEEP_STRICT_SKIP: "1"
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: coverage-html/
+          retention-days: 30
+
+  lint-js:
+    name: Dashboard ESLint
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - run: npm install -g eslint@8
+      - name: ESLint dashboard
+        run: >-
+          eslint --no-eslintrc -c phasesweep/dashboard/.eslintrc.json
+          phasesweep/dashboard/app.js phasesweep/dashboard/config-editor.js
+          phasesweep/dashboard/panels/*.js
 
   core:
     name: Tier 0 — core only
@@ -74,8 +99,8 @@ jobs:
         run: uv sync --extra all --extra test
       - name: Preflight — ngsolve must actually load
         # The whole point of this tier. ngsolve failing to load makes every
-        # FEM test skip under an allowlisted reason, which is how CI went
-        # FEM-blind for ~20 sessions. Fail here instead, loudly.
+        # FEM test skip under an allowlisted reason, which is how CI once
+        # went FEM-blind unnoticed. Fail here instead, loudly.
         run: uv run python -c "import ngsolve; print('ngsolve', ngsolve.__version__)"
       - name: Test (Tier 1)
         # EXPECTED_SKIPS pins the total: the CREATOR datasets are gitignored

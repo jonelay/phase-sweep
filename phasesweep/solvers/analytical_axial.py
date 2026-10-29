@@ -24,11 +24,25 @@ import numpy as np
 from numpy.typing import NDArray
 
 from phasesweep.machines.geometry import AxialFluxGeometry
-from phasesweep.solver_params import _reject_induction, _require_axial_geometry
-from phasesweep.solvers.analytical import carter_factor
+from phasesweep.solver_params import reject_induction, require_axial_geometry
+from phasesweep.solvers.field_solution import carter_factor
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from phasesweep.machines.motor import Motor
+    from phasesweep.sweep_types import RunConfig
+
+__all__ = [
+    "ALPHA_P_SINUSOIDAL_EQUIV",
+    "AnalyticalAxialParams",
+    "axial_layer_Bz_series",
+    "carter_airgap_axial",
+    "pm_leakage_factor",
+    "prepare_analytical_axial",
+    "run_analytical_axial",
+    "winding_transfer_axial",
+]
 
 # Equivalent square-wave pole-arc ratio of a sinusoidally shaped magnet:
 # a magnet profiled so the gap flux is sinusoidal with peak equal to the
@@ -189,6 +203,14 @@ def pm_leakage_factor(
         tau_slot = 2 * pi * geo.r_mean / geo.n_slots
         if 0 <= interpole < tau_slot:
             k_zz = 1.0 - (tau_slot - interpole) ** 2 / (2 * w_pm * tau_slot)
+            if k_zz <= 0:
+                raise ValueError(
+                    f"zigzag leakage factor k_zz={k_zz:.3g} <= 0: slot pitch "
+                    f"{tau_slot * 1e3:.2f} mm against magnet width "
+                    f"{w_pm * 1e3:.2f} mm and interpole gap "
+                    f"{interpole * 1e3:.2f} mm is outside thesis Eq. (2.16) "
+                    f"(n_slots={geo.n_slots}, alpha_p={alpha_p})"
+                )
 
     return k_agap * k_zz * k_add
 
@@ -266,8 +288,8 @@ def prepare_analytical_axial(motor: Motor) -> AnalyticalAxialParams:
     B_rem must be set explicitly — the psi_f -> B_rem inversion is
     radial-only (Zhu & Howe transfer), so there is no derivation path.
     """
-    _reject_induction(motor, "analytical_axial")
-    geo = _require_axial_geometry(motor, "analytical_axial")
+    reject_induction(motor, "analytical_axial")
+    geo = require_axial_geometry(motor, "analytical_axial")
     if motor.B_rem is None:
         raise ValueError(
             f"Motor '{motor.name}': analytical_axial needs an explicit "
@@ -281,3 +303,61 @@ def prepare_analytical_axial(motor: Motor) -> AnalyticalAxialParams:
         mu_r_fe=motor.mu_r_fe,
         alpha_p=motor.alpha_p,
     )
+
+
+def run_analytical_axial(config: RunConfig) -> dict[str, Any]:
+    from phasesweep.solver_params import backemf_from_flux, backemf_source, check_nyquist, n_eff
+    from phasesweep.solvers.harmonics import (
+        assert_waveform_symmetry,
+        compute_thd,
+        harmonics_1sided,
+    )
+
+    params = prepare_analytical_axial(config.motor)
+    geo = params.geometry
+    n_p = params.n_p
+    check_nyquist(config.n_theta, n_p, series=True)
+
+    tau_p = pi * geo.r_mean / n_p
+    g_prime, k_c = carter_airgap_axial(geo, params.mu_r_pm)
+
+    theta = np.linspace(0, 2 * np.pi, config.n_theta, endpoint=False)
+    B_z = axial_layer_Bz_series(
+        theta, n_p, params.B_rem,
+        tau_p=tau_p, g_prime=g_prime, l_pm=geo.magnet_thickness,
+        mu_r_pm=params.mu_r_pm, alpha_p=params.alpha_p,
+        max_order=config.n_theta // 2,
+    )
+
+    amps = harmonics_1sided(B_z)
+    assert_waveform_symmetry(amps, n_p, label="axial B_z")
+    fundamental = float(amps[n_p])
+    thd_pct = compute_thd(amps, n_p)
+
+    k_sigma_pm = float(pm_leakage_factor(
+        geo, params.mu_r_pm, params.alpha_p, g_prime, tau_p,
+    ))
+
+    m = config.motor
+    flux_linkage_peak = None
+    if m.N is not None and m.k_w is not None and m.coils_series is not None:
+        flux_linkage_peak = float(
+            GAP_LINKAGE[geo.variant]
+            * k_sigma_pm * fundamental
+            * winding_transfer_axial(geo, n_eff(m), m.k_w, n_p)
+        )
+
+    backemf_fundamental = backemf_from_flux(m, flux_linkage_peak)
+
+    return {
+        "theta_list": theta.tolist(),
+        "B_r_list": B_z.tolist(),
+        "fundamental": fundamental,
+        "peak_Br": float(np.max(np.abs(B_z))),
+        "thd_pct": thd_pct,
+        "backemf_fundamental": backemf_fundamental,
+        "backemf_source": backemf_source(m, backemf_fundamental),
+        "flux_linkage_peak": flux_linkage_peak,
+        "k_c": float(k_c),
+        "k_sigma_pm": k_sigma_pm,
+    }

@@ -6,7 +6,8 @@ import pytest
 
 from phasesweep.machines.geometry import inrunner
 from phasesweep.machines.motor import DriveParams
-from phasesweep.registry import MODEL_REGISTRY, ModelInfo, _run_analytical_impl
+from phasesweep.registry import MODEL_REGISTRY, ModelInfo
+from phasesweep.solvers.analytical import run_analytical
 from phasesweep.sweep_types import RunConfig, compute_run_id
 from tests.conftest import make_motor, requires_sim
 
@@ -22,7 +23,9 @@ class TestRegistryStructure:
             "drive_sim", "drive_sim_two_mass",
             "rated_torque", "stall_torque",
             "thermal_duty", "torque_speed", "iron_loss", "demag_screen",
-            "cogging_torque",
+            "cogging_torque", "operating_point", "motor_thermal",
+            "im_equivalent_circuit", "im_torque_slip", "im_bar_impedance",
+            "im_fem_harmonic", "im_fem_locked_rotor",
             "backemf_capture", "inductance_test", "resistance_test",
             "torque_test", "airgap_flux_test", "iron_loss_test",
         }
@@ -106,7 +109,7 @@ class TestAnalyticalRunner:
 
     def test_returns_expected_keys(self):
         rc = RunConfig(motor=make_motor(), model="analytical")
-        result = _run_analytical_impl(rc)
+        result = run_analytical(rc)
         assert "theta_list" in result
         assert "B_r_list" in result
         assert "fundamental" in result
@@ -121,12 +124,12 @@ class TestAnalyticalRunner:
         change, alongside the version bump.
         """
         rc = RunConfig(motor=make_motor(), model="analytical", n_theta=360)
-        result = _run_analytical_impl(rc)
+        result = run_analytical(rc)
         assert result["thd_pct"] == pytest.approx(32.27, abs=0.05)
 
     def test_fundamental_positive(self):
         rc = RunConfig(motor=make_motor(), model="analytical", n_theta=360)
-        result = _run_analytical_impl(rc)
+        result = run_analytical(rc)
         assert result["fundamental"] > 0
 
     # The next five tests kill specific mutmut survivors: the runner's
@@ -137,7 +140,7 @@ class TestAnalyticalRunner:
     def test_outputs_match_produces(self):
         rc = RunConfig(motor=make_motor(B_rem=1.2, psi_f=None),
                        model="analytical", n_theta=360)
-        assert set(_run_analytical_impl(rc)) == \
+        assert set(run_analytical(rc)) == \
             MODEL_REGISTRY["analytical"].produces
 
     def test_samples_at_custom_r_ag(self):
@@ -148,9 +151,9 @@ class TestAnalyticalRunner:
         geo = base.geometry
         geo_hi = dataclasses.replace(
             geo, r_ag=geo.r_magnet + 0.85 * (geo.r_stator - geo.r_magnet))
-        r_mid = _run_analytical_impl(
+        r_mid = run_analytical(
             RunConfig(motor=base, model="analytical", n_theta=360))
-        r_hi = _run_analytical_impl(
+        r_hi = run_analytical(
             RunConfig(motor=make_motor(B_rem=1.2, psi_f=None,
                                        geometry=geo_hi),
                       model="analytical", n_theta=360))
@@ -160,7 +163,7 @@ class TestAnalyticalRunner:
     def test_passes_mu_r_pm_through(self):
         """Off-default magnet permeability must reach the series (the
         default 1.05 masks a dropped kwarg)."""
-        r = _run_analytical_impl(
+        r = run_analytical(
             RunConfig(motor=make_motor(B_rem=1.2, psi_f=None, mu_r_pm=1.4),
                       model="analytical", n_theta=360))
         assert r["fundamental"] == pytest.approx(0.84163, abs=1e-4)
@@ -169,7 +172,7 @@ class TestAnalyticalRunner:
         """At n_theta=12 / n_p=2 the uncapped series would alias order 10
         into the fundamental bin (0.936 instead of 0.889) — pin that the
         runner passes max_order = n_theta // 2."""
-        r = _run_analytical_impl(
+        r = run_analytical(
             RunConfig(motor=make_motor(B_rem=1.2, psi_f=None),
                       model="analytical", n_theta=12))
         assert r["fundamental"] == pytest.approx(0.88937, abs=1e-4)
@@ -178,7 +181,7 @@ class TestAnalyticalRunner:
         """The heuristic k_end feeds the reported (not applied) column:
         pin its value so the g + h_m/mu_r_pm effective-gap formula can't
         drift silently (regression pin at the standard test motor)."""
-        r = _run_analytical_impl(
+        r = run_analytical(
             RunConfig(motor=make_motor(B_rem=1.2, psi_f=None),
                       model="analytical", n_theta=360))
         assert r["k_end"] == pytest.approx(0.179354, abs=1e-5)
@@ -186,7 +189,7 @@ class TestAnalyticalRunner:
 
     def test_k_end_none_without_l_stk(self):
         """No L_stk -> no heuristic: the keys must be None, not ''."""
-        r = _run_analytical_impl(
+        r = run_analytical(
             RunConfig(motor=make_motor(B_rem=1.2, psi_f=None, L_stk=None),
                       model="analytical", n_theta=360))
         assert r["k_end"] is None
@@ -194,7 +197,7 @@ class TestAnalyticalRunner:
 
     def test_theta_length_matches_n_theta(self):
         rc = RunConfig(motor=make_motor(), model="analytical", n_theta=180)
-        result = _run_analytical_impl(rc)
+        result = run_analytical(rc)
         assert len(result["theta_list"]) == 180
         assert len(result["B_r_list"]) == 180
 
@@ -206,29 +209,31 @@ class TestAnalyticalRunner:
         rc = RunConfig(
             motor=motor, model="analytical", n_theta=2 * motor.n_p + 1)
         with pytest.raises(ValueError, match=r"2\*n_p \+ 2"):
-            _run_analytical_impl(rc)
-        ok = _run_analytical_impl(RunConfig(
+            run_analytical(rc)
+        ok = run_analytical(RunConfig(
             motor=motor, model="analytical", n_theta=2 * motor.n_p + 2))
         assert ok["fundamental"] > 0
 
     def test_backemf_fundamental_present(self):
         rc = RunConfig(motor=make_motor(), model="analytical")
-        result = _run_analytical_impl(rc)
+        result = run_analytical(rc)
         assert result["backemf_fundamental"] is not None
         assert result["backemf_fundamental"] > 0
+        assert result["backemf_source"] == "psi_f"
 
     def test_backemf_none_without_psi_f_or_winding(self):
         motor = make_motor(psi_f=None, B_rem=0.5, N=None, k_w=None, L_stk=None)
         rc = RunConfig(motor=motor, model="analytical")
-        result = _run_analytical_impl(rc)
+        result = run_analytical(rc)
         assert result["backemf_fundamental"] is None
+        assert result["backemf_source"] is None
 
     def test_k_end_scales_derived_flux_linkage(self):
         # Computed Motor.k_end multiplies the B_rem-derived flux linkage
         # and the derived back-EMF exactly.
-        base = _run_analytical_impl(RunConfig(
+        base = run_analytical(RunConfig(
             motor=make_motor(psi_f=None, B_rem=1.0), model="analytical"))
-        corr = _run_analytical_impl(RunConfig(
+        corr = run_analytical(RunConfig(
             motor=make_motor(psi_f=None, B_rem=1.0, k_end=0.9),
             model="analytical"))
         assert corr["flux_linkage_peak"] == pytest.approx(
@@ -242,9 +247,9 @@ class TestAnalyticalRunner:
     def test_k_end_not_applied_when_b_rem_derived_from_psi_f(self):
         # B_rem derived from a measured psi_f already includes end
         # effects — applying k_end would double-count (guard).
-        base = _run_analytical_impl(RunConfig(
+        base = run_analytical(RunConfig(
             motor=make_motor(), model="analytical"))  # psi_f=0.1, no B_rem
-        corr = _run_analytical_impl(RunConfig(
+        corr = run_analytical(RunConfig(
             motor=make_motor(k_end=0.9), model="analytical"))
         assert corr["flux_linkage_peak"] == pytest.approx(
             base["flux_linkage_peak"], rel=1e-12)
@@ -256,7 +261,7 @@ class TestAnalyticalRunner:
 
     def test_k_end_heuristic_reported_not_applied(self):
         # Without Motor.k_end the heuristic stays informational only.
-        result = _run_analytical_impl(RunConfig(
+        result = run_analytical(RunConfig(
             motor=make_motor(psi_f=None, B_rem=1.0), model="analytical"))
         assert result["k_end_source"] == "heuristic"
         assert result["k_end_applied"] is False
@@ -268,16 +273,18 @@ class TestAnalyticalRunner:
         geo = inrunner(r_outer=1.0, r_stator=0.70, r_magnet=0.64, r_rotor=0.30,
                        n_slots=12, slot_depth=0.05, slot_opening_width=0.055)  # ratio ~0.15
         motor = make_motor(psi_f=None, B_rem=1.2, geometry=geo)
-        result = _run_analytical_impl(RunConfig(motor=motor, model="analytical"))
+        result = run_analytical(RunConfig(motor=motor, model="analytical"))
         w_e = motor.drive.W_REF * motor.n_p
         assert result["backemf_fundamental"] == pytest.approx(
             w_e * result["flux_linkage_peak"], rel=1e-12)
+        assert result["backemf_source"] == "computed"
 
     def test_backemf_explicit_psi_f_wins(self):
         motor = make_motor(psi_f=0.123)
-        result = _run_analytical_impl(RunConfig(motor=motor, model="analytical"))
+        result = run_analytical(RunConfig(motor=motor, model="analytical"))
         w_e = motor.drive.W_REF * motor.n_p
         assert result["backemf_fundamental"] == pytest.approx(w_e * 0.123)
+        assert result["backemf_source"] == "psi_f"
 
     def test_flux_linkage_roundtrip_slotted_explicit_psi_f(self):
         # psi_f → derived B_rem → flux_linkage_peak must round-trip exactly
@@ -288,18 +295,34 @@ class TestAnalyticalRunner:
         from tests.conftest import REPO_ROOT
         motor = load_motor(REPO_ROOT / "motors/outrunner_14mm_steel.toml")
         motor = dataclasses.replace(motor, psi_f=0.268e-3, B_rem=None)
-        result = _run_analytical_impl(RunConfig(motor=motor, model="analytical"))
+        result = run_analytical(RunConfig(motor=motor, model="analytical"))
         assert result["flux_linkage_peak"] == pytest.approx(0.268e-3, rel=1e-9)
 
     def test_alpha_p_reduces_fundamental(self):
         from math import pi, sin
         rc_full = RunConfig(motor=make_motor(B_rem=1.2, psi_f=None, alpha_p=1.0), model="analytical")
         rc_part = RunConfig(motor=make_motor(B_rem=1.2, psi_f=None, alpha_p=0.75), model="analytical")
-        B1_full = _run_analytical_impl(rc_full)["fundamental"]
-        B1_part = _run_analytical_impl(rc_part)["fundamental"]
+        B1_full = run_analytical(rc_full)["fundamental"]
+        B1_part = run_analytical(rc_part)["fundamental"]
         assert B1_part < B1_full
         expected_ratio = sin(pi * 0.75 / 2)
         assert B1_part / B1_full == pytest.approx(expected_ratio, rel=1e-6)
+
+    def test_rB_invariant_fires_on_regression(self, monkeypatch):
+        """Zhu-Howe 2c runner guard: RuntimeError if |r·B| at midgap < at iron."""
+        from phasesweep.solvers.field_solution import zhu_howe_Br as _real
+
+        def _inflated(theta, n_p, B_rem, r_eval=None, **kw):
+            result = _real(theta, n_p, B_rem, r_eval=r_eval, **kw)
+            if r_eval == kw.get("r_stator"):
+                return result * 1e6
+            return result
+
+        monkeypatch.setattr(
+            "phasesweep.solvers.analytical.zhu_howe_Br", _inflated)
+        with pytest.raises(RuntimeError, match="2c invariant"):
+            run_analytical(
+                RunConfig(motor=make_motor(), model="analytical"))
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +330,7 @@ class TestAnalyticalRunner:
 # ---------------------------------------------------------------------------
 
 class TestAnalyticalAxialRunner:
-    """Model-level pins for _run_analytical_axial_impl. The axial series
+    """Model-level pins for run_analytical_axial. The axial series
     itself is covered in test_analytical_axial.py; before these, the
     runner's own wiring (pole pitch, Carter input, leakage/winding
     chain, back-EMF paths, output keys) had no direct assertions — the
@@ -322,8 +345,8 @@ class TestAnalyticalAxialRunner:
     def result(self, parviainen):
         rc = RunConfig(motor=parviainen, model="analytical_axial",
                        n_theta=360)
-        from phasesweep.registry import _run_analytical_axial_impl
-        return _run_analytical_axial_impl(rc)
+        from phasesweep.solvers.analytical_axial import run_analytical_axial
+        return run_analytical_axial(rc)
 
     def test_outputs_match_produces(self, result):
         assert set(result) == MODEL_REGISTRY["analytical_axial"].produces
@@ -353,16 +376,16 @@ class TestAnalyticalAxialRunner:
         """At n_theta=24 / n_p=6 the uncapped series aliases order 30
         onto the fundamental bin (0.71880 instead of 0.71367) — pin that
         the runner passes max_order = n_theta // 2."""
-        from phasesweep.registry import _run_analytical_axial_impl
-        r = _run_analytical_axial_impl(
+        from phasesweep.solvers.analytical_axial import run_analytical_axial
+        r = run_analytical_axial(
             RunConfig(motor=parviainen, model="analytical_axial",
                       n_theta=24))
         assert r["fundamental"] == pytest.approx(0.713666, abs=1e-4)
 
     def test_n_theta_boundary_rejected(self, parviainen):
-        from phasesweep.registry import _run_analytical_axial_impl
+        from phasesweep.solvers.analytical_axial import run_analytical_axial
         with pytest.raises(ValueError, match="n_theta"):
-            _run_analytical_axial_impl(
+            run_analytical_axial(
                 RunConfig(motor=parviainen, model="analytical_axial",
                           n_theta=2 * parviainen.n_p + 1))
 
@@ -370,8 +393,8 @@ class TestAnalyticalAxialRunner:
         """The reject test pins only the failing side, and both mutations
         of the bound survive it. n_theta = 2*n_p + 2 is the first grid
         that resolves the fundamental, so it has to go through."""
-        from phasesweep.registry import _run_analytical_axial_impl
-        r = _run_analytical_axial_impl(
+        from phasesweep.solvers.analytical_axial import run_analytical_axial
+        r = run_analytical_axial(
             RunConfig(motor=parviainen, model="analytical_axial",
                       n_theta=2 * parviainen.n_p + 2))
         assert r["fundamental"] == pytest.approx(0.713666, abs=1e-5)
@@ -381,9 +404,9 @@ class TestAnalyticalAxialRunner:
         default — so dropping the passthrough is invisible at the anchor
         even though mu_r_pm still reaches Carter and the leakage factor.
         Pin an off-default value, the same trap the radial runner had."""
-        from phasesweep.registry import _run_analytical_axial_impl
+        from phasesweep.solvers.analytical_axial import run_analytical_axial
         hot = dataclasses.replace(parviainen, mu_r_pm=1.35)
-        r = _run_analytical_axial_impl(
+        r = run_analytical_axial(
             RunConfig(motor=hot, model="analytical_axial", n_theta=360))
         assert r["fundamental"] == pytest.approx(0.648177, abs=1e-5)
 
@@ -393,11 +416,11 @@ class TestAnalyticalAxialRunner:
         """The winding guard is a three-way and. Drop any one field and
         there is no model-derived flux linkage, and no back-EMF from it —
         loosening the guard reaches None arithmetic instead."""
-        from phasesweep.registry import _run_analytical_axial_impl
+        from phasesweep.solvers.analytical_axial import run_analytical_axial
         m = dataclasses.replace(parviainen, psi_f=None,
                                 drive=DriveParams(W_REF=100.0),
                                 **{missing: None})
-        r = _run_analytical_axial_impl(
+        r = run_analytical_axial(
             RunConfig(motor=m, model="analytical_axial", n_theta=360))
         assert r["flux_linkage_peak"] is None
         assert r["backemf_fundamental"] is None
@@ -406,18 +429,20 @@ class TestAnalyticalAxialRunner:
         """Both back-EMF paths pinned: explicit psi_f (949.86 = W_REF *
         n_p * psi_f) beats the model-derived flux linkage (949.147);
         with W_REF unset it stays None."""
-        from phasesweep.registry import _run_analytical_axial_impl
+        from phasesweep.solvers.analytical_axial import run_analytical_axial
         with_drive = dataclasses.replace(
             parviainen, drive=DriveParams(W_REF=100.0))
-        r1 = _run_analytical_axial_impl(
+        r1 = run_analytical_axial(
             RunConfig(motor=with_drive, model="analytical_axial",
                       n_theta=360))
         assert r1["backemf_fundamental"] == pytest.approx(949.86, abs=0.01)
+        assert r1["backemf_source"] == "psi_f"
         no_psi = dataclasses.replace(with_drive, psi_f=None)
-        r2 = _run_analytical_axial_impl(
+        r2 = run_analytical_axial(
             RunConfig(motor=no_psi, model="analytical_axial", n_theta=360))
         assert r2["backemf_fundamental"] == pytest.approx(949.147, abs=0.01)
-        assert (_run_analytical_axial_impl(
+        assert r2["backemf_source"] == "computed"
+        assert (run_analytical_axial(
             RunConfig(motor=parviainen, model="analytical_axial",
                       n_theta=360))["backemf_fundamental"] is None)
 
@@ -452,6 +477,9 @@ class TestHashFieldsIntegration:
             "n_planes": 5,
             "cogging_points": 24,
             "slip": 0.05,
+            "w_mech": 123.4,
+            "tau_ref": 5.6,
+            "T_coolant": 55.0,
         }
         solver_fields = {
             f.name for f in dataclasses.fields(RunConfig)
@@ -543,6 +571,9 @@ class TestHashFieldsIntegration:
             "thermal_duty", "torque_speed", "iron_loss", "demag_screen",
             "drive_sim_two_mass", "cogging_torque", "analytical_axial",
             "fem_axial",
+            "im_equivalent_circuit", "im_torque_slip", "im_bar_impedance",
+            "im_fem_harmonic", "im_fem_locked_rotor", "operating_point",
+            "motor_thermal",
         }
         for key, info in MODEL_REGISTRY.items():
             if info.source == "computed" and key not in post_convention_fix:
@@ -555,3 +586,34 @@ def test_all_registry_entries_importable():
         assert info.fn is not None or info.source == "measured", (
             f"{key}: fn is None for a computed model"
         )
+
+
+def _shipped_motor_paths():
+    from tests.conftest import NOT_MOTOR_TOMLS, REPO_ROOT
+    return sorted(
+        str(p.relative_to(REPO_ROOT))
+        for p in [*REPO_ROOT.glob("motors/*.toml"), *REPO_ROOT.glob("data/*/*.toml")]
+        if p.name not in NOT_MOTOR_TOMLS
+    )
+
+
+@pytest.mark.parametrize("path", _shipped_motor_paths())
+def test_fast_model_outputs_declared_in_produces(path):
+    """Every key a fast model emits on a shipped motor is in its
+    `produces` — calibration and measured import select models by it."""
+    from phasesweep import load_motor
+    from tests.conftest import REPO_ROOT
+
+    motor = load_motor(REPO_ROOT / path)
+    for key, info in MODEL_REGISTRY.items():
+        if (info.source != "computed" or info.fn is None
+                or info.cost != "fast" or info.needs_runtime):
+            continue
+        try:
+            if info.validate is not None:
+                info.validate(motor)
+        except ValueError:
+            continue
+        out = info.fn(RunConfig(motor=motor, model=key))
+        undeclared = {k for k in out if not k.startswith("_")} - info.produces
+        assert not undeclared, f"{key} on {path}: {sorted(undeclared)}"

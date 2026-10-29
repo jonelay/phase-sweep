@@ -82,11 +82,11 @@ factors; adopted for axial machines by Parviainen (2005) Eqs. 2.15–2.17.
 
 Primary reference for winding factor `k_w`, slot/tooth geometry, iron
 concentration factors for loss, and the flux linkage derivation used in
-`_derive_B_rem`. Chapter 3 covers air-gap field and flux linkage; Chapter 9
+`derive_B_rem`. Chapter 3 covers air-gap field and flux linkage; Chapter 9
 covers losses.
 
 **What we use:**
-- Winding factor definition and values (k_w = 0.966 for 12-slot/4-pole)
+- Winding factor definition and values (k_w = 0.966 for 72-slot/12-pole)
 - Tooth flux concentration factor: `B_tooth ≈ B_gap · τ_slot / w_tooth`
 - Yoke flux factor: `B_yoke ≈ B_gap · R_SI / (2·n_p·h_yoke)`
 
@@ -128,13 +128,30 @@ become a second configuration source. Confirm coefficients against the
 specific grade and lamination thickness before production use; the eddy term
 is especially thickness-sensitive.
 
+### EMERF Lamination Steels — M-19 29 Ga core loss tables
+**Electric Motor Education and Research Foundation (2004).** "Lamination
+Steels, Third Edition: A Compendium of Lamination Steel Alloys Commonly Used
+in Electric Motors." South Dartmouth, MA. Excerpt "Di-Max M-19, Fully
+Processed, .014 inch (.36 mm, 29 gauge)" published as MIT OpenCourseWare
+6.685 Electric Machines (Fall 2013), Steel Data for Problem Set 3.
+https://ocw.mit.edu/courses/6-685-electric-machines-fall-2013/resources/mit6_685f13_ps03data/
+
+Typical total AC core loss (W/lb and W/kg) of as-sheared 29 gauge Di-Max
+M-19 at 50, 60, 100, 150, 200, 300, 400, 600, 1000, 1500 and 2000 Hz,
+0.1 to 1.7 T, from information provided by AK Steel in 2000; also DC and
+AC magnetization curves and RMS exciting power. Density 7.65 g/cc. The
+W/kg table is fitted to the BMW i3 `[iron]` coefficients. MIT OCW terms:
+CC BY-NC-SA, so release archives cite the table rather than redistribute it;
+`tests/models/test_iron_loss_m19.py` reads a transcription at
+`data/bmw_i3/m19_29ga_core_loss.csv` and skips when it is absent.
+
 ### M19 B-H data
 **AK Steel Corporation.** "DI-MAX Non-Oriented Electrical Steel M-15 through M-47."
 Product data sheet, 2020. Available from Cleveland-Cliffs (formerly AK Steel).
 PDF: https://e-magnetica.pl/database-em/01_Soft/Electrical_steels/AKSteel_2020/NO-DI-MAX-M-15_M-19_M-22_M-27_M-36_M-43_M-47_2020.pdf
 
 Tabulated B-H data for silicon steel at 60 Hz, 0–2.2 T range. Used for
-the polynomial ν(B²) fit in nonlinear FEM (Spec 07 §3). Approximately 20 measurement points
+the monotone PCHIP H(B) spline (`fem_materials.BHCurve`) in nonlinear FEM. Approximately 20 measurement points
 available in the public datasheet. Multi-grade PDF — M-19 section starts
 alongside M-15, M-22, M-27, M-36, M-43, M-47.
 
@@ -209,6 +226,24 @@ mesher, basis, and nonlinear linearization (`MagnetoDynamics2D` /
 `scripts/elmer_radial/`, `scripts/elmer_axial/`; results are in
 `docs/validation-report.md`.
 
+### TEAM Problem 30a — Davey — time-harmonic eddy-current benchmark (`team30a`)
+**Davey, K. R.** "Induction Motor Analyses." International TEAM Workshop
+Problem 30 (COMPUMAG). Problem sheet: `problem30a.pdf` at
+https://www.compumag.org/wp/team/
+
+Two-dimensional exposed-winding induction motor with a solid conducting
+rotor, solved analytically as a layered cylinder. Exact verification
+target for the complex-A_z time-harmonic solver in `solvers/fem_harmonic.py`
+(stator-frame velocity term σΩ∂A/∂θ). Two conventions not stated on the
+sheet are pinned by reproducing the tables: the current density is an rms
+phasor, and the exterior beyond the stator is open.
+
+**What we use:** `analytic_team30a` (modified-Bessel series, each space
+harmonic at its own slip frequency) and `solve_team30a` /
+`build_team30a_mesh` (FE path) in `solvers/team30a.py`; Tables I, II' and
+III transcribed in `data/team30a/`. Code verification, not a validation
+anchor.
+
 ### Maxwell stress tensor torque
 **Coulomb, J. L., & Meunier, G. (1984).** "Finite element implementation of
 virtual work principle for magnetic or electric force and torque computation."
@@ -217,7 +252,7 @@ https://doi.org/10.1109/TMAG.1984.1063232
 
 Canonical reference for Maxwell stress tensor torque computation in FEM via
 contour integral on a circular air-gap path — the formulation behind
-`maxwell_stress_torque` (Spec 07 §3.11); the circuit models
+`maxwell_stress_torque`; the circuit models
 (rated_torque.py) remain the primary torque path:
 ```
 τ = (L_stk · R_AG² / μ₀) · ∫₀²π B_r(θ) · B_θ(θ) dθ
@@ -261,7 +296,8 @@ motulator.
 **Motor data (Table 6.2):** 2.2-kW 6-pole IPM (ABB M2BJ 100L 6 B3) used as
 rated torque validation case: n_p=3, L_d=36 mH, L_q=51 mH, ψ_f=0.545 Wb,
 R_s=3.6 Ω, I_rated=4.3 A_rms (6.08 A peak), rated torque 14 Nm at 1500 rpm.
-TOML: `data/awan_ipm/awan_2p2kw_ipm.toml`. Tests: `tests/models/test_rated_torque.py`.
+TOML: `data/awan_ipm/awan_2p2kw_ipm.toml`. Tests: `tests/models/test_rated_torque.py`,
+`tests/crossval/test_awan_crossval.py`.
 
 ### Morimoto et al. (1994) — MTPA for IPM drives
 **Morimoto, S., Sanada, M., & Takeda, Y. (1994).** "Wide-speed operation of
@@ -281,12 +317,33 @@ sin(γ) = [−ψ_f + √(ψ_f² + 8·(L_q − L_d)²·I_s²)] / [4·(L_q − L_d
 i_d = −I_s·sin(γ),  i_q = I_s·cos(γ)
 ```
 For SPM (L_d = L_q): γ = 0, i_d = 0, i_q = I_s. The constant-parameter MTPA
-locus is the baseline Awan (2019) §5.1 contrasts its look-up-table method
-against (Fig. 5.1 dashed loci).
+locus is the baseline that Awan (2019) §5.1 contrasts its look-up-table
+method against (Fig. 5.1 dashed loci).
 
 **What we use:** closed-form MTPA for rated torque and stall torque of
 salient machines with constant (unsaturated) inductances. Known limitation: at high stall currents,
 saturation reduces L_d/L_q and ψ_f — linear model overpredicts torque.
+
+### Soong & Miller (1994) — field-weakening envelope (`torque_speed`)
+**Soong, W. L., & Miller, T. J. E. (1994).** "Field-weakening performance
+of brushless synchronous AC motor drives." *IEE Proceedings — Electric
+Power Applications*, 141(6), 331–340.
+https://doi.org/10.1049/ip-epa:19941470
+
+Unified treatment of the constant-parameter dq envelope: current-limit
+circle, voltage-limit ellipse, MTPA below base speed, and the MTPV locus
+above it. Classifies machines by ψ_f versus L_d·I_max: when the ellipse
+center lies inside the current circle the MTPV branch extends to
+unbounded speed; otherwise torque reaches zero at a finite speed. The
+circle/ellipse picture itself originates in Jahns, Kliman & Neumann
+(1986), *IEEE Trans. Ind. Appl.*, IA-22(4), 738–747,
+https://doi.org/10.1109/TIA.1986.4504786.
+
+**What we use:** `torque_speed.py` follows this framework with R_s
+retained — `base_speed` solves the voltage quadratic at the MTPA
+currents, `max_speed` applies the ψ_f ≤ L_d·I_max test, and
+`_envelope_core` finds the voltage-limited optimum by i_d search rather
+than the closed-form mode split.
 
 ---
 
@@ -319,3 +376,138 @@ cogging torque in permanent magnet machines." *IEEE Transactions on Energy
 Conversion*, 15(4), 407–412.
 https://doi.org/10.1109/60.900501
 Free PDF: https://eprints.whiterose.ac.uk/889/1/zhuzq20.pdf
+
+---
+
+## Induction Motor
+
+### Boldea & Nasar (2010) — **primary reference** (`im_circuit`, `im_design_audit`)
+**Boldea, I., & Nasar, S. A. (2010).** *The Induction Machines Design
+Handbook.* 2nd ed. CRC Press. ISBN 978-1-4200-6668-5.
+Chapter summary: `docs/references/boldea-nasar-imh-2e.md`.
+
+Source for the steady-state equivalent circuit and its component physics:
+magnetization curve and saturation factor (Ch 5), leakage inductances —
+slot, differential, zig-zag, end-winding, skin effect (Ch 6), R_fe shunt
+placement, Thevenin breakdown, and torque-slip (Ch 7), deep-bar impedance
+(Ch 9), and loss separation (Ch 11).
+
+**What we use:**
+- `models/im_circuit.py`: circuit topology and R_fe placement (Ch 7 §7.1,
+  Ch 11 §11.2); R_fe/X_m ≈ 20 diagnostic
+- `audit/im_design_audit.py`: advisory bands for rated slip (§7.6),
+  breakdown ratio (eq 7.74), starting current (eq 7.35), no-load current,
+  B_g and K_s (§5.4)
+- `models/im_bar_impedance.py`: end-ring permeance (Ch 6) and Layer-2
+  invariants (eqs 6.71–72, derivation Ch 9)
+- `models/im_fem_harmonic.py`: stator end-winding leakage L_ew in the
+  stator circuit and the FEM-identified stator leakage
+
+### IEEE Std 112-2017 — induction motor test procedure
+**IEEE (2017).** *IEEE Standard Test Procedure for Polyphase Induction
+Motors and Generators.* IEEE Std 112-2017.
+https://doi.org/10.1109/IEEESTD.2018.8291810
+
+Defines the DC / no-load / locked-rotor identification of the equivalent
+circuit, the empirical stator/rotor split of locked-rotor leakage, the
+no-load loss separation (P_rot = P − 3·I²·R_1 extrapolated to zero
+voltage), and the method-B stray-load-loss residual with assumed
+percentages by rating (Table 9-2).
+
+**What we use:** `identify_from_tests`, `identify_locked_rotor`,
+`separate_no_load_losses`, `compute_stray_load_residual` in
+`models/im_circuit.py`; the virtual no-load and locked-rotor steps in
+`models/im_fem_harmonic.py` feed the same identification.
+
+---
+
+## Validation Anchors
+
+### Gierczynski & Grzesiak (2021) — BMW i3 IPM FEM model (`motors/bmw_i3.toml`)
+**Gierczynski, M., & Grzesiak, L. M. (2021).** "Comparative Analysis of the
+Steady-State Model Including Non-Linear Flux Linkage Surfaces and the
+Simplified Linearized Model when Applied to a Highly-Saturated Permanent
+Magnet Synchronous Machine—Evaluation Based on the Example of the BMW i3
+Traction Motor." *Energies*, 14(9), 2343. CC BY 4.0.
+https://doi.org/10.3390/en14092343
+
+Ansys Maxwell 2D reconstruction of the 125 kW, 12-pole / 72-slot V-shape
+IPM from ORNL teardown data, validated against ORNL locked-rotor torque.
+All circuit values are FEA-extracted, not measured; the supplementary DXF
+and xlsx are archived in `data/bmw_i3/` (provenance in its README).
+
+**What we use:**
+- Table 2 circuit parameters (ψ_PM 43.6 mWb, L_d 71.2 µH, L_q 141.3 µH,
+  R_s 5.3 mΩ); Table A1 geometry, A2 winding, A3 materials
+- Tables A4–A5 flux-linkage maps ψ_d(i_d,i_q), ψ_q(i_d,i_q) →
+  `data/bmw_i3/flux_maps_7x7.json`
+- Tests: `tests/models/test_torque_speed.py` (`TestBmwI3Envelope`),
+  `tests/crossval/test_bmw_i3_flux_maps.py`
+
+### Burress (2016, 2017) — BMW i3 ORNL teardown and benchmarking
+**Burress, T. (2016).** "Benchmarking EV and HEV Technologies," DOE VTO
+Annual Merit Review, Project EDT006, June 2016.
+https://www.energy.gov/sites/prod/files/2016/06/f32/edt006_burress_2016_o_web.pdf
+
+**Burress, T. (2017).** "Electrical Performance, Reliability Analysis, and
+Characterization," DOE VTO Annual Merit Review, Project EDT087, June 2017.
+https://www.energy.gov/sites/default/files/2017/06/f34/edt087_burress_2017_o.pdf
+
+ORNL teardown and dynamometer testing of the 2016 BMW i3 traction motor
+(125 kW IPM). Provides mass breakdown, slot/pole count, efficiency maps at
+300/500/700 Vdc, continuous thermal test at 7000 rpm, and power density
+comparisons. No d-q circuit parameters or back-EMF waveforms published.
+
+**What we use:** motor geometry envelope, mass, rated performance, and
+efficiency map extent for `motors/bmw_i3.toml`. Circuit parameters come
+from Gierczyński (2021) above, not from ORNL directly.
+
+### Merwerth (2014) — BMW i3/i8 traction motor presentation
+**Merwerth, A. (2014).** "The Hybrid-Synchronous Machine of the New BMW
+i3 & i8," HEV 2014 presentation, BMW Group.
+http://hybridfordonscentrum.se/wp-content/uploads/2014/05/20140404_BMW.pdf
+
+BMW's own presentation of the i3 traction motor. Source for system-level
+parameters: phase resistance R_s = 5.3 mΩ, max phase current 565.7 A,
+max phase voltage 159.2 V, max speed 11400 rpm.
+
+### Tikadar, Kumar, Joshi & Kumar (2020) — BMW i3 electro-thermal model (`[thermal_network]` R_WFe)
+**Tikadar, A., Kumar, N., Joshi, Y., & Kumar, S. (2020).** "Coupled
+Electro-Thermal Analysis of Permanent Magnet Synchronous Motor for
+Electric Vehicles." *19th IEEE ITherm*, pp. 249–256. OSTI 1843426.
+https://www.osti.gov/servlets/purl/1843426
+(Georgia Tech; earlier cited in this repo as "Kumar 2023" and "Kumar et al., InterPACK
+2019" — same paper.)
+
+Two-way coupled Motor-CAD + Fluent model of the jacket-cooled i3 motor:
+coolant 70 °C, jacket h = 1000–9000 W/m²K, liner 0.3 mm, air gap 0.5 mm.
+Fig. 4 gives losses vs torque at four speeds, Fig. 5 the winding hot
+spot vs torque at h = 5000 W/m²K. Two points at 4500 rpm — (35 N·m:
+p_cu ≈ 0.1 kW, p_fe ≈ 0.8 kW, T_max ≈ 75 °C) and (250 N·m: p_cu ≈ 3.7 kW,
+p_fe ≈ 2.05 kW, T_max ≈ 174 °C) — solve the two-resistance form to
+R_WFe = 0.0235 K/W and R_FeS = 0.0029 K/W. A numerical model's hot spot
+at an assumed h, not a measurement or a lumped mean.
+
+**What we use:** `R_WFe` (1/`G_WFe`) in the i3 `[thermal_network]`
+block, and `R_FeS` as a consistency check on the measured-fit value
+(`scripts/fit_i3_thermal_network.py`), not as the anchor. Also states
+that rotor core and magnet loss are a small share, which is why the
+magnet node carries no source.
+
+### Becker & Kaye (1962) — air-gap heat transfer (`[thermal_network]` G_FeM)
+**Becker, K. M., & Kaye, J. (1962).** "Measurements of Diabatic Flow in an
+Annulus With an Inner Rotating Cylinder." *ASME J. Heat Transfer*, 84(2),
+pp. 97–104.
+
+Taylor–Couette correlation for the rotor–stator gap: Nu = 2 for
+Ta < 1700 (conduction), Nu = 0.128 Ta^0.367 for 1700 < Ta < 10⁴,
+Nu = 0.409 Ta^0.241 above, with Nu = h·2δ/k and Ta = Re_δ²·δ/r,
+Re_δ = ω r δ/ν. For the i3 at 7000 rpm (δ = 0.7 mm, r = 89.3 mm,
+L = 132.3 mm, air at ~80 °C: ν = 2.1×10⁻⁵ m²/s, k = 0.030 W/mK):
+ω r = 65.5 m/s, Re_δ ≈ 2.2×10³, Ta ≈ 3.7×10⁴, Nu ≈ 5.2, h ≈ 110 W/m²K
+over 2π r L = 0.0742 m² gives G_FeM ≈ 8.2 W/K.
+
+**What we use:** `G_FeM` in the i3 block — invisible at steady state
+(`T_M = T_Fe`), so a literature estimate is recorded rather than fitted.
+
+**What we use:** R_s and drive limits in `motors/bmw_i3.toml`.

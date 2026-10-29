@@ -5,21 +5,26 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from phasesweep._extras import install_hint
+
 try:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Wedge
-except ImportError:
-    raise ImportError(
-        "phasesweep.plots requires the visualization extra: "
-        "pip install phasesweep[viz]"
-    ) from None
+except ImportError as e:
+    raise ImportError(f"phasesweep.plots needs {e.name}; {install_hint('viz')}") from None
 
 if TYPE_CHECKING:
     from phasesweep.machines.geometry import Geometry
 
 from numpy.typing import NDArray
+
+__all__ = [
+    "plot_geometry",
+    "plot_sweep_1d",
+    "plot_sweep_2d",
+]
 
 
 def _save(fig: plt.Figure, output_dir: Path | str | None, filename: str) -> str:

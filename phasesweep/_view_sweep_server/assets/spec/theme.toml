@@ -1,0 +1,194 @@
+# view-sweep theme contract.
+#
+# Names and semantics of the CSS custom properties every consumer styles
+# against. Palettes (spec/palettes/*.toml) supply the VALUES; this file
+# fixes the NAMES. A property listed under [core] must be set by every
+# palette variant (checked by tests/test_spec_conformance.py). Properties
+# under [extended] are optional; viewsweep.css falls back sensibly when
+# one is unset.
+#
+# Every name is written without the `--vs-` prefix; consumers add it.
+
+[meta]
+prefix = "--vs-"
+version = 1
+
+# -- core: required in every palette variant ------------------------------------
+
+[core.bg]
+role = "page background behind all surfaces"
+kind = "color"
+
+[core.surface]
+role = "panel, sidebar, and top bar surface"
+kind = "color"
+
+[core.text]
+role = "primary foreground text"
+kind = "color"
+
+[core.text-2]
+role = "secondary text: labels, headings, captions"
+kind = "color"
+
+[core.text-muted]
+role = "de-emphasised text; must clear 4.5:1 on bg and surface (WCAG AA)"
+kind = "color"
+
+[core.hairline]
+role = "1px rules, borders, and pane seams"
+kind = "color"
+
+[core.accent]
+role = "UI accent for data/state fills (progress, tab underline, badges); theme-invariant"
+kind = "color"
+
+[core.accent-ink]
+role = "accent used as foreground text or indicator; may lighten in dark variants for contrast"
+kind = "color"
+
+[core.status-good]
+role = "success / connected / pass"
+kind = "color"
+
+[core.status-warning]
+role = "warning / connecting / marginal"
+kind = "color"
+
+[core.status-critical]
+role = "error / disconnected / fail"
+kind = "color"
+
+[core.series-1]
+role = "categorical series slot 1 (default single-series colour; leads with a blue/teal)"
+kind = "color"
+
+[core.series-2]
+role = "categorical series slot 2"
+kind = "color"
+
+[core.series-3]
+role = "categorical series slot 3"
+kind = "color"
+
+[core.series-4]
+role = "categorical series slot 4"
+kind = "color"
+
+[core.series-5]
+role = "categorical series slot 5"
+kind = "color"
+
+[core.series-6]
+role = "categorical series slot 6"
+kind = "color"
+
+[core.series-7]
+role = "categorical series slot 7"
+kind = "color"
+
+[core.series-8]
+role = "categorical series slot 8 (weakest hue; last to be assigned)"
+kind = "color"
+
+# -- extended: optional, palette may set ------------------------------------------
+
+[extended.warn-ink]
+role = "warning as foreground text (darker than status-warning for legibility)"
+kind = "color"
+fallback = "status-warning"
+
+[extended.banner-text]
+role = "text on a warning-tinted banner"
+kind = "color"
+fallback = "warn-ink"
+
+[extended.shadow]
+role = "translucent ink for drop shadows, scroll fades, and modal scrims"
+kind = "color"
+fallback = "rgba(0, 0, 0, 0.3)"
+
+[extended.hoverlabel-bg]
+role = "Plotly hover-box background; must be opaque even when chart-bg is transparent"
+kind = "color"
+fallback = "surface"
+
+[extended.legend-bg]
+role = "Plotly legend background; must be opaque even when chart-bg is transparent"
+kind = "color"
+fallback = "surface"
+
+[extended.chart-bg]
+role = "plot paper and plot area background"
+kind = "color"
+fallback = "surface"
+
+[extended.chart-text]
+role = "plot font colour"
+kind = "color"
+fallback = "text-2"
+
+[extended.chart-muted]
+role = "axis tick and modebar colour"
+kind = "color"
+fallback = "text-muted"
+
+[extended.chart-grid]
+role = "gridline colour"
+kind = "color"
+fallback = "hairline"
+
+[extended.chart-zeroline]
+role = "zero-line colour; a step stronger than chart-grid"
+kind = "color"
+fallback = "hairline"
+
+[extended.chart-ink]
+role = "translucent overlay strokes on plots (boundary circles, guides)"
+kind = "color"
+fallback = "shadow"
+
+[extended.seq-lo]
+role = "single-hue sequential ramp: low end (fades into chart-bg)"
+kind = "color"
+fallback = "chart-bg"
+
+[extended.seq-mid]
+role = "single-hue sequential ramp: midpoint"
+kind = "color"
+fallback = "accent"
+
+[extended.seq-hi]
+role = "single-hue sequential ramp: high end"
+kind = "color"
+fallback = "text"
+
+[extended.accent-warm]
+role = "secondary warm accent (cinematic palettes)"
+kind = "color"
+fallback = "accent"
+
+[extended.accent-cool]
+role = "secondary cool accent (cinematic palettes)"
+kind = "color"
+fallback = "accent"
+
+[extended.font-ui]
+role = "body and chrome font stack"
+kind = "font-family"
+fallback = "system-ui, -apple-system, \"Segoe UI\", sans-serif"
+
+[extended.font-mono]
+role = "monospace stack for code, config keys, and numeric inputs"
+kind = "font-family"
+fallback = "ui-monospace, monospace"
+
+[extended.font-size]
+role = "base font size for chrome"
+kind = "length"
+fallback = "13px"
+
+[extended.radius]
+role = "corner radius for controls"
+kind = "length"
+fallback = "4px"

@@ -1,0 +1,244 @@
+# TU Graz CREATOR Case induction motor — open-benchmark anchor
+# Source: CREATOR CRC-TRR361 dataset, DOI 10.3217/kh3v7-dhn98 (CC BY-NC 4.0),
+#   companion machine of the CREATOR PMSM (Muetze et al., COMPEL 44(4) 2025,
+#   DOI 10.1108/compel-11-2024-0462, arXiv:2501.15921 — Section 5).
+#   File references below name CSVs inside the dataset zip
+#   (fetch: scripts/fetch_creator_im_dataset.py).
+#
+# 3.7 kW nominal / 4.6 kW max, 400 V rms L-L wye, 6.9 A rms nominal, 50 Hz,
+# 4-pole, 1430 rpm rated, 24.7 Nm rated / 31 Nm max, 36 stator slots /
+# 28 rotor cage bars, totally enclosed water cooled.
+#
+# CONVENTIONS — the three classic IM datasheet traps, pinned explicitly:
+#   1. VOLTAGE: V_LL_rated is line-line rms for the wye connection
+#      (Electrical_properties_of_IM.csv: "400 V rms L-L", "Supply
+#      connection Y"). Phase voltage = 400/sqrt(3) = 230.9 V rms. The
+#      WEG W22 equivalent-circuit sheets are the cautionary example: a
+#      naive plug-in of their rated set at the wrong connection/voltage
+#      convention reproduces power factor but yields roughly HALF the
+#      nameplate torque. Every voltage in [induction] is labeled.
+#   2. TEMPERATURE: all resistances are at 20 °C
+#      (Equivalent_circuit_parameters.csv states it). The machine is
+#      rated hot: the circuit at 20 °C parameters over-predicts torque
+#      at nameplate slip by +34% (pinned in
+#      tests/crossval/test_creator_im_crossval.py with the arithmetic —
+#      a uniform ~1.37 resistance scale, i.e. cage/winding at ~115 °C,
+#      lands on the nameplate point).
+#   3. FREQUENCY: R_2_vs_f / L_sigma_r_vs_f are keyed on ROTOR frequency
+#      s·f (deep-bar effect, measured at locked rotor where f_rotor =
+#      f_supply); L_sigma_s_vs_f on supply frequency. R_r rises +66%
+#      across 10-50 Hz — a constant-R_2 model under-predicts starting
+#      torque by ~30% mean / ~55% at 50 Hz (pinned).
+#
+# s_rated = (1500 - 1430)/1500 = 0.0466667 (4-pole synchronous 1500 rpm
+# at 50 Hz; rated speed from IM_general_specification.csv).
+# I_rated_rms = 6.9 A rms nominal (loader converts to 9.758 A peak —
+# the repo-wide peak convention; the im_* model outputs are rms and say so).
+
+[motor]
+name = "CREATOR Case IM"
+type = "squirrel-cage induction motor (open benchmark)"
+
+[geometry]
+# Geometry_parameters.csv (25-parameter table; the DXF/STEP are not
+# transcribed). Radii = table diameters / 2. No PM annulus: r_magnet
+# defaults to r_rotor (the rotor surface).
+r_outer = 0.1            # m, stator iron OD 0.2
+r_stator = 0.0628        # m, stator iron ID 0.1256
+r_rotor = 0.0624         # m, rotor core OD 0.1248 (air gap 0.4 mm)
+r_inner = 0.022          # m, rotor core ID 0.044 (shaft: 42CrMo4, meshed
+                         # as iron like the PM inrunner path)
+L_stk = 0.1              # m, length of stator iron
+n_slots = 36
+slot_depth = 0.017       # m, length of stator teeth
+slot_width_ratio = 0.50  # 1 - 6.2 mm equivalent tooth width / 12.44 mm
+                         # slot pitch at mid-depth (r = 71.3 mm)
+slot_opening_width = 0.0025   # m, stator slot opening
+n_bars = 28
+bar_shape = "rectangular"
+bar_width = 0.0034       # m, rotor slot average width
+bar_height = 0.021       # m, rotor slot average height. The real bar is
+                         # a keyhole (5.7 mm round top, tapered body;
+                         # IM_motor_geometry.pdf); the table's average
+                         # rectangle keeps the area (71.4 mm^2)
+bar_bridge_thickness = 0.001  # m, READ FROM THE DRAWING, approximate:
+                              # the neck between the round bar top and
+                              # the rotor surface is not dimensioned
+bar_opening_width = 0.001     # m, rotor slot opening (drawing, "1")
+end_ring_axial_length = 0.014      # m, rotor end ring length (axial)
+end_ring_radial_height = 0.0216    # m, (124.2 - 81) / 2 mm end-ring
+                                   # inner/outer diameters
+
+[winding]
+# Winding_properties_of_IM.csv: dual-layer distributed winding, 3 slots
+# per pole and phase, 18 turns per layer (= per coil), coil pitch 7/9.
+# 36 slots x 2 layers = 72 coil sides = 36 coils, 12 per phase, all in
+# series (the sheet lists no parallel branches): N_eff = 18 x 12 = 216
+# turns per phase. k_w = k_d x k_p = sin(30 deg)/(3 sin(10 deg)) x
+# sin(70 deg) = 0.9598 x 0.9397 = 0.902 (computed from the sheet, not
+# a listed value). Consumed by im_bar_impedance (cage turns ratio), by
+# the im_fem_* per-slot winding layout (coil_pitch_slots = 7 of the
+# 9-slot pole pitch; the layout reproduces k_w to 1e-4), and by the
+# [iron] B_core derivation note below; not by the circuit models.
+N = 18
+coils_series = 12
+coil_pitch_slots = 7
+k_w = 0.902
+
+[materials]
+mu_r_fe = 1170           # M800-50A initial slope, B_H.csv first row:
+                         # 100 mT at 68 A/m. The harmonic FEM tier's
+                         # linear-iron value; not consulted by the circuit
+# M800-50A commutation curve: NOT transcribed here. The dataset is
+# CC BY-NC 4.0 and this file is Apache-2.0, so the curve is fetch-gated
+# like the measured CSVs — scripts/fetch_creator_im_dataset.py extracts
+# Induction_motor/Design_parameters/Material_properties/
+# Stator_and_rotor_iron/B_H.csv, and the crossval tests load it and set
+# [materials] bh_curve on the motor themselves. Without it the harmonic
+# models under nonlinear=True fall back to the generic curve; mu_r_fe
+# above is the linear-iron value and is what the linear path uses.
+
+[circuit]
+n_p = 2                  # 4 poles (Geometry_parameters.csv)
+R_s = 2.329852           # Ω per-phase at 20 °C (Equivalent_circuit_parameters.csv)
+I_rated_rms = 6.9        # A rms nominal (Electrical_properties_of_IM.csv)
+J = 0.039                # kg·m² (IM_general_specification.csv)
+
+[induction]
+R_2 = 1.011977           # Ω rotor resistance referred to stator, 20 °C, DC reference
+L_m = 0.226              # H magnetizing inductance, rated-point reference
+L_sigma_s = 0.011445     # H stator leakage
+L_sigma_r = 0.010648     # H rotor leakage referred to stator
+n_bars = 28              # rotor cage bars (Geometry_parameters.csv)
+sigma_bar = 28.0e6       # S/m, Al 6082 cage; the dataset gives a RANGE
+                         # 24-32 MS/m (Rotor_cage_and_cooling_jacket_
+                         # material.csv, "24 - 32 m/(Ohm mm^2)"); midpoint
+                         # transcribed, 20 degC. The FEM tier's predicted
+                         # R_r(f) is compared against the measured table,
+                         # which bounds this choice
+f_rated = 50.0           # Hz (Electrical_properties_of_IM.csv)
+s_rated = 0.0466667      # (1500 - 1430)/1500
+V_LL_rated = 400.0       # V rms LINE-LINE, wye (see convention note 1)
+
+# Deep-bar rotor resistance vs rotor frequency (Rr.csv, measured at
+# locked rotor 10-50 Hz): +66% across the band. Ω at 20 °C.
+R_2_vs_f = [
+  [10.0, 1.0711],
+  [20.0, 1.1932],
+  [30.0, 1.3767],
+  [40.0, 1.5861],
+  [50.0, 1.7787],
+]
+
+# Leakage inductances vs frequency (L_sigmas.csv): stator column keyed
+# on supply frequency, rotor column on rotor frequency. H.
+L_sigma_s_vs_f = [
+  [10.0, 0.0114],
+  [20.0, 0.0106],
+  [30.0, 0.0102],
+  [40.0, 0.0099],
+  [50.0, 0.0096],
+]
+L_sigma_r_vs_f = [
+  [10.0, 0.0106],
+  [20.0, 0.0098],
+  [30.0, 0.0095],
+  [40.0, 0.0092],
+  [50.0, 0.0089],
+]
+
+# The 100-point magnetizing saturation curve (Lm.csv, L_m 0.267 -> 0.128 H
+# across I_m 0.001 -> 6.93 A rms) is deliberately NOT transcribed here:
+# bulk dataset content stays out of the repo (CC BY-NC), and the rated
+# reference L_m above serves the shipped gates. The L_m_vs_i mechanism is
+# exercised by unit tests with synthetic tables.
+
+[iron]
+# Lumped Bertotti STATOR-core block for iron_loss, evaluated
+# at the rated supply (f_rated, rotor fundamental s_rated·f_rated reported
+# only). This is the DERIVED case, not a calibrated one — the arithmetic
+# and the pinned shortfall live in tests/models/test_iron_loss_m800.py.
+k_h = 0.0238             # W/(kg·Hz·T^α)  } in-repo global two-term fit of
+k_e = 1.86e-4            # W/(kg·Hz²·T²)  } the M800-50A specific-loss
+alpha_fe = 1.49          #                } tables (50-1000 Hz, B <= 1.5 T)
+m_core = 11.5            # kg stator lamination: 200/125.6 mm annulus x
+                         # 100 mm minus 36 slots (17 mm deep, 6.2 mm
+                         # equivalent tooth width), Geometry_parameters.csv;
+                         # 7800 kg/m³, stacking factor 0.97
+B_core = 1.41            # T peak, FLUX-DERIVED at rated V/f: mass-weighted
+                         # yoke 1.36 T / tooth 1.55 T from 216 turns/phase
+                         # and k_w = 0.902 (Winding_properties_of_IM.csv)
+# FINDING (pinned): at rated flux the block predicts ~33 W at 50 Hz where
+# the measured no-load separation (Pfe_flux_sq.csv) gives ~130 W — a
+# near-constant factor ~3.9 across 10-50 Hz: the frequency SHAPE
+# transports within ~5%, the level does not. The global M800-50A fit is
+# itself ~30% light at 50 Hz; the rest is build factor plus the
+# rotor-surface / tooth-pulsation loss a no-load separation books as
+# "iron" and a stator lump cannot carry. Calibrating B_core to the
+# measured level would need > 3 T (non-physical), so the derived value
+# ships and iron_loss is a documented lower bound for this machine.
+
+[rated]
+power_kW = 3.7
+power_max_kW = 4.6
+voltage_V = 400          # rms L-L
+speed_rpm = 1430
+speed_max_rpm = 2900
+torque_Nm = 24.7
+torque_max_Nm = 31.0     # system-limited maximum, NOT the circuit
+                         # breakdown (computed breakdown at rated V/f is
+                         # ~53 Nm). The arithmetic points to the power
+                         # limit: 4.6 kW / (2π·1430/60) = 30.7 ≈ 31 Nm;
+                         # the circuit needs only ~9 A rms at 31 Nm, well
+                         # under the 15 A drive limit. Tests use 31 Nm as
+                         # a one-sided lower bound only
+current_max_Arms = 15.0
+frequency_max_Hz = 100
+
+[provenance]
+source = "CREATOR CRC-TRR361 induction-machine dataset (TU Graz repository)"
+url = "https://doi.org/10.3217/kh3v7-dhn98"
+paper = "Muetze et al., COMPEL 44(4) 2025, DOI 10.1108/compel-11-2024-0462"
+license = "CC BY-NC 4.0 (dataset); this TOML transcription is Apache-2.0"
+notes = """
+First induction-machine anchor in the repo, and the sibling of the
+CREATOR PMSM anchor (data/creator_case_pmsm/). Every parameter above is
+a named-cell transcription from the dataset CSVs; the raw locked-rotor
+(45 points, 10-50 Hz, reduced voltage, measured shaft torque) and
+no-load (59 points) test structs gate the model in
+tests/crossval/test_creator_im_crossval.py after
+scripts/fetch_creator_im_dataset.py has run.
+
+Known model-vs-anchor deltas, pinned rather than hidden:
+- 20 degC resistances over-predict torque at nameplate slip by +34%
+  (temperature trap, note 2 above). The torque-per-current side is far
+  less temperature-sensitive: at the slip where the circuit delivers the
+  24.7 Nm nameplate torque, stator current agrees with the 6.9 A rms
+  nameplate to ~5%.
+- The circuit has no core-loss branch: locked-rotor torque carries a
+  near-constant per-frequency deficit (0.01 Nm at 10 Hz rising to
+  ~0.03 Nm at 30-50 Hz) that grows in relative terms at the smallest
+  test voltages.
+
+The [geometry] block is the 25-parameter Geometry_parameters.csv table
+transcribed on the same footing as the [induction] circuit values (both
+come from the dataset CSVs, not the paper; this TOML stays Apache-2.0,
+the dataset files stay fetch-excluded under CC BY-NC 4.0). Two values
+are read off IM_motor_geometry.pdf rather than the table and are marked
+approximate in place (bar_bridge_thickness, bar_opening_width). The
+cage rotor meshes through get_or_build_cage_mesh and, one slot pitch
+at a time, through build_bar_cell_mesh for im_bar_impedance, whose
+predicted R_2(f) / L_sigma_r(f) are pinned against the tables above in
+the same test file (DC within 3%, 50 Hz rise under-predicted, leakage
+decomposed) and never substituted for them.
+
+Eligible for: im_equivalent_circuit, im_torque_slip (rated-point,
+  locked-rotor, and breakdown-bound gates), im_bar_impedance (fem
+  extra; predicted deep-bar tables reported beside the measured ones),
+  and iron_loss as a
+  stator-core lump at the rated supply frequency (derived [iron] block;
+  ~3.9x below the measured no-load separation, pinned as a finding).
+Not eligible for: every synchronous-machine model (analytical, fem,
+  rated_torque, stall_torque, torque_speed, thermal_duty, demag_screen,
+  drive_sim — all reject [induction] motors loudly).
+"""

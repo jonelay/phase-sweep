@@ -411,7 +411,7 @@ def test_nonlinear_newton_matches_picard(geo_slotted, parviainen, monkeypatch):
     def _fallback_trap(*a, **k):
         raise AssertionError("axial Newton silently fell back to Picard")
 
-    monkeypatch.setattr(fa, "_picard_solve", _fallback_trap)
+    monkeypatch.setattr(fa, "picard_solve", _fallback_trap)
     _, Bz_n = solve_plane(*args, nonlinear=True, nonlinear_solver="newton")
     assert np.max(np.abs(Bz_n - Bz_p)) < 1e-3 * np.max(np.abs(Bz_p))
 

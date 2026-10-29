@@ -3,8 +3,7 @@
 // Dashed markers: speed step and load step from the sim plan; w_ref on the
 // speed subplot.
 
-import { PLOT_CONFIG, SERIES, axisStyle, baseLayout, chartVar } from "./plot_theme.js";
-import { provenanceText, statStrip } from "./widgets.js";
+import { provenanceText, statStrip } from "/view-sweep/js/widgets.js";
 import { makeCursors, cursorToggleButton } from "./cursors.js";
 
 const HINT = "No simulation yet — submit a drive_sim job.";
@@ -42,8 +41,8 @@ function renderCaption() {
   const slot = appCtx.compare.slotFor(shownMotor);
   if (slot !== undefined) {
     const dot = document.createElement("span");
-    dot.className = "chip-dot";
-    dot.style.background = SERIES[slot];
+    dot.className = "vs-chip-dot";
+    dot.style.background = appCtx.theme.series[slot];
     captionEl.append(dot);
   }
   const overlaid = appCtx.compare.overlays().length;
@@ -61,14 +60,13 @@ export default {
     appCtx = app;
     const self = this;
     hintEl = document.createElement("div");
-    hintEl.className = "empty-hint";
+    hintEl.className = "vs-empty-hint";
     hintEl.textContent = HINT;
 
     captionEl = document.createElement("div");
-    captionEl.className = "panel-caption";
+    captionEl.className = "vs-caption";
 
-    statsEl = document.createElement("div");
-    statsEl.className = "stat-strip";
+    statsEl = document.createElement("div"); // statStrip adds .vs-stat-strip
 
     plotEl = document.createElement("div");
     plotEl.style.height = "460px";
@@ -78,7 +76,7 @@ export default {
     cursorStatsEl.className = "cursor-stats-host";
 
     provEl = document.createElement("div");
-    provEl.className = "provenance";
+    provEl.className = "vs-provenance";
 
     // A/B cursors: all three subplots share the time axis,
     // so a window yields settle deltas (ω p-p) and steady means per signal
@@ -87,10 +85,11 @@ export default {
       seriesFn: () => {
         const m = shownResult?.metrics;
         if (!m?.t_list) return [];
+        const s = appCtx.theme.series;
         return [
-          { name: "τ_M", x: m.t_list, y: m.tau_M_list, color: SERIES[0] },
-          { name: "ω_M", x: m.t_list, y: m.w_M_list, color: SERIES[1] },
-          { name: "|i_s|", x: m.t_list, y: m.i_s_abs_list, color: SERIES[2] },
+          { name: "τ_M", x: m.t_list, y: m.tau_M_list, color: s[0] },
+          { name: "ω_M", x: m.t_list, y: m.w_M_list, color: s[1] },
+          { name: "|i_s|", x: m.t_list, y: m.i_s_abs_list, color: s[2] },
         ];
       },
       fmtX: (v) => v.toPrecision(3),
@@ -141,13 +140,14 @@ export default {
     shownKey = result.result_id;
     shownResult = result;
 
+    const { plot, theme: { series } } = appCtx;
     const traces = [
       { x: m.t_list, y: m.tau_M_list, yaxis: "y", name: "τ_M",
-        mode: "lines", line: { color: SERIES[0], width: 2 } },
+        mode: "lines", line: { color: series[0], width: 2 } },
       { x: m.t_list, y: m.w_M_list, yaxis: "y2", name: "ω_M",
-        mode: "lines", line: { color: SERIES[1], width: 2 } },
+        mode: "lines", line: { color: series[1], width: 2 } },
       { x: m.t_list, y: m.i_s_abs_list, yaxis: "y3", name: "|i_s|",
-        mode: "lines", line: { color: SERIES[2], width: 2 } },
+        mode: "lines", line: { color: series[2], width: 2 } },
     ];
 
     const plan = result.config?.sim_plan;
@@ -157,7 +157,7 @@ export default {
       shapes.push({
         type: "line", xref: "x", yref: "paper",
         x0: t, x1: t, y0: 0, y1: 1,
-        line: { color: chartVar("zeroline"), width: 1, dash: "dot" },
+        line: { color: plot.token("chart-zeroline"), width: 1, dash: "dot" },
       });
     }
     const wRef = result.config?.motor?.drive?.W_REF;
@@ -165,17 +165,17 @@ export default {
       shapes.push({
         type: "line", xref: "paper", yref: "y2",
         x0: 0, x1: 1, y0: wRef, y1: wRef,
-        line: { color: SERIES[1], width: 1, dash: "dash" },
+        line: { color: series[1], width: 1, dash: "dash" },
       });
     }
 
-    const layout = baseLayout({
+    const layout = plot.layout({
       margin: { l: 65, r: 12, t: 8, b: 42 },
       showlegend: false,
-      xaxis: { ...axisStyle("t [s]"), anchor: "y3" },
-      yaxis: { ...axisStyle("τ_M [Nm]"), domain: [0.72, 1] },
-      yaxis2: { ...axisStyle("ω_M [rad/s]"), domain: [0.38, 0.66] },
-      yaxis3: { ...axisStyle("|i_s| [A]"), domain: [0.04, 0.32] },
+      xaxis: { ...plot.axisStyle("t [s]"), anchor: "y3" },
+      yaxis: { ...plot.axisStyle("τ_M [Nm]"), domain: [0.72, 1] },
+      yaxis2: { ...plot.axisStyle("ω_M [rad/s]"), domain: [0.38, 0.66] },
+      yaxis3: { ...plot.axisStyle("|i_s| [A]"), domain: [0.04, 0.32] },
       // cursors first: handleRelayout maps drags by index
       shapes: [...cursors.shapes(), ...shapes],
     });
@@ -194,7 +194,7 @@ export default {
 
     hintEl.style.display = "none";
     plotEl.style.display = "";
-    Plotly.react(plotEl, traces, layout, PLOT_CONFIG).then(() => {
+    Plotly.react(plotEl, traces, layout, plot.config).then(() => {
       bindCursorRelayout();
       cursors.refresh(); // builds when on (tracks the new result), clears when off
     });

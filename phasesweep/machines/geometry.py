@@ -12,9 +12,41 @@ from __future__ import annotations
 
 import hashlib
 import math
+import numbers
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal
+
+__all__ = [
+    "AxialFluxGeometry",
+    "AxialFluxVariant",
+    "Geometry",
+    "axial_flux",
+    "axial_flux_geometry_from_toml",
+    "default_inrunner",
+    "geometry_from_toml",
+    "inrunner",
+    "outrunner",
+]
+
+
+def int_normalize(obj: object, fields: tuple[str, ...], label: str) -> None:
+    """Coerce integral count fields to int on a frozen dataclass.
+
+    Counts are hashed into config_id as text, so 12.0 and 12 would split
+    one machine into two ids. JSON editors and ``dataclasses.replace``
+    legitimately produce integral floats; a non-integral count is an error.
+    """
+    for f in fields:
+        v = getattr(obj, f)
+        if v is None or type(v) is int:
+            continue
+        if isinstance(v, numbers.Integral) and not isinstance(v, bool):
+            object.__setattr__(obj, f, int(v))
+            continue
+        if not (isinstance(v, float) and v.is_integer()):
+            raise ValueError(f"{label} {f} must be an integer, got {v!r}")
+        object.__setattr__(obj, f, int(v))
 
 
 @dataclass(frozen=True)
@@ -54,6 +86,31 @@ class Geometry:
                          retaining sleeve). None = magnet faces exposed to
                          the airgap.
 
+    Squirrel-cage rotor (induction machines; n_bars = 0 means a PM rotor):
+      n_bars               — rotor bar count. When > 0 the rotor carries
+                             no PM annulus (r_magnet == r_rotor is the
+                             rotor surface) and the geometry is inrunner
+      bar_shape            — "rectangular" (radial-sided, area exactly
+                             bar_width x bar_height) or "round" (circle
+                             of diameter bar_width; bar_height must be 0)
+      bar_width            — arc width at the bar mid-radius (m), or the
+                             diameter for round bars
+      bar_height           — radial extent of a rectangular bar (m)
+      bar_bridge_thickness — iron between the rotor surface and the bar
+                             top (m); 0 = bar flush with the surface
+      bar_opening_width    — air notch through the bridge at the rotor
+                             surface (m); 0 = closed slot. Requires a
+                             bridge and must be narrower than the bar
+      end_ring_axial_length, end_ring_radial_height — end-ring section
+                             (m); not meshed in 2D, consumed by the
+                             end-ring impedance correction. None = unknown
+      skew_angle           — total mechanical bar-skew angle over the
+                             stack (rad): the angular offset between a
+                             bar's two ends. None = unskewed (a 2D solve
+                             is exact in-plane). Consumed by the
+                             multi-slice harmonic models; a TOML can give
+                             skew_slots (stator slot pitches) instead
+
     Axial end geometry (3D k_end pipeline; not used by the 2D solvers):
       magnet_overhang — axial extension of the magnets per side beyond the
                         active stack L_stk (m). Consumed by the offline
@@ -87,9 +144,25 @@ class Geometry:
 
     magnet_overhang: float | None = None
 
+    n_bars: int = 0
+    bar_shape: Literal["rectangular", "round"] = "rectangular"
+    bar_width: float = 0.0
+    bar_height: float = 0.0
+    bar_bridge_thickness: float = 0.0
+    bar_opening_width: float = 0.0
+    end_ring_axial_length: float | None = None
+    end_ring_radial_height: float | None = None
+    skew_angle: float | None = None
+
     def __post_init__(self) -> None:
+        int_normalize(self, ("n_slots", "n_bars"), "[geometry]")
         if self.topology == "inrunner":
-            if not (self.r_outer > self.r_stator > self.r_magnet > self.r_rotor >= self.r_inner >= 0):
+            # A cage rotor has no PM annulus: r_magnet == r_rotor is the
+            # rotor surface. PM rotors keep the strict ordering.
+            pm_ok = (self.r_magnet >= self.r_rotor if self.n_bars > 0
+                     else self.r_magnet > self.r_rotor)
+            if not (self.r_outer > self.r_stator > self.r_magnet
+                    and pm_ok and self.r_rotor >= self.r_inner >= 0):
                 raise ValueError(
                     f"Inrunner radii ordering violated: "
                     f"r_outer={self.r_outer} > r_stator={self.r_stator} > "
@@ -149,15 +222,56 @@ class Geometry:
                     "thickness); use None for exposed magnet faces"
                 )
 
-        if self.magnet_overhang is not None and self.magnet_overhang < 0:
+        if self.magnet_overhang is not None and not (
+                math.isfinite(self.magnet_overhang) and self.magnet_overhang >= 0):
             raise ValueError(
-                f"magnet_overhang={self.magnet_overhang} must be >= 0 m "
+                f"magnet_overhang={self.magnet_overhang} must be >= 0 and finite "
                 "(axial extension per side; use None for not measured)"
             )
 
+        if self.n_bars > 0:
+            self._check_cage()
+        elif self.n_bars < 0:
+            raise ValueError(f"n_bars={self.n_bars} must be >= 0")
+        elif any((self.bar_width, self.bar_height, self.bar_bridge_thickness,
+                  self.bar_opening_width)):
+            raise ValueError("bar_* fields require n_bars > 0")
+        if self.skew_angle is not None:
+            if self.n_bars <= 0:
+                raise ValueError(
+                    "skew_angle describes the cage bars (n_bars > 0); a PM "
+                    "rotor must leave it unset"
+                )
+            if not (math.isfinite(self.skew_angle) and self.skew_angle > 0):
+                raise ValueError(
+                    f"skew_angle={self.skew_angle} must be > 0 and finite "
+                    "(mechanical rad; use None for an unskewed cage)"
+                )
+            # Real skews are ~one slot pitch. Anything past two bar
+            # pitches is almost certainly degrees entered as radians.
+            if self.skew_angle > 4 * math.pi / self.n_bars:
+                raise ValueError(
+                    f"skew_angle={self.skew_angle} rad exceeds two bar "
+                    f"pitches ({4 * math.pi / self.n_bars:.4g} rad for "
+                    f"n_bars={self.n_bars}): skew_angle is mechanical "
+                    "RADIANS over the stack — degrees entered here look "
+                    "exactly like this"
+                )
+        for f in ("end_ring_axial_length", "end_ring_radial_height"):
+            v = getattr(self, f)
+            if v is not None and not (math.isfinite(v) and v > 0):
+                raise ValueError(f"{f}={v} must be > 0 and finite (use None for unknown)")
+        if (self.end_ring_radial_height is not None
+                and self.end_ring_radial_height >= self.r_rotor):
+            raise ValueError(
+                f"end_ring_radial_height={self.end_ring_radial_height} must be "
+                f"less than r_rotor={self.r_rotor}: the ring is measured inward "
+                f"from the rotor surface, and a mean ring diameter of zero or "
+                f"less makes the end-ring impedance meaningless")
+
         if self.n_slots > 0:
-            if self.slot_depth < 0:
-                raise ValueError(f"slot_depth={self.slot_depth} must be >= 0")
+            if not (math.isfinite(self.slot_depth) and self.slot_depth >= 0):
+                raise ValueError(f"slot_depth={self.slot_depth} must be >= 0 and finite")
             if self.slot_depth > 0:
                 # Slots extend from the bore into the stator annulus:
                 # inrunner [r_stator, r_stator + depth], outrunner
@@ -175,9 +289,9 @@ class Geometry:
                 raise ValueError(
                     f"slot_width_ratio={self.slot_width_ratio} must be in (0, 1)"
                 )
-            if self.slot_opening_width < 0:
+            if not (math.isfinite(self.slot_opening_width) and self.slot_opening_width >= 0):
                 raise ValueError(
-                    f"slot_opening_width={self.slot_opening_width} must be >= 0"
+                    f"slot_opening_width={self.slot_opening_width} must be >= 0 and finite"
                 )
             slot_pitch = 2 * math.pi * self.r_stator / self.n_slots
             if self.slot_opening_width >= slot_pitch:
@@ -185,6 +299,88 @@ class Geometry:
                     f"slot_opening_width={self.slot_opening_width} exceeds "
                     f"slot pitch {slot_pitch:.6g} m at the bore"
                 )
+
+    def _check_cage(self) -> None:
+        if self.topology != "inrunner":
+            raise ValueError("cage rotors (n_bars > 0) are inrunner-only")
+        if self.n_bars < 2:
+            raise ValueError(f"n_bars={self.n_bars} must be >= 2")
+        if self.r_magnet != self.r_rotor:
+            raise ValueError(
+                f"a cage rotor has no PM annulus: r_magnet={self.r_magnet} "
+                f"must equal r_rotor={self.r_rotor} (the rotor surface)"
+            )
+        for f, v in (("magnet_mount", "surface"), ("bridge_thickness", None),
+                     ("magnet_overhang", None)):
+            if getattr(self, f) != v:
+                raise ValueError(f"{f} is PM-only; a cage rotor must leave it unset")
+        if self.bar_shape not in ("rectangular", "round"):
+            raise ValueError(
+                f"bar_shape must be 'rectangular' or 'round', got {self.bar_shape!r}"
+            )
+        if not (math.isfinite(self.bar_width) and self.bar_width > 0):
+            raise ValueError(f"bar_width={self.bar_width} must be > 0 and finite")
+        if self.bar_shape == "round" and self.bar_height != 0.0:
+            raise ValueError(
+                "round bars take their diameter from bar_width; leave bar_height at 0"
+            )
+        if self.bar_shape == "rectangular" and not (
+                math.isfinite(self.bar_height) and self.bar_height > 0):
+            raise ValueError(f"bar_height={self.bar_height} must be > 0 and finite")
+        if not (math.isfinite(self.bar_bridge_thickness) and self.bar_bridge_thickness >= 0):
+            raise ValueError(
+                f"bar_bridge_thickness={self.bar_bridge_thickness} must be >= 0 and finite"
+            )
+        _r_top, r_bottom = self.bar_radii
+        if r_bottom <= self.r_inner:
+            raise ValueError(
+                f"bar depth {self.bar_bridge_thickness + self.bar_depth:.6g} m "
+                f"reaches r_inner={self.r_inner} (rotor iron floor)"
+            )
+        if self.bar_arc_width >= 2 * math.pi / self.n_bars:
+            raise ValueError(
+                f"bar_width={self.bar_width} exceeds the bar pitch at the bar mid-radius"
+            )
+        if not (math.isfinite(self.bar_opening_width) and self.bar_opening_width >= 0):
+            raise ValueError(
+                f"bar_opening_width={self.bar_opening_width} must be >= 0 and finite"
+            )
+        if self.bar_opening_width > 0:
+            if self.bar_bridge_thickness <= 0:
+                raise ValueError(
+                    "bar_opening_width needs bar_bridge_thickness > 0 to cut through"
+                )
+            if self.bar_opening_width >= self.bar_width:
+                raise ValueError(
+                    f"bar_opening_width={self.bar_opening_width} must be narrower "
+                    f"than bar_width={self.bar_width}"
+                )
+
+    @property
+    def bar_depth(self) -> float:
+        """Radial extent of one bar (m): bar_height, or the diameter for
+        round bars."""
+        return self.bar_width if self.bar_shape == "round" else self.bar_height
+
+    @property
+    def bar_radii(self) -> tuple[float, float]:
+        """(r_top, r_bottom) of the bar body (m), below the bridge."""
+        r_top = self.r_rotor - self.bar_bridge_thickness
+        return r_top, r_top - self.bar_depth
+
+    @property
+    def bar_arc_width(self) -> float:
+        """Full angular width (rad) of a rectangular bar at its mid-radius,
+        or of a round bar's diameter at its center."""
+        r_top, r_bottom = self.bar_radii
+        return self.bar_width / (0.5 * (r_top + r_bottom))
+
+    @property
+    def bar_area(self) -> float:
+        """Cross-section of one bar (m^2), exact for both shapes."""
+        if self.bar_shape == "round":
+            return math.pi * self.bar_width**2 / 4
+        return self.bar_width * self.bar_height
 
     @property
     def slot_opening_ratio(self) -> float:
@@ -211,6 +407,16 @@ class Geometry:
             key += f"_bt{self.bridge_thickness:.6f}"
         if self.magnet_overhang is not None:
             key += f"_mo{self.magnet_overhang:.6f}"
+        if self.n_bars > 0:
+            key += (f"_cb{self.n_bars}_{self.bar_shape}_{self.bar_width:.6f}_"
+                    f"{self.bar_height:.6f}_{self.bar_bridge_thickness:.6f}_"
+                    f"{self.bar_opening_width:.6f}")
+        if self.end_ring_axial_length is not None:
+            key += f"_erl{self.end_ring_axial_length:.6f}"
+        if self.end_ring_radial_height is not None:
+            key += f"_erh{self.end_ring_radial_height:.6f}"
+        if self.skew_angle is not None:
+            key += f"_sk{self.skew_angle:.6f}"
         return hashlib.md5(key.encode()).hexdigest()[:12]
 
 
@@ -229,10 +435,12 @@ def inrunner(
     magnet_mount: Literal["surface", "inset"] = "surface",
     bridge_thickness: float | None = None,
     magnet_overhang: float | None = None,
+    **cage: Any,
 ) -> Geometry:
     """Build an inrunner Geometry (rotor inside stator). All lengths in
     meters; r_ag defaults to the airgap midpoint (r_stator + r_magnet)/2;
-    r_inner defaults to 0.0 (solid shaft)."""
+    r_inner defaults to 0.0 (solid shaft). Cage-rotor fields (n_bars,
+    bar_*, end_ring_*) pass through as keywords."""
     if r_ag is None:
         r_ag = (r_stator + r_magnet) / 2
     return Geometry(
@@ -243,6 +451,7 @@ def inrunner(
         slot_opening_width=slot_opening_width,
         magnet_mount=magnet_mount, bridge_thickness=bridge_thickness,
         magnet_overhang=magnet_overhang,
+        **cage,
     )
 
 
@@ -280,13 +489,20 @@ def outrunner(
     )
 
 
+_CAGE_KEYS = (
+    "n_bars", "bar_shape", "bar_width", "bar_height", "bar_bridge_thickness",
+    "bar_opening_width", "end_ring_axial_length", "end_ring_radial_height",
+    "skew_angle",
+)
+
+
 def default_inrunner() -> Geometry:
     return inrunner(
         r_outer=1.0, r_stator=0.70, r_magnet=0.64, r_rotor=0.30, r_inner=0.0,
     )
 
 
-def geometry_from_toml(geo: dict[str, Any], topology: str = "inrunner") -> Geometry | AxialFluxGeometry:
+def geometry_from_toml(geo: dict[str, Any], topology: Literal["inrunner", "outrunner", "axial"] = "inrunner") -> Geometry | AxialFluxGeometry:
     """Build Geometry or AxialFluxGeometry from a TOML [geometry] section.
 
     Dispatches on topology: 'inrunner'/'outrunner' → radial Geometry,
@@ -296,11 +512,14 @@ def geometry_from_toml(geo: dict[str, Any], topology: str = "inrunner") -> Geome
     """
     if topology == "axial":
         return axial_flux_geometry_from_toml(geo)
+    n_bars = geo.get("n_bars", 0)
     if "r_outer" in geo:
         r_outer = geo["r_outer"]
         r_stator = geo["r_stator"]
-        r_magnet = geo["r_magnet"]
         r_rotor = geo["r_rotor"]
+        # A cage rotor has no PM annulus: r_magnet defaults to the rotor
+        # surface so the TOML does not repeat r_rotor.
+        r_magnet = geo["r_magnet"] if (n_bars <= 0 or "r_magnet" in geo) else r_rotor
         r_inner = geo.get("r_inner", 0.0)
     elif "stator_od" in geo:
         # legacy OD/ID names encode the inrunner layout (stator outside,
@@ -338,6 +557,23 @@ def geometry_from_toml(geo: dict[str, Any], topology: str = "inrunner") -> Geome
         bridge_thickness=geo.get("bridge_thickness"),
         magnet_overhang=geo.get("magnet_overhang"),
     )
+    for f in _CAGE_KEYS:
+        if f in geo:
+            kwargs[f] = geo[f]
+    if "skew_slots" in geo:
+        # Bar skew in STATOR slot pitches (the usual datasheet form):
+        # one slot pitch = 2π/n_slots mechanical rad.
+        if "skew_angle" in geo:
+            raise ValueError(
+                "skew_angle and skew_slots are exclusive: give the skew "
+                "either in mechanical radians or in stator slot pitches"
+            )
+        if n_slots <= 0:
+            raise ValueError(
+                "skew_slots needs n_slots > 0 (it is measured in stator "
+                "slot pitches); give skew_angle in radians instead"
+            )
+        kwargs["skew_angle"] = geo["skew_slots"] * 2 * math.pi / n_slots
     factory: Callable[..., Geometry]
     if topology == "inrunner":
         if "back_iron_thickness" in geo:
@@ -347,6 +583,10 @@ def geometry_from_toml(geo: dict[str, Any], topology: str = "inrunner") -> Geome
             )
         factory = inrunner
     elif topology == "outrunner":
+        if any(f in geo for f in _CAGE_KEYS):
+            raise ValueError(
+                "cage-rotor fields (n_bars, bar_*, end_ring_*) are inrunner-only"
+            )
         factory = outrunner
         if "back_iron_thickness" in geo:
             kwargs["back_iron_thickness"] = geo["back_iron_thickness"]
@@ -413,32 +653,33 @@ class AxialFluxGeometry:
     )
 
     def __post_init__(self) -> None:
+        int_normalize(self, ("n_slots",), "[geometry]")
         if self.variant not in self._VALID_VARIANTS:
             raise ValueError(
                 f"Unknown axial-flux variant {self.variant!r} — "
                 f"expected one of {sorted(self._VALID_VARIANTS)}"
             )
-        if self.r_out <= 0:
-            raise ValueError(f"r_out must be > 0, got {self.r_out}")
-        if self.r_in <= 0:
-            raise ValueError(f"r_in must be > 0, got {self.r_in}")
+        if not (math.isfinite(self.r_out) and self.r_out > 0):
+            raise ValueError(f"r_out must be > 0 and finite, got {self.r_out}")
+        if not (math.isfinite(self.r_in) and self.r_in > 0):
+            raise ValueError(f"r_in must be > 0 and finite, got {self.r_in}")
         if self.r_in >= self.r_out:
             raise ValueError(
                 f"r_in={self.r_in} must be < r_out={self.r_out}"
             )
-        if self.airgap <= 0:
-            raise ValueError(f"airgap must be > 0, got {self.airgap}")
-        if self.magnet_thickness <= 0:
+        if not (math.isfinite(self.airgap) and self.airgap > 0):
+            raise ValueError(f"airgap must be > 0 and finite, got {self.airgap}")
+        if not (math.isfinite(self.magnet_thickness) and self.magnet_thickness > 0):
             raise ValueError(
-                f"magnet_thickness must be > 0, got {self.magnet_thickness}"
+                f"magnet_thickness must be > 0 and finite, got {self.magnet_thickness}"
             )
-        if self.rotor_yoke < 0:
+        if not (math.isfinite(self.rotor_yoke) and self.rotor_yoke >= 0):
             raise ValueError(
-                f"rotor_yoke must be >= 0, got {self.rotor_yoke}"
+                f"rotor_yoke must be >= 0 and finite, got {self.rotor_yoke}"
             )
-        if self.stator_yoke < 0:
+        if not (math.isfinite(self.stator_yoke) and self.stator_yoke >= 0):
             raise ValueError(
-                f"stator_yoke must be >= 0, got {self.stator_yoke}"
+                f"stator_yoke must be >= 0 and finite, got {self.stator_yoke}"
             )
 
         if self.variant == "coreless":
@@ -474,9 +715,9 @@ class AxialFluxGeometry:
                     "coreless variant cannot have slotted stator "
                     f"(n_slots={self.n_slots})"
                 )
-            if self.slot_depth < 0:
+            if not (math.isfinite(self.slot_depth) and self.slot_depth >= 0):
                 raise ValueError(
-                    f"slot_depth={self.slot_depth} must be >= 0"
+                    f"slot_depth={self.slot_depth} must be >= 0 and finite"
                 )
             if self.slot_depth > 0 and self.slot_depth >= self.stator_yoke:
                 raise ValueError(
@@ -487,9 +728,9 @@ class AxialFluxGeometry:
                 raise ValueError(
                     f"slot_width_ratio={self.slot_width_ratio} must be in (0, 1)"
                 )
-            if self.slot_opening_width < 0:
+            if not (math.isfinite(self.slot_opening_width) and self.slot_opening_width >= 0):
                 raise ValueError(
-                    f"slot_opening_width={self.slot_opening_width} must be >= 0"
+                    f"slot_opening_width={self.slot_opening_width} must be >= 0 and finite"
                 )
             slot_pitch = 2 * math.pi * self.r_mean / self.n_slots
             if self.slot_opening_width >= slot_pitch:

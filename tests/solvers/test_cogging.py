@@ -170,34 +170,44 @@ class TestSerialization:
 # ---------------------------------------------------------------------------
 
 def test_rejects_nonzero_j_s():
-    from phasesweep.solvers.cogging import _run_cogging_impl
+    from phasesweep.solvers.cogging import run_cogging
     motor = _slotted_motor()
     rc = RunConfig(motor=motor, model="cogging_torque", j_s=100.0, **_COARSE)
     with pytest.raises(ValueError, match="j_s=0"):
-        _run_cogging_impl(rc)
+        run_cogging(rc)
 
 
 def test_rejects_smooth_bore():
-    from phasesweep.solvers.cogging import _run_cogging_impl
+    from phasesweep.solvers.cogging import run_cogging
     motor = make_motor(B_rem=1.2, psi_f=None)
     rc = RunConfig(motor=motor, model="cogging_torque", **_COARSE)
     with pytest.raises(ValueError, match="n_slots"):
-        _run_cogging_impl(rc)
+        run_cogging(rc)
 
 
 def test_rejects_low_cogging_points():
-    from phasesweep.solvers.cogging import _run_cogging_impl
+    from phasesweep.solvers.cogging import run_cogging
     motor = _slotted_motor()
-    for pts in (0, 1, 3):
+    with pytest.raises(ValueError, match="cogging_points"):
+        RunConfig(motor=motor, model="cogging_torque", cogging_points=0, **_COARSE)
+    for pts in (1, 3):
         rc = RunConfig(motor=motor, model="cogging_torque",
                        cogging_points=pts, **_COARSE)
         with pytest.raises(ValueError, match="cogging_points"):
-            _run_cogging_impl(rc)
+            run_cogging(rc)
 
 
 # ---------------------------------------------------------------------------
 # Arkkio vs single-contour agreement (single static solve)
 # ---------------------------------------------------------------------------
+
+@requires_fem
+@pytest.mark.timeout(120)
+def test_arkkio_rejects_inverted_annulus():
+    from phasesweep.solvers.fem_sampling import arkkio_torque
+    with pytest.raises(ValueError, match="r_outer"):
+        arkkio_torque(None, None, r_inner=0.05, r_outer=0.05)
+
 
 @requires_fem
 @pytest.mark.timeout(120)
@@ -250,11 +260,11 @@ def test_arkkio_is_radial_average_of_maxwell():
 @pytest.mark.timeout(600)
 def test_cogging_waveform_properties():
     """Cogging waveform has near-zero mean and expected periodicity."""
-    from phasesweep.solvers.cogging import _run_cogging_impl
+    from phasesweep.solvers.cogging import run_cogging
 
     motor = _slotted_motor()
     rc = RunConfig(motor=motor, model="cogging_torque", **_COARSE)
-    result = _run_cogging_impl(rc)
+    result = run_cogging(rc)
 
     tau = np.array(result["tau_cogging_list"])
     assert len(tau) == 12
@@ -270,11 +280,11 @@ def test_cogging_waveform_properties():
 @pytest.mark.timeout(600)
 def test_cogging_tau_pp_nm_with_lstk():
     """tau_cogging_pp_Nm present when L_stk is set."""
-    from phasesweep.solvers.cogging import _run_cogging_impl
+    from phasesweep.solvers.cogging import run_cogging
 
     motor = _slotted_motor(L_stk=0.050)
     rc = RunConfig(motor=motor, model="cogging_torque", **_COARSE)
-    result = _run_cogging_impl(rc)
+    result = run_cogging(rc)
 
     assert "tau_cogging_pp_Nm" in result
     assert result["tau_cogging_pp_Nm"] == pytest.approx(
@@ -285,11 +295,11 @@ def test_cogging_tau_pp_nm_with_lstk():
 @pytest.mark.timeout(600)
 def test_cogging_tau_pp_nm_absent_without_lstk():
     """tau_cogging_pp_Nm absent when L_stk is None."""
-    from phasesweep.solvers.cogging import _run_cogging_impl
+    from phasesweep.solvers.cogging import run_cogging
 
     motor = _slotted_motor(L_stk=None)
     rc = RunConfig(motor=motor, model="cogging_torque", **_COARSE)
-    result = _run_cogging_impl(rc)
+    result = run_cogging(rc)
 
     assert "tau_cogging_pp_Nm" not in result
 
@@ -373,14 +383,14 @@ def test_cogging_outrunner_runs_and_sign_flips():
     """Outrunner cogging sweep runs without error; the rotor_sign=-1
     branch is exercised and waveform has near-zero mean (no DC bias
     from a sign error)."""
-    from phasesweep.solvers.cogging import _run_cogging_impl
+    from phasesweep.solvers.cogging import run_cogging
 
     motor = make_motor(
         name="outrunner_cogging", geometry=_SLOTTED_OUTRUNNER,
         n_p=2, B_rem=1.2, psi_f=None, mu_r_pm=1.05,
     )
     rc = RunConfig(motor=motor, model="cogging_torque", **_COARSE)
-    result = _run_cogging_impl(rc)
+    result = run_cogging(rc)
 
     tau = np.array(result["tau_cogging_list"])
     assert len(tau) == 12
@@ -390,7 +400,7 @@ def test_cogging_outrunner_runs_and_sign_flips():
 @requires_fem
 def test_halbach_cogging_smoke():
     """Halbach cogging sweep completes and produces non-negative p-p."""
-    from phasesweep.solvers.cogging import _run_cogging_impl
+    from phasesweep.solvers.cogging import run_cogging
 
     halbach_geo = inrunner(
         r_outer=0.060, r_stator=0.048, r_magnet=0.040, r_rotor=0.030,
@@ -402,7 +412,7 @@ def test_halbach_cogging_smoke():
         magnetization="halbach", halbach_segments=3,
     )
     rc = RunConfig(motor=motor, model="cogging_torque", **_COARSE)
-    result = _run_cogging_impl(rc)
+    result = run_cogging(rc)
 
     assert result["tau_cogging_pp"] >= 0
     tau = np.array(result["tau_cogging_list"])

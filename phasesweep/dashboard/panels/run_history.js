@@ -75,11 +75,11 @@ function render() {
     title.className = "title";
     title.textContent = `${r.motor_name || "?"} · ${r.model}`;
     const badge = document.createElement("span");
-    badge.className = "badge";
+    badge.className = "vs-badge";
     badge.textContent = r.status;
     badge.dataset.status = r.status;
     const copyBtn = document.createElement("button");
-    copyBtn.className = "copy-meta-btn";
+    copyBtn.className = "vs-btn copy-meta-btn";
     copyBtn.textContent = "Copy";
     copyBtn.title = "Copy result metadata as JSON";
     copyBtn.addEventListener("click", (ev) => {
@@ -159,13 +159,13 @@ export default {
     }
 
     hintEl = document.createElement("div");
-    hintEl.className = "empty-hint";
+    hintEl.className = "vs-empty-hint";
     hintEl.textContent = "No stored results yet.";
     listEl = document.createElement("ul");
     listEl.className = "history-list";
 
     moreBtn = document.createElement("button");
-    moreBtn.className = "show-more";
+    moreBtn.className = "vs-btn show-more";
     moreBtn.style.display = "none";
     moreBtn.addEventListener("click", () => {
       shown += PAGE;

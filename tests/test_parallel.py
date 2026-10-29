@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import patch
 
 import pytest
 
@@ -136,13 +135,16 @@ class TestExecuteParallel:
         assert len(progress) == 4
         assert progress[-1][1] == 4
 
-    def test_disk_cache_init_called(self):
-        motor = _analytical_motor()
-        jobs = [_make_job(motor)]
-        with patch("phasesweep.geo_parallel._worker_init") as mock_init:
-            # Sequential path must honor cache_dir like the pool path does
-            execute_parallel(jobs, workers=1, cache_dir="/tmp/test_cache")
-            mock_init.assert_called_once_with("/tmp/test_cache")
+    def test_disk_cache_init_called(self, tmp_path):
+        from phasesweep.solvers.fem_mesh import disk_cache_dir, set_disk_cache_dir
+        set_disk_cache_dir(None)
+        try:
+            motor = _analytical_motor()
+            jobs = [_make_job(motor)]
+            execute_parallel(jobs, workers=1, cache_dir=str(tmp_path))
+            assert disk_cache_dir() == tmp_path
+        finally:
+            set_disk_cache_dir(None)
 
     def test_mixed_ok_and_error(self):
         good = _make_job(_analytical_motor(), tag="good", delta_idx=0)
@@ -174,17 +176,43 @@ class TestExecuteParallel:
         assert failed[0]["point_idx"] == 7
         assert failed[0]["metrics"] is None
 
-    def test_straggler_becomes_timeout(self, monkeypatch):
+    def test_straggler_becomes_timeout(self):
         """A worker outliving the pool timeout yields TIMEOUT, not a hang."""
-        import phasesweep.geo_parallel as par
-        monkeypatch.setattr(par, "_FUTURE_TIMEOUT_S", 1)
         jobs = [{"tag": "slow", "sleep_s": 30, "point_idx": 3}]
         t0 = time.monotonic()
-        results = execute_generic(_sleepy_worker, jobs, workers=2)
+        results = execute_generic(_sleepy_worker, jobs, workers=2, timeout_s=1)
         assert time.monotonic() - t0 < 20
         assert len(results) == 1
         assert results[0]["status"] == "TIMEOUT"
         assert results[0]["point_idx"] == 3
+
+    def test_pool_without_timeout_has_no_deadline(self, monkeypatch):
+        """No timeout_s means no deadline with workers > 1, as with one
+        worker: a sweep's results must not depend on its worker count."""
+        import concurrent.futures as cf
+
+        import phasesweep.geo_parallel as par
+        seen = []
+        real = cf.as_completed
+
+        def spy(fs, timeout=None):
+            seen.append(timeout)
+            return real(fs, timeout=timeout)
+
+        monkeypatch.setattr(par, "as_completed", spy)
+        jobs = [{"tag": "fast", "sleep_s": 0, "point_idx": i} for i in range(2)]
+        results = execute_generic(_sleepy_worker, jobs, workers=2)
+        assert seen == [None]
+        assert all(r["status"] != "TIMEOUT" for r in results)
+
+    def test_single_worker_with_timeout_uses_pool_deadline(self):
+        """workers=1 plus a timeout_s must not fall back to the inline
+        path: a hung solver there has no deadline at all."""
+        jobs = [{"tag": "slow", "sleep_s": 30, "point_idx": 0}]
+        t0 = time.monotonic()
+        results = execute_generic(_sleepy_worker, jobs, workers=1, timeout_s=1)
+        assert time.monotonic() - t0 < 20
+        assert results[0]["status"] == "TIMEOUT"
 
     def test_pool_deadline_distinguishes_not_started(self):
         """A queued job hit by the pool deadline reports elapsed 0 and a

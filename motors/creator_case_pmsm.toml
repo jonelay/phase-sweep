@@ -10,7 +10,7 @@ type = "SPMSM"
 n_p = 2
 R_s = 8.9462         # Ohm
 # L_d != L_q (saliency 1.6) despite type="SPMSM" — published benchmark
-# values (Dhakal et al. Table 12), kept verbatim
+# values (Muetze et al. Table 12), kept verbatim
 L_d = 0.2055         # H
 L_q = 0.3320         # H
 psi_f = 0.1144       # Wb
@@ -28,11 +28,8 @@ layers = 1
 stator_od = 0.113    # m
 stator_id = 0.0478   # m
 rotor_od = 0.047     # m
-air_gap = 0.0004     # m
 L_stk = 0.0301       # m (stack length)
-magnet_width = 0.0176       # m (circumferential)
 magnet_thickness = 0.00435  # m (radial)
-magnet_span_deg = 45.0
 r_inner = 0.008           # m (shaft diameter 16 mm / 2, Table 12)
 alpha_p = 0.5         # magnet_span_deg=45° / pole_pitch=90°
 magnet_mount = "inset"    # L_q/L_d = 1.6 saliency → interpole iron, not air
@@ -41,11 +38,7 @@ slot_height = 0.0196  # m
 # the FEM slot cutter — near-bore teeth come out ~50% thinner than actual.
 # Documented simplification; CREATOR is excluded from the analytical track.
 slot_width_ratio = 0.61  # slot_width / slot_pitch at mid-slot radius
-slot_width = 0.0216   # m
 slot_opening_width = 0.00323  # m
-slot_opening_height = 0.00098 # m
-tooth_width = 0.0148  # m
-tooth_height = 0.020  # m
 
 [materials]
 steel_grade = "M250-35A"
@@ -114,7 +107,7 @@ j_s = 5.069e5         # A/m^2
 [provenance]
 doi = "10.3217/sns1d-77m43"
 paper = "arXiv:2501.15921"
-references = ["Dhakal et al., COMPEL 44(4), 2025"]
+references = ["Muetze et al., COMPEL 44(4), 392-410, 2025"]
 notes = """
 ENVELOPE CHECK (torque_speed): the catalog max speed 7050 rpm is
 exactly the 235 Hz inverter frequency limit (2*pi*235/n_p), NOT a voltage
@@ -125,3 +118,13 @@ current psi_f/L_d = 0.56 A > MAX_I_S, so the envelope still carries
 ~0.146 N.m at max speed (wide CPSR). One-sided feasibility claims only
 (TestCreatorEnvelope in tests/test_torque_speed.py).
 """
+
+[provenance.geometry]
+# Published dimensions the model does not read (Table 12)
+air_gap = 0.0004     # m
+magnet_width = 0.0176       # m (circumferential)
+magnet_span_deg = 45.0
+slot_width = 0.0216   # m
+slot_opening_height = 0.00098 # m
+tooth_width = 0.0148  # m
+tooth_height = 0.020  # m

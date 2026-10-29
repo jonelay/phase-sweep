@@ -4,7 +4,10 @@ Parallel execution:
 - execute_parallel(): dispatch registry-based model runs (sensitivity sweeps)
 - execute_generic(): dispatch arbitrary module-level worker functions
 
-Both fall back to sequential execution when workers=1, preserving debuggability.
+Both fall back to in-process sequential execution when workers=1 and no
+timeout_s is given, preserving debuggability. A timeout_s always routes
+through the process pool: a deadline is only enforceable by killing the
+worker process, so the inline path cannot honor one.
 
 Geometry sweeps:
 - generate_grid(): generate grids of valid Geometry objects for parametric studies
@@ -31,8 +34,17 @@ import numpy as np
 
 from phasesweep.machines.geometry import Geometry
 
-_FUTURE_TIMEOUT_S = 600
-
+__all__ = [
+    "SweepAxis",
+    "SweepPoint",
+    "SweepResult",
+    "apply_axis",
+    "apply_sweep_point",
+    "execute_generic",
+    "execute_parallel",
+    "generate_grid",
+    "run_sweep",
+]
 
 # ---------------------------------------------------------------------------
 # Parallel execution
@@ -285,8 +297,11 @@ def execute_generic(
     The worker_fn must be defined at module level (picklable).
     A 'elapsed_s' key is injected into each result if not already present.
 
-    timeout_s is a whole-pool deadline (default _FUTURE_TIMEOUT_S), not
-    per-job: size it to len(jobs)/workers × the slowest expected job.
+    timeout_s is a whole-pool deadline, not per-job: size it to
+    len(jobs)/workers × the slowest expected job. None (the default) sets
+    no deadline in either path, so results do not depend on worker count.
+    Passing it with workers <= 1 still runs a one-process pool — the
+    inline path cannot kill a hung solver, so it never honors a deadline.
 
     cancel is a cooperative cancellation flag: jobs not yet started when
     it is set return status CANCELLED; already-running jobs complete
@@ -305,7 +320,7 @@ def execute_generic(
         if on_complete:
             on_complete(result, len(results), total)
 
-    if workers <= 1:
+    if workers <= 1 and timeout_s is None:
         _worker_init(cache_dir)
         for i, job in enumerate(jobs):
             if cancel is not None and cancel.is_set():
@@ -329,7 +344,7 @@ def execute_generic(
 
     ctx = multiprocessing.get_context("forkserver")
     executor = ProcessPoolExecutor(
-        max_workers=workers,
+        max_workers=max(1, workers),
         mp_context=ctx,
         initializer=_worker_init,
         initargs=(cache_dir,),
@@ -339,7 +354,7 @@ def execute_generic(
             executor.submit(worker_fn, job): i for i, job in enumerate(jobs)
         }
         pending = set(future_to_idx)
-        deadline_s = _FUTURE_TIMEOUT_S if timeout_s is None else timeout_s
+        deadline_s = timeout_s
         try:
             for future in as_completed(future_to_idx, timeout=deadline_s):
                 pending.discard(future)
@@ -353,6 +368,7 @@ def execute_generic(
                     for f in pending:
                         f.cancel()
         except TimeoutError:
+            assert deadline_s is not None  # as_completed only times out on one
             for future in pending:
                 idx = future_to_idx[future]
                 if future.done():
@@ -379,19 +395,30 @@ def execute_generic(
 # Geometry sweep
 # ---------------------------------------------------------------------------
 
-_AXIS_FIELDS = ("r_outer", "L_stk", "r_ag", "back_iron_thickness")
+_AXIS_FIELDS = ("r_outer", "L_stk", "airgap", "back_iron_thickness")
 _STRATEGIES = ("proportional", "fixed_gap")
 
 
 @dataclass(frozen=True)
 class SweepAxis:
-    field: Literal["r_outer", "L_stk", "r_ag", "back_iron_thickness"]
+    """One swept geometry dimension.
+
+    ``airgap`` is the radial gap thickness |r_stator - r_magnet|; the
+    stator surface moves and the magnet stays fixed. ``r_ag`` is the
+    mid-gap sampling radius, not a sweep axis.
+    """
+
+    field: Literal["r_outer", "L_stk", "airgap", "back_iron_thickness"]
     start: float
     stop: float
     steps: int
     strategy: Literal["proportional", "fixed_gap"] = "proportional"
 
     def __post_init__(self) -> None:
+        if self.field == "r_ag":
+            raise ValueError(
+                "r_ag is the mid-gap sampling radius; the gap-thickness "
+                "axis is 'airgap'")
         if self.field not in _AXIS_FIELDS:
             raise ValueError(
                 f"unknown sweep field {self.field!r}; "
@@ -415,7 +442,27 @@ class SweepPoint:
     L_stk: float | None = None
 
 
+def apply_sweep_point(base_motor: Motor, point: SweepPoint) -> Motor:
+    """Apply a sweep point's geometry (and optional L_stk) to a motor."""
+    motor = dataclasses.replace(base_motor, geometry=point.geometry)
+    if point.L_stk is not None:
+        motor = dataclasses.replace(motor, L_stk=point.L_stk)
+    return motor
+
+
+# In-plane dimensions that scale with a uniform lamination scale. Axial
+# lengths (magnet_overhang, end_ring_axial_length) stay with L_stk, which
+# is its own axis.
+_SCALED_OPTIONAL = ("back_iron_thickness", "bridge_thickness",
+                    "end_ring_radial_height")
+_SCALED_BAR = ("bar_width", "bar_height", "bar_bridge_thickness",
+               "bar_opening_width")
+
+
 def _scale_proportional(geo: Geometry, factor: float) -> Geometry:
+    kw = {f: getattr(geo, f) * factor for f in _SCALED_OPTIONAL
+          if getattr(geo, f) is not None}
+    kw.update({f: getattr(geo, f) * factor for f in _SCALED_BAR})
     return dataclasses.replace(
         geo,
         r_outer=geo.r_outer * factor,
@@ -426,36 +473,23 @@ def _scale_proportional(geo: Geometry, factor: float) -> Geometry:
         r_ag=geo.r_ag * factor,
         slot_depth=geo.slot_depth * factor,
         slot_opening_width=geo.slot_opening_width * factor,
+        **kw,
     )
 
 
 def _set_airgap(geo: Geometry, new_gap: float) -> Geometry:
-    if geo.topology == "inrunner":
-        old_gap = geo.r_stator - geo.r_magnet
-        delta = new_gap - old_gap
-        new_r_magnet = geo.r_magnet - delta / 2
-        new_r_stator = geo.r_stator + delta / 2
-        new_r_ag = (new_r_stator + new_r_magnet) / 2
-        return dataclasses.replace(
-            geo,
-            r_stator=new_r_stator,
-            r_magnet=new_r_magnet,
-            r_ag=new_r_ag,
-            slot_opening_width=geo.slot_opening_width * (new_r_stator / geo.r_stator),
-        )
-    else:
-        old_gap = geo.r_magnet - geo.r_stator
-        delta = new_gap - old_gap
-        new_r_magnet = geo.r_magnet + delta / 2
-        new_r_stator = geo.r_stator - delta / 2
-        new_r_ag = (new_r_stator + new_r_magnet) / 2
-        return dataclasses.replace(
-            geo,
-            r_stator=new_r_stator,
-            r_magnet=new_r_magnet,
-            r_ag=new_r_ag,
-            slot_opening_width=geo.slot_opening_width * (new_r_stator / geo.r_stator),
-        )
+    """Set the gap thickness by moving the stator surface (magnet fixed,
+    same rule as perturbation.perturb_motor). r_ag keeps its fractional
+    position in the gap."""
+    sign = 1.0 if geo.topology == "inrunner" else -1.0
+    new_r_stator = geo.r_magnet + sign * new_gap
+    frac = (geo.r_ag - geo.r_magnet) / (geo.r_stator - geo.r_magnet)
+    return dataclasses.replace(
+        geo,
+        r_stator=new_r_stator,
+        r_ag=geo.r_magnet + frac * (new_r_stator - geo.r_magnet),
+        slot_opening_width=geo.slot_opening_width * (new_r_stator / geo.r_stator),
+    )
 
 
 def apply_axis(
@@ -477,7 +511,7 @@ def apply_axis(
             scaled = _scale_proportional(geo, factor)
             return _set_airgap(scaled, old_gap), base_L_stk
 
-    if axis.field == "r_ag":
+    if axis.field == "airgap":
         return _set_airgap(geo, value), base_L_stk
 
     if axis.field == "back_iron_thickness":
@@ -540,23 +574,26 @@ def run_sweep(
     cache_dir: str | None = None,
     on_complete: Callable[[dict[str, Any], int, int], None] | None = None,
     batch_size: int | None = _DEFAULT_BATCH_SIZE,
+    fem_nonlinear: bool = True,
 ) -> list[SweepResult]:
     """Run models across sweep points, optionally in parallel.
 
     Models with a registry batch_fn are dispatched in batches of at most
     batch_size (None disables batching).
 
+    fem_nonlinear sets RunConfig.nonlinear for the "fem" model only (other
+    models run at their RunConfig defaults). The default keeps the
+    saturating solve that sweeps have always used, so existing sweep run
+    IDs are unchanged; False gives the linear-iron solve.
+
     Returns a flat list of SweepResult (one per point × model).
     """
     jobs: list[dict[str, Any]] = []
     for i, pt in enumerate(points):
-        motor = dataclasses.replace(base_motor, geometry=pt.geometry)
-        if pt.L_stk is not None:
-            motor = dataclasses.replace(motor, L_stk=pt.L_stk)
-        motor_dict = motor.to_dict()
+        motor_dict = apply_sweep_point(base_motor, pt).to_dict()
 
         for mk in model_keys:
-            config_kw = {"nonlinear": True} if mk == "fem" else {}
+            config_kw = {"nonlinear": fem_nonlinear} if mk == "fem" else {}
             jobs.append({
                 "motor_dict": motor_dict,
                 "model_key": mk,

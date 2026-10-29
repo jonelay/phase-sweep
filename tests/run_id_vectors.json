@@ -1,0 +1,21 @@
+{
+  "_comment": "Run-ID compatibility vectors for sweepstore migration. Do not edit by hand.",
+  "_motor_config_id": "8d2936820a5d",
+  "_motor_toml": "motors/creator_case_pmsm.toml",
+  "cases": [
+    {"label": "v1-no-hash-fields", "model": "im_torque_slip", "model_version": 1, "hash_string": "8d2936820a5d|im_torque_slip", "expected_run_id": "9b63701a66d2"},
+    {"label": "v4-analytical", "model": "analytical", "model_version": 4, "hash_string": "8d2936820a5d|analytical|model_v=4|W_REF=209.4|n_theta=360", "expected_run_id": "4929ff16ddbd"},
+    {"label": "v8-fem-defaults", "model": "fem", "model_version": 8, "hash_string": "8d2936820a5d|fem|model_v=8|j_s=0.000000|maxh_fraction=0.0500|n_theta=360|nonlinear=False", "expected_run_id": "a8143dcabb3e"},
+    {"label": "unknown-model-all-params", "model": "unknown_future_model", "model_version": null, "hash_string": "8d2936820a5d|unknown_future_model|I_LIMIT=none|MAX_I_S=0.42|U_DC=326|W_REF=209.4|i_fault=none|j_s=0.000000|maxh_fraction=0.0500|n_theta=360|nonlinear=False", "expected_run_id": "152163053216"},
+    {"label": "dataset-id", "model": "rated_torque", "model_version": 6, "dataset_id": "bench_2026_03", "hash_string": "8d2936820a5d|rated_torque|model_v=6|dataset=bench_2026_03", "expected_run_id": "0db019028d87"},
+    {"label": "fem-rotation", "model": "fem", "model_version": 8, "hash_string": "8d2936820a5d|fem|model_v=8|j_s=0.000000|maxh_fraction=0.0500|n_theta=360|nonlinear=False|rotation=0.1000000000", "expected_run_id": "f15fd6574705"},
+    {"label": "fem-picard", "model": "fem", "model_version": 8, "hash_string": "8d2936820a5d|fem|model_v=8|j_s=0.000000|maxh_fraction=0.0500|n_theta=360|nonlinear=True|nonlinear_solver=picard", "expected_run_id": "1f8b2f7e72a6"},
+    {"label": "cogging-24pts", "model": "cogging_torque", "model_version": 2, "hash_string": "8d2936820a5d|cogging_torque|model_v=2|cogging_points=24|maxh_fraction=0.0500|n_theta=360|nonlinear=False", "expected_run_id": "b35e6bd38ff9"},
+    {"label": "fem-axial-5planes", "model": "fem_axial", "model_version": 2, "hash_string": "8d2936820a5d|fem_axial|model_v=2|W_REF=209.4|maxh_fraction=0.0500|n_planes=5|n_theta=360|nonlinear=False", "expected_run_id": "e7d36590abaf"},
+    {"label": "im-slip-0.03", "model": "im_equivalent_circuit", "model_version": 1, "hash_string": "8d2936820a5d|im_equivalent_circuit|slip=0.03", "expected_run_id": "b15f367e8bb4"},
+    {"label": "torque-speed-drive-params", "model": "torque_speed", "model_version": 5, "hash_string": "8d2936820a5d|torque_speed|model_v=5|I_LIMIT=none|MAX_I_S=0.42|U_DC=326", "expected_run_id": "0d6f2b825053"},
+    {"label": "thermal-duty-profile", "model": "thermal_duty", "model_version": 3, "hash_string": "8d2936820a5d|thermal_duty|model_v=3|W_REF=209.4|duty_profile=[[100.0, 60.0], [50.0, 120.0]]", "expected_run_id": "c292c216154d"},
+    {"label": "demag-screen-ifault", "model": "demag_screen", "model_version": 2, "hash_string": "8d2936820a5d|demag_screen|model_v=2|i_fault=250|maxh_fraction=0.0500|nonlinear=True", "expected_run_id": "446efa41e0d3"},
+    {"label": "operating-point-demand", "model": "operating_point", "model_version": 2, "hash_string": "8d2936820a5d|operating_point|model_v=2|I_LIMIT=none|MAX_I_S=0.42|U_DC=326|tau_ref=125|w_mech=502.6548246", "expected_run_id": "395e15f300fb"}
+  ]
+}

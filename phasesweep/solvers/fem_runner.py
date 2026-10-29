@@ -1,9 +1,4 @@
-"""Timeout-safe NGSolve FEM runner via subprocess isolation.
-
-Entry point: python -m phasesweep.solvers.fem_runner '<config_json>'
-
-FEM solves can occasionally hang (mesh generation, sparse solver). Subprocess
-isolation guarantees they are killed cleanly on timeout. Default timeout: 300s.
+"""NGSolve FEM runner: RunConfig in, metrics dict out.
 
 Metrics returned:
   peak_Br      — max |B_r| at air-gap centre (T)
@@ -29,32 +24,33 @@ Metrics returned:
 
 from __future__ import annotations
 
-import json
-import subprocess
-import sys
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from phasesweep.solver_params import (
-    _reject_induction,
-    _require_geometry,
-    _resolve_b_rem,
+    reject_induction,
+    require_geometry,
+    resolve_b_rem,
 )
-from phasesweep.sweep_types import RunConfig, RunResult
+from phasesweep.sweep_types import Magnetization, RunConfig
 
 if TYPE_CHECKING:
     from phasesweep.machines.geometry import Geometry
     from phasesweep.machines.motor import Motor
 
-_DEFAULT_TIMEOUT = 300
+__all__ = [
+    "FemParams",
+    "prepare_fem",
+    "run_fem",
+]
+
 _RASTER_N_GRID = 120
 
 
-def _run_fem_impl(config: RunConfig) -> dict[str, Any]:
-    """Run NGSolve FEM solve from RunConfig. Executes inside subprocess."""
+def run_fem(config: RunConfig) -> dict[str, Any]:
+    """Run NGSolve FEM solve from RunConfig."""
     from phasesweep.solvers.fem_field import solve_field_fem
     from phasesweep.solvers.harmonics import compute_thd, harmonics_1sided
 
@@ -66,12 +62,8 @@ def _run_fem_impl(config: RunConfig) -> dict[str, Any]:
             f"Motor {config.motor.name!r}: j_s != 0 requires an explicit "
             "k_w (armature current sheet scales with the winding factor)"
         )
-    if config.n_theta <= 2 * params.n_p:
-        # before the solve — a bad config must not cost a FEM run
-        raise ValueError(
-            f"n_theta={config.n_theta} cannot resolve the fundamental at "
-            f"n_p={params.n_p}; need n_theta > 2*n_p"
-        )
+    from phasesweep.solver_params import check_nyquist
+    check_nyquist(config.n_theta, params.n_p)
 
     solve_info: dict[str, float] = {}
     theta, B_r, mesh_obj, gfu = solve_field_fem(
@@ -120,7 +112,14 @@ def _run_fem_impl(config: RunConfig) -> dict[str, Any]:
         )
     peak_B_r = float(np.max(np.abs(B_r)))
     fundamental = float(amps[n_p])
-    fund_or_1 = fundamental or 1.0
+    # Relative, not == 0: FFT round-off leaves ~1e-17 where there is no
+    # order-n_p content. A PM solve has fundamental of order peak_B_r.
+    if not fundamental > 1e-9 * peak_B_r:
+        raise RuntimeError(
+            f"FEM B_r fundamental at order n_p={n_p} is {fundamental:.3g} T "
+            f"against peak {peak_B_r:.3g} T — no PM field was solved at the "
+            "sampling radius"
+        )
 
     thd_pct = compute_thd(amps, n_p)
 
@@ -130,10 +129,10 @@ def _run_fem_impl(config: RunConfig) -> dict[str, Any]:
     if n_slots > 0:
         sh_idx = abs(n_slots - n_p)
         if 0 < sh_idx < len(amps):
-            sh_pct = float(amps[sh_idx] / fund_or_1 * 100)
+            sh_pct = float(amps[sh_idx] / fundamental * 100)
         sh_upper_idx = n_slots + n_p
         if sh_upper_idx < len(amps):
-            sh_upper_pct = float(amps[sh_upper_idx] / fund_or_1 * 100)
+            sh_upper_pct = float(amps[sh_upper_idx] / fundamental * 100)
 
     return {
         "peak_Br": peak_B_r,
@@ -148,55 +147,6 @@ def _run_fem_impl(config: RunConfig) -> dict[str, Any]:
         **torque_info,
         **solve_info,
     }
-
-
-def run_fem_safe(config: RunConfig, timeout_s: int = _DEFAULT_TIMEOUT) -> RunResult:
-    """Run FEM solve with true timeout via subprocess."""
-    t0 = time.time()
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "phasesweep.solvers.fem_runner",
-             json.dumps(config.to_dict())],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-        )
-        if proc.returncode != 0:
-            return RunResult(
-                config=config, model="fem", status="ERROR", metrics=None,
-                elapsed_s=time.time() - t0,
-                error_msg=proc.stderr[:500] if proc.stderr else f"Exit {proc.returncode}",
-            )
-        return RunResult(
-            config=config, model="fem", status="OK",
-            metrics=json.loads(proc.stdout),
-            elapsed_s=time.time() - t0,
-        )
-    except subprocess.TimeoutExpired:
-        return RunResult(
-            config=config, model="fem", status="TIMEOUT", metrics=None,
-            elapsed_s=float(timeout_s),
-            error_msg=f"Exceeded {timeout_s}s timeout",
-        )
-    except Exception as e:
-        return RunResult(
-            config=config, model="fem", status="ERROR", metrics=None,
-            elapsed_s=time.time() - t0,
-            error_msg=str(e),
-        )
-
-
-def _cli_main() -> None:
-    if len(sys.argv) != 2:
-        print("Usage: python -m phasesweep.solvers.fem_runner '<config_json>'", file=sys.stderr)
-        sys.exit(1)
-    try:
-        config = RunConfig.from_dict(json.loads(sys.argv[1]))
-        metrics = _run_fem_impl(config)
-        print(json.dumps(metrics))
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
 
 
 @dataclass(frozen=True)
@@ -220,7 +170,7 @@ class FemParams:
     mu_r_pm: float
     mu_r_fe: float
     alpha_p: float = 1.0
-    magnetization: str = "radial"
+    magnetization: Magnetization = "radial"
     halbach_segments: int | None = None
     halbach_angles_rad: tuple[float, ...] | None = None
 
@@ -280,9 +230,9 @@ def prepare_fem(motor: Motor) -> FemParams:
     """Derive, validate, and extract FEM solver params from a Motor."""
     from math import radians
 
-    _reject_induction(motor, "fem")
-    geo = _require_geometry(motor, "fem")
-    b_rem = _resolve_b_rem(motor)
+    reject_induction(motor, "fem")
+    geo = require_geometry(motor, "fem")
+    b_rem = resolve_b_rem(motor)
     angles_rad = None
     if motor.halbach_angles_deg is not None:
         angles_rad = tuple(radians(a) for a in motor.halbach_angles_deg)
@@ -297,7 +247,3 @@ def prepare_fem(motor: Motor) -> FemParams:
         halbach_segments=motor.halbach_segments,
         halbach_angles_rad=angles_rad,
     )
-
-
-if __name__ == "__main__":
-    _cli_main()

@@ -10,7 +10,11 @@ import numpy as np
 import pytest
 
 from phasesweep.machines.geometry import default_inrunner, inrunner, outrunner
-from phasesweep.solvers.analytical import carter_adjusted_radii, carter_factor
+from phasesweep.solvers.field_solution import (
+    carter_adjusted_radii,
+    carter_factor,
+    zhu_howe_Br,
+)
 from tests.solvers.fem_shared import _SLOTTED_GEO_KW, _SLOTTED_OUT_GEO_KW
 
 MU0 = 4e-7 * np.pi
@@ -362,7 +366,7 @@ class TestZhuHoweSeries:
     B_rem = 1.2
 
     def _series(self, theta, **kw):
-        from phasesweep.solvers.analytical import zhu_howe_Br_series
+        from phasesweep.solvers.field_solution import zhu_howe_Br_series
         args = dict(r_eval=0.0405, r_stator=self.RS, r_magnet=self.RM,
                     r_rotor=self.RR, mu_r_pm=self.MU_R)
         args.update(kw)
@@ -384,7 +388,7 @@ class TestZhuHoweSeries:
         # amplitude — the series adds harmonics without touching the fundamental
         # (rel 1e-9: the series normalizes radii for high-order conditioning,
         # so agreement is to float round-off, not bit-exact).
-        from phasesweep.solvers.analytical import zhu_howe_Br
+        from phasesweep.solvers.field_solution import zhu_howe_Br
         from phasesweep.solvers.harmonics import harmonics_1sided
         theta = np.linspace(0, 2 * np.pi, 720, endpoint=False)
         amp_fund = zhu_howe_Br(
@@ -400,7 +404,7 @@ class TestZhuHoweSeries:
         # below the Gibbs-overshooting fundamental amplitude.
         theta = np.linspace(0, 2 * np.pi, 720, endpoint=False)
         B = self._series(theta)
-        from phasesweep.solvers.analytical import zhu_howe_Br
+        from phasesweep.solvers.field_solution import zhu_howe_Br
         amp_fund = zhu_howe_Br(
             np.array([0.0]), self.P, self.B_rem, r_eval=0.0405,
             r_stator=self.RS, r_magnet=self.RM, r_rotor=self.RR,
@@ -423,7 +427,7 @@ class TestZhuHoweSeries:
         # under/overflow; the normalization + guards must keep the sum
         # finite and fundamental-dominated.
         theta = np.linspace(0, 2 * np.pi, 4096, endpoint=False)
-        from phasesweep.solvers.analytical import zhu_howe_Br_series
+        from phasesweep.solvers.field_solution import zhu_howe_Br_series
         B = zhu_howe_Br_series(
             theta, 44, self.B_rem, r_eval=0.0405,
             r_stator=self.RS, r_magnet=self.RM, r_rotor=self.RR,
@@ -535,7 +539,7 @@ class TestRegressionAnchors:
         magnetization convention; matches the paper's Fig 5 fundamental
         (~0.72 T, see TestPaperFig5.test_fundamental_only).
         """
-        from phasesweep.solvers.analytical import zhu_howe_Br
+        from phasesweep.solvers.field_solution import zhu_howe_Br
         Br = zhu_howe_Br(
             np.array([0.0]), n_p=4, B_rem=1.2, r_eval=0.0405,
             r_stator=0.048, r_magnet=0.040, r_rotor=0.030, mu_r_pm=1.05,
@@ -547,7 +551,7 @@ class TestRegressionAnchors:
 
         Re-frozen (= old anchor × 4/π, square-wave convention).
         """
-        from phasesweep.solvers.analytical import zhu_howe_Br
+        from phasesweep.solvers.field_solution import zhu_howe_Br
         Br = zhu_howe_Br(np.array([0.0]), n_p=2, B_rem=1.0,
                          r_stator=0.70, r_magnet=0.64, r_rotor=0.30)[0]
         assert Br == pytest.approx(7.411415721291222e-01, rel=1e-10)
@@ -575,7 +579,7 @@ class TestProductionVsReference:
         M_n = (4 / np.pi) * B_rem / MU0
         theta = np.linspace(0, 2 * np.pi, 64, endpoint=False)
 
-        from phasesweep.solvers.analytical import zhu_howe_Br
+        from phasesweep.solvers.field_solution import zhu_howe_Br
         Br_prod = zhu_howe_Br(theta, npp, B_rem, r_eval=r_eval,
                               r_stator=self.RS, r_magnet=self.RM,
                               r_rotor=self.RR)
@@ -598,7 +602,7 @@ class TestAlphaPScaling:
 
     def test_alpha_p_reduces_B1(self):
         """alpha_p=0.75 gives lower B₁ than alpha_p=1.0."""
-        from phasesweep.solvers.analytical import zhu_howe_Br
+        from phasesweep.solvers.field_solution import zhu_howe_Br
         theta = np.array([0.0])
         radii = dict(r_stator=0.70, r_magnet=0.64, r_rotor=0.30)
         Br_full = zhu_howe_Br(theta, n_p=4, B_rem=1.2, alpha_p=1.0,
@@ -612,7 +616,7 @@ class TestAlphaPScaling:
 
     def test_alpha_p_1_unchanged(self):
         """alpha_p=1.0 gives identical result to omitting it."""
-        from phasesweep.solvers.analytical import zhu_howe_Br
+        from phasesweep.solvers.field_solution import zhu_howe_Br
         theta = np.linspace(0, 2 * np.pi, 64, endpoint=False)
         radii = dict(r_stator=0.70, r_magnet=0.64, r_rotor=0.30)
         Br_default = zhu_howe_Br(theta, n_p=4, B_rem=1.2, **radii)
@@ -686,3 +690,317 @@ class TestCarterAdjustedRadii:
         assert k_c > 1.0
         assert r_s < geo.r_stator
         assert r_m == geo.r_magnet
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 invariant: 2a — waveform symmetry
+# ---------------------------------------------------------------------------
+
+class TestWaveformSymmetry:
+    """assert_waveform_symmetry catches forbidden bins in the analytical
+    odd-harmonic cosine series."""
+
+    def test_clean_series_passes(self):
+        from phasesweep.solvers.field_solution import zhu_howe_Br_series
+        from phasesweep.solvers.harmonics import assert_waveform_symmetry, harmonics_1sided
+        theta = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+        B = zhu_howe_Br_series(
+            theta, 4, 1.2, r_eval=0.0405,
+            r_stator=0.048, r_magnet=0.040, r_rotor=0.030,
+            mu_r_pm=1.05, max_order=360,
+        )
+        amps = harmonics_1sided(B)
+        assert_waveform_symmetry(amps, 4)  # must not raise
+
+    def test_injected_dc_fails(self):
+        from phasesweep.solvers.harmonics import assert_waveform_symmetry
+        amps = np.array([0.5, 0.0, 0.0, 0.0, 1.0, 0.0])
+        with pytest.raises(RuntimeError, match="DC bin"):
+            assert_waveform_symmetry(amps, 4)
+
+    def test_injected_even_harmonic_fails(self):
+        from phasesweep.solvers.harmonics import assert_waveform_symmetry
+        amps = np.zeros(20)
+        amps[4] = 1.0   # fundamental at n_p=4
+        amps[8] = 0.1   # k=2 (even) — forbidden
+        with pytest.raises(RuntimeError, match="even k"):
+            assert_waveform_symmetry(amps, 4)
+
+    def test_non_multiple_bin_fails(self):
+        from phasesweep.solvers.harmonics import assert_waveform_symmetry
+        amps = np.zeros(20)
+        amps[4] = 1.0
+        amps[5] = 0.1  # not a multiple of n_p=4
+        with pytest.raises(RuntimeError, match="not a multiple"):
+            assert_waveform_symmetry(amps, 4)
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 invariant: 2b — scale invariance
+# ---------------------------------------------------------------------------
+
+class TestScaleInvariance:
+    """B_r(lambda * radii) == B_r(radii) exactly — the field is a function
+    of ratio geometry only."""
+
+    def test_radial_field_scale_invariant(self):
+        from phasesweep.solvers.field_solution import zhu_howe_Br
+        theta = np.linspace(0, 2 * np.pi, 64, endpoint=False)
+        radii = dict(r_stator=0.70, r_magnet=0.64, r_rotor=0.30)
+        B_orig = zhu_howe_Br(theta, n_p=4, B_rem=1.2, **radii)
+        # Scale all radii by lambda=0.5
+        scaled = {k: v * 0.5 for k, v in radii.items()}
+        B_scaled = zhu_howe_Br(theta, n_p=4, B_rem=1.2, **scaled)
+        assert np.max(np.abs(B_scaled - B_orig)) == 0.0
+
+    def test_thd_independent_of_B_rem(self):
+        from phasesweep.solvers.field_solution import zhu_howe_Br_series
+        from phasesweep.solvers.harmonics import compute_thd, harmonics_1sided
+        radii = dict(r_stator=0.70, r_magnet=0.64, r_rotor=0.30)
+        theta = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+        thds = []
+        for B_rem in (0.5, 1.0, 1.5):
+            B = zhu_howe_Br_series(
+                theta, 4, B_rem, alpha_p=0.8,
+                max_order=360, **radii,
+            )
+            thds.append(compute_thd(harmonics_1sided(B), 4))
+        assert thds[0] == pytest.approx(thds[1], rel=1e-12)
+        assert thds[1] == pytest.approx(thds[2], rel=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 invariant: 2g — Carter factor domain validation
+# ---------------------------------------------------------------------------
+
+class TestCarterFactorDomain:
+    """Domain validation for carter_factor arguments."""
+
+    def test_negative_n_slots_raises(self):
+        with pytest.raises(ValueError, match="n_slots"):
+            carter_factor(0.030, -1, 0.6, 0.005)
+
+    def test_nonpositive_r_stator_raises(self):
+        with pytest.raises(ValueError, match="r_stator"):
+            carter_factor(0.0, 12, 0.6, 0.005)
+        with pytest.raises(ValueError, match="r_stator"):
+            carter_factor(-0.03, 12, 0.6, 0.005)
+
+    def test_nonpositive_g_prime_raises(self):
+        with pytest.raises(ValueError, match="g_prime"):
+            carter_factor(0.030, 12, 0.6, 0.0)
+        with pytest.raises(ValueError, match="g_prime"):
+            carter_factor(0.030, 12, 0.6, -0.001)
+
+    def test_sor_zero_returns_one(self):
+        """Closed slots (sor=0) are physically valid and give k_c=1."""
+        assert carter_factor(0.030, 12, 0.0, 0.005) == 1.0
+
+    def test_sor_out_of_range_raises(self):
+        with pytest.raises(ValueError, match="slot_opening_ratio"):
+            carter_factor(0.030, 12, 1.0, 0.005)
+        with pytest.raises(ValueError, match="slot_opening_ratio"):
+            carter_factor(0.030, 12, -0.1, 0.005)
+        with pytest.raises(ValueError, match="slot_opening_ratio"):
+            carter_factor(0.030, 12, 1.5, 0.005)
+
+    def test_upper_bound_tighter_at_large_sor(self):
+        """For sor=0.9, upper bound is 1/(1-0.9)=10; k_c must be below it."""
+        k = carter_factor(0.030, 12, 0.9, 0.001)
+        assert k < 10.0
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 invariant: 2h — end-effect factor negative-input rejection
+# ---------------------------------------------------------------------------
+
+class TestEndEffectDomain:
+
+    def test_negative_L_stk_raises(self):
+        from phasesweep.solvers.analytical import end_effect_factor
+        with pytest.raises(ValueError, match="L_stk"):
+            end_effect_factor(L_stk=-0.01, g_eff=0.001)
+
+    def test_negative_g_eff_raises(self):
+        from phasesweep.solvers.analytical import end_effect_factor
+        with pytest.raises(ValueError, match="g_eff"):
+            end_effect_factor(L_stk=0.01, g_eff=-0.001)
+
+    def test_negative_tau_p_raises(self):
+        from phasesweep.solvers.analytical import end_effect_factor_pole_pitch
+        with pytest.raises(ValueError, match="tau_p"):
+            end_effect_factor_pole_pitch(L_stk=0.01, tau_p=-0.001)
+
+    def test_negative_L_stk_pole_pitch_raises(self):
+        from phasesweep.solvers.analytical import end_effect_factor_pole_pitch
+        with pytest.raises(ValueError, match="L_stk"):
+            end_effect_factor_pole_pitch(L_stk=-0.01, tau_p=0.001)
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 invariant: 2c — r·B_r minimum at the iron surface
+# ---------------------------------------------------------------------------
+
+class TestRBrMinAtIron:
+    """|r·B_rk(r)| has its unique minimum in the air gap at the iron
+    surface (proved from Laplace + B_theta=0 BC). The proof establishes
+    the magnitude property; tests use abs() so they hold regardless of
+    field sign or evaluation angle."""
+
+    @pytest.mark.parametrize("n_p,radii", [
+        (4, dict(r_stator=0.035, r_magnet=0.034, r_rotor=0.015)),
+        (4, dict(r_stator=0.035, r_magnet=0.031, r_rotor=0.022)),
+        (8, dict(r_stator=0.050, r_magnet=0.046, r_rotor=0.030)),
+        (2, dict(r_stator=0.070, r_magnet=0.064, r_rotor=0.030)),
+    ])
+    def test_inrunner_rB_minimum_at_bore(self, n_p, radii):
+        """Inrunner: iron = stator (outer). |r·B| at bore <= |r·B| at magnet."""
+        theta = np.array([0.0])
+        B_iron = zhu_howe_Br(theta, n_p, 1.2,
+                             r_eval=radii["r_stator"], **radii)[0]
+        B_mag = zhu_howe_Br(theta, n_p, 1.2,
+                            r_eval=radii["r_magnet"], **radii)[0]
+        rB_iron = abs(radii["r_stator"] * B_iron)
+        rB_mag = abs(radii["r_magnet"] * B_mag)
+        assert rB_iron <= rB_mag * (1 + 1e-12)
+
+    @pytest.mark.parametrize("n_p,radii", [
+        (4, dict(r_stator=0.025, r_magnet=0.026, r_rotor=0.035)),
+        (4, dict(r_stator=0.010, r_magnet=0.014, r_rotor=0.045)),
+        (8, dict(r_stator=0.030, r_magnet=0.034, r_rotor=0.050)),
+    ])
+    def test_outrunner_rB_minimum_at_bore(self, n_p, radii):
+        """Outrunner: iron = stator (inner). |r·B| at bore <= |r·B| at magnet."""
+        theta = np.array([0.0])
+        B_iron = zhu_howe_Br(theta, n_p, 1.2,
+                             r_eval=radii["r_stator"], **radii)[0]
+        B_mag = zhu_howe_Br(theta, n_p, 1.2,
+                            r_eval=radii["r_magnet"], **radii)[0]
+        rB_iron = abs(radii["r_stator"] * B_iron)
+        rB_mag = abs(radii["r_magnet"] * B_mag)
+        assert rB_iron <= rB_mag * (1 + 1e-12)
+
+    def test_midgap_between_extremes(self):
+        """|r·B| at midgap is strictly between the iron and magnet values."""
+        theta = np.array([0.0])
+        radii = dict(r_stator=0.035, r_magnet=0.031, r_rotor=0.022)
+        r_mid = (radii["r_stator"] + radii["r_magnet"]) / 2
+        rB = {}
+        for label, r in [("iron", radii["r_stator"]),
+                         ("mid", r_mid),
+                         ("mag", radii["r_magnet"])]:
+            B = zhu_howe_Br(theta, 4, 1.2, r_eval=r, **radii)[0]
+            rB[label] = abs(r * B)
+        assert rB["iron"] < rB["mid"] < rB["mag"]
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 invariant: 2d — topology-signed 1D bound (smooth radii)
+# ---------------------------------------------------------------------------
+
+class TestTopologySigned1DBound:
+    """B_1D = (4/pi) B_rem sin(pi alpha_p/2) h_m/(h_m + mu_r g).
+    Inrunner: B_1 <= B_1D. Outrunner: B_1 >= B_1D (flux concentrates
+    inward). Smooth radii only — no Carter adjustment."""
+
+    @staticmethod
+    def _b_1d(B_rem, alpha_p, h_m, g, mu_r):
+        return (4 / np.pi) * B_rem * np.sin(np.pi * alpha_p / 2) * h_m / (
+            h_m + mu_r * g)
+
+    @pytest.mark.parametrize("n_p,r_s,r_m,r_r,alpha_p,mu_r", [
+        (4, 0.035, 0.034, 0.015, 1.0, 1.05),
+        (4, 0.035, 0.031, 0.022, 1.0, 1.05),
+        (4, 0.035, 0.031, 0.022, 0.8, 1.05),
+        (8, 0.050, 0.046, 0.030, 1.0, 1.05),
+        (2, 0.070, 0.064, 0.030, 1.0, 1.05),
+        (4, 0.035, 0.034, 0.015, 1.0, 1.30),
+    ])
+    def test_inrunner_below_1d(self, n_p, r_s, r_m, r_r, alpha_p, mu_r):
+        """Inrunner bore fundamental <= 1D magnetic circuit (flux spreads)."""
+        theta = np.array([0.0])
+        B_1 = zhu_howe_Br(theta, n_p, 1.2, r_eval=r_s,
+                          r_stator=r_s, r_magnet=r_m, r_rotor=r_r,
+                          mu_r_pm=mu_r, alpha_p=alpha_p)[0]
+        g = r_s - r_m
+        h_m = r_m - r_r
+        B_1D = self._b_1d(1.2, alpha_p, h_m, g, mu_r)
+        assert B_1 <= B_1D * (1 + 1e-12)
+
+    @pytest.mark.parametrize("n_p,r_s,r_m,r_r,alpha_p,mu_r,expected_ratio", [
+        (4, 0.025, 0.026, 0.035, 1.0, 1.05, 1.099),
+        (4, 0.010, 0.011, 0.020, 1.0, 1.05, 1.029),
+        (4, 0.025, 0.026, 0.035, 0.8, 1.05, 1.099),
+        (8, 0.050, 0.051, 0.060, 1.0, 1.05, 1.015),
+    ])
+    def test_outrunner_regression_pins(self, n_p, r_s, r_m, r_r, alpha_p,
+                                       mu_r, expected_ratio):
+        """Outrunner B_1/B_1D regression pins on specific geometries.
+        The outrunner bound B_1 >= B_1D does NOT hold universally —
+        pole-to-pole leakage dominates when n_p·(g+h_m)/r_s is large
+        (a geometry scan found 48/108 ordinary geometries violating it). These
+        are regression pins, not promoted invariants."""
+        theta = np.array([0.0])
+        B_1 = zhu_howe_Br(theta, n_p, 1.2, r_eval=r_s,
+                          r_stator=r_s, r_magnet=r_m, r_rotor=r_r,
+                          mu_r_pm=mu_r, alpha_p=alpha_p)[0]
+        g = r_m - r_s
+        h_m = r_r - r_m
+        B_1D = self._b_1d(1.2, alpha_p, h_m, g, mu_r)
+        assert B_1 / B_1D == pytest.approx(expected_ratio, rel=0.01)
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 invariant: 2f — monotonicity of bore fundamental
+# ---------------------------------------------------------------------------
+
+class TestBoreFundamentalMonotonicity:
+    """The bore fundamental is monotonically increasing in h_m, alpha_p
+    and monotonically decreasing in g, mu_r, n_p (at fixed radii)."""
+
+    @staticmethod
+    def _bore_fundamental(n_p, B_rem, r_s, r_m, r_r, alpha_p=1.0, mu_r=1.05):
+        theta = np.array([0.0])
+        return zhu_howe_Br(theta, n_p, B_rem, r_eval=r_s,
+                           r_stator=r_s, r_magnet=r_m, r_rotor=r_r,
+                           mu_r_pm=mu_r, alpha_p=alpha_p)[0]
+
+    def test_increasing_in_h_m(self):
+        """Thicker magnets -> stronger field (inrunner, fixed r_stator/r_magnet)."""
+        r_s, r_m = 0.035, 0.031
+        vals = [self._bore_fundamental(4, 1.2, r_s, r_m, r_m - h / 1000)
+                for h in (2, 4, 6, 9)]
+        for i in range(len(vals) - 1):
+            assert vals[i] < vals[i + 1]
+
+    def test_increasing_in_alpha_p(self):
+        """Wider magnet arc -> stronger fundamental."""
+        r_s, r_m, r_r = 0.035, 0.031, 0.022
+        vals = [self._bore_fundamental(4, 1.2, r_s, r_m, r_r, alpha_p=a)
+                for a in (0.5, 0.7, 0.9, 1.0)]
+        for i in range(len(vals) - 1):
+            assert vals[i] < vals[i + 1]
+
+    def test_decreasing_in_g(self):
+        """Larger air gap -> weaker field (inrunner, fixed r_magnet/r_rotor)."""
+        r_m, r_r = 0.031, 0.022
+        vals = [self._bore_fundamental(4, 1.2, r_m + g / 1000, r_m, r_r)
+                for g in (0.5, 1, 2, 3)]
+        for i in range(len(vals) - 1):
+            assert vals[i] > vals[i + 1]
+
+    def test_decreasing_in_mu_r(self):
+        """Higher mu_r -> thicker effective gap -> weaker field."""
+        r_s, r_m, r_r = 0.035, 0.031, 0.022
+        vals = [self._bore_fundamental(4, 1.2, r_s, r_m, r_r, mu_r=m)
+                for m in (1.0, 1.05, 1.1, 1.3)]
+        for i in range(len(vals) - 1):
+            assert vals[i] > vals[i + 1]
+
+    def test_decreasing_in_n_p_at_fixed_radii(self):
+        """More poles at fixed radii -> shorter pole pitch -> more leakage."""
+        r_s, r_m, r_r = 0.035, 0.031, 0.022
+        vals = [self._bore_fundamental(n_p, 1.2, r_s, r_m, r_r)
+                for n_p in (2, 4, 8, 16)]
+        for i in range(len(vals) - 1):
+            assert vals[i] > vals[i + 1]

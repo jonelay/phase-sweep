@@ -10,12 +10,16 @@ Coverage targets from dynamic audit:
 """
 
 import dataclasses
+from pathlib import Path
 
 import pytest
 
+from phasesweep.machines.configs import load_motor
 from phasesweep.machines.geometry import Geometry, default_inrunner, inrunner, outrunner
 from phasesweep.machines.motor import Motor
 from phasesweep.machines.perturbation import perturb_motor as _perturb_motor
+from phasesweep.machines.perturbation import scale_inductances
+from tests.conftest import NOT_MOTOR_TOMLS
 
 # ---------------------------------------------------------------------------
 # Motor factories
@@ -258,7 +262,7 @@ class TestPsiFCleared:
 
     ψ_f = N·k_w·Φ₁ depends on geometry (OD/gap change bore area and
     reluctance), stack length (Φ₁ ∝ L_stk), and remanence (B₁ ∝ B_rem).
-    Stale ψ_f would cause _resolve_psi_f to use the old value instead of
+    Stale ψ_f would cause resolve_psi_f to use the old value instead of
     re-deriving from the new geometry.
     """
 
@@ -409,11 +413,10 @@ class TestNoneInductances:
 # ---------------------------------------------------------------------------
 
 class TestGeometryFieldForwarding:
-    """perturb_motor must forward every Geometry field through builder calls.
+    """perturb_motor must carry every non-radial Geometry field.
 
     This test introspects Geometry's fields and verifies non-radii fields
-    survive perturbation. If a new field is added to Geometry without being
-    forwarded in perturbation.py, this test fails.
+    survive perturbation.
     """
 
     @pytest.mark.parametrize("make_motor", [
@@ -435,3 +438,104 @@ class TestGeometryFieldForwarding:
             assert pert == orig, f"{param}: {field} changed from {orig} to {pert}"
         assert p.geometry.slot_opening_ratio == pytest.approx(
             m.geometry.slot_opening_ratio, rel=1e-12)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_MOTOR_TOMLS = [p for p in sorted((REPO_ROOT / "motors").glob("*.toml"))
+                + sorted((REPO_ROOT / "data").glob("*/*.toml"))
+                if p.name not in NOT_MOTOR_TOMLS]
+
+
+@pytest.mark.parametrize("path", _MOTOR_TOMLS, ids=lambda p: p.stem)
+@pytest.mark.parametrize("param", ["OD", "gap"])
+def test_zero_delta_keeps_geometry_for_shipped_motors(path, param):
+    """OD/gap at delta=0 either refuse or return the source geometry —
+    no builder call drops mount, overhang, back iron or a custom r_ag."""
+    m = load_motor(path)
+    p = _perturb_motor(m, param, 0.0)
+    assert p is None or p.geometry == m.geometry
+
+
+class TestRederiveRefusal:
+    """OD/gap clear psi_f; motors whose psi_f cannot be re-derived refuse."""
+
+    @pytest.mark.parametrize("param", ["OD", "gap"])
+    def test_inset_refuses(self, param):
+        m = load_motor(REPO_ROOT / "motors" / "creator_case_pmsm.toml")
+        assert m.geometry.magnet_mount == "inset"
+        assert _perturb_motor(m, param, 0.05) is None
+
+    @pytest.mark.parametrize("param", ["OD", "gap", "L_stk", "B_rem", "k_w"])
+    def test_flux_map_refuses(self, param):
+        m = load_motor(REPO_ROOT / "motors" / "bmw_i3.toml")
+        assert m.flux_map is not None
+        assert _perturb_motor(m, param, -0.05) is None
+
+    @pytest.mark.parametrize("param", ["OD", "gap"])
+    def test_overhang_carried(self, param):
+        m = load_motor(REPO_ROOT / "motors" / "outrunner_14mm_steel.toml")
+        assert m.geometry.magnet_overhang is not None
+        p = _perturb_motor(m, param, 0.05)
+        assert p is not None
+        assert p.geometry.magnet_overhang == m.geometry.magnet_overhang
+        assert p.geometry.back_iron_thickness == m.geometry.back_iron_thickness
+
+    def test_gap_keeps_custom_r_ag_fraction(self):
+        geo = inrunner(r_outer=0.060, r_stator=0.048, r_magnet=0.040,
+                       r_rotor=0.030, r_ag=0.042)
+        m = _make_inrunner(geometry=geo)
+        p = _perturb_motor(m, "gap", 0.10)
+        frac = (p.geometry.r_ag - geo.r_magnet) / (p.geometry.r_stator - geo.r_magnet)
+        assert frac == pytest.approx(0.25)
+
+
+def test_geometry_levers_skip_induction_motor_with_cage():
+    from phasesweep.machines.motor import InductionParams
+    geo = inrunner(r_outer=0.1, r_stator=0.0628, r_magnet=0.0624, r_rotor=0.0624,
+                   r_inner=0.022, n_bars=28, bar_width=0.0034, bar_height=0.021)
+    m = Motor(name="im", geometry=geo, n_p=2, R_s=2.3, L_stk=0.1,
+              induction=InductionParams(R_2=1.0, n_bars=28))
+    for p in ("OD", "gap", "L_stk", "B_rem", "k_w"):
+        assert _perturb_motor(m, p, 0.05) is None
+    assert _perturb_motor(m, "R_2", 0.05).induction.R_2 == pytest.approx(1.05)
+
+
+# ---------------------------------------------------------------------------
+# scale_inductances — direct unit tests
+# ---------------------------------------------------------------------------
+
+class TestScaleInductances:
+    """Direct tests for scale_inductances (used by OD, gap, L_stk branches)."""
+
+    def test_both_present(self):
+        m = _make_inrunner(L_d=4e-3, L_q=6e-3)
+        kw = scale_inductances(m, 1.5)
+        assert kw == {"L_d": pytest.approx(6e-3), "L_q": pytest.approx(9e-3)}
+
+    def test_factor_one_identity(self):
+        m = _make_inrunner(L_d=4e-3, L_q=6e-3)
+        kw = scale_inductances(m, 1.0)
+        assert kw["L_d"] == pytest.approx(4e-3)
+        assert kw["L_q"] == pytest.approx(6e-3)
+
+    def test_both_none(self):
+        m = _make_inrunner(L_d=None, L_q=None)
+        assert scale_inductances(m, 2.0) == {}
+
+    def test_l_d_none_only_l_q(self):
+        m = _make_inrunner(L_d=None, L_q=6e-3)
+        kw = scale_inductances(m, 2.0)
+        assert "L_d" not in kw
+        assert kw["L_q"] == pytest.approx(12e-3)
+
+    def test_l_q_none_only_l_d(self):
+        m = _make_inrunner(L_d=4e-3, L_q=None)
+        kw = scale_inductances(m, 0.5)
+        assert kw["L_d"] == pytest.approx(2e-3)
+        assert "L_q" not in kw
+
+    def test_factor_zero(self):
+        m = _make_inrunner(L_d=4e-3, L_q=6e-3)
+        kw = scale_inductances(m, 0.0)
+        assert kw["L_d"] == pytest.approx(0.0)
+        assert kw["L_q"] == pytest.approx(0.0)

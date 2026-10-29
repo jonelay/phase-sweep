@@ -4,7 +4,7 @@ Drives the shipped Newton solver (``solve_field_fem(nonlinear_solver=
 "newton")``, same discrete system as Picard — element-wise L2^0 nu from
 the shared 19-point BH table) against the Picard default on three
 production nonlinear cases (deep-dive nonlinear_bh pinned case, CREATOR
-inset+slots, 14 mm steel actuator), twice each: an operational pass
+inset+slots, 14 mm steel outrunner), twice each: an operational pass
 (shipping picard_tol vs Newton's rtol 1e-4 — the fair iteration and
 wall-time comparison at matched B1 accuracy) and a fixed-point pass
 (picard_tol 1e-4 vs Newton driven to rtol 1e-8) that confirms both
@@ -87,7 +87,7 @@ def _cases(quick: bool) -> list[dict]:
     steel = load_motor(ROOT / "motors" / "outrunner_14mm_steel.toml")
     ps = prepare_fem(steel)
     cases.append(
-        dict(name="steel_actuator", geo=ps.geometry, n_p=ps.n_p,
+        dict(name="steel_outrunner", geo=ps.geometry, n_p=ps.n_p,
              B_rem=ps.B_rem, mu_r_pm=ps.mu_r_pm, mu_r_fe=ps.mu_r_fe,
              alpha_p=ps.alpha_p, kw={}, maxh=0.05))
     return cases

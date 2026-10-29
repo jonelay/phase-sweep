@@ -1,14 +1,19 @@
 """phasesweep — PMSM air-gap flux density and drive simulation.
 
 Public API: motor/geometry types, TOML loaders, validated solver-param
-factories, the model registry, and run/result types. Internal modules
-(fem_field, sim, plots, runners) are importable directly but their
-interfaces may change between minor versions.
+factories, the model registry, and run/result types. The dict shape of
+a stored result row is declared in ``phasesweep.record_schema``, with
+``docs/result-store-contract.md`` as the prose contract; together they
+are the consumer contract (downstream adapters check against them; no
+top-level re-export). Internal modules (fem_field, sim, plots, runners)
+are importable directly but their interfaces may change between minor
+versions.
 """
 
 from phasesweep.machines.configs import load_motor, load_motors
 from phasesweep.machines.geometry import AxialFluxGeometry, Geometry, axial_flux, inrunner, outrunner
 from phasesweep.machines.motor import DriveParams, InductionParams, Motor
+from phasesweep.models.im_circuit import ImCircuitParams, prepare_im_circuit
 from phasesweep.models.rated_torque import (
     RatedTorqueParams,
     StallTorqueParams,
@@ -27,7 +32,7 @@ from phasesweep.solvers.analytical import AnalyticalParams, prepare_analytical
 from phasesweep.solvers.fem_runner import FemParams, prepare_fem
 from phasesweep.sweep_types import RunConfig, RunResult, compute_run_id
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 _DEBUG_DEPS = ("numpy", "scipy", "ngsolve", "motulator", "matplotlib", "fastapi", "cupy")
 
@@ -63,6 +68,7 @@ __all__ = [
     "DriveSimParams",
     "FemParams",
     "Geometry",
+    "ImCircuitParams",
     "InductionParams",
     "ModelInfo",
     "Motor",
@@ -84,6 +90,7 @@ __all__ = [
     "prepare_analytical",
     "prepare_drive_sim",
     "prepare_fem",
+    "prepare_im_circuit",
     "prepare_rated_torque",
     "prepare_stall_torque",
     "prepare_thermal_duty",

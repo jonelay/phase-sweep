@@ -18,7 +18,7 @@ from math import pi
 import numpy as np
 
 from phasesweep.machines.geometry import Geometry, default_inrunner, inrunner
-from phasesweep.solvers.analytical import zhu_howe_Br_series
+from phasesweep.solvers.field_solution import zhu_howe_Br_series
 
 # Baseline parameters, all cases
 N_P = 4

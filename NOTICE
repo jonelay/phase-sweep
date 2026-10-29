@@ -1,0 +1,170 @@
+phasesweep
+Copyright 2026 Jone Lay
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+--------------------------------------------------------------------------
+
+## Vendored third-party code
+
+`phasesweep/dashboard/vendor/plotly-cartesian-3.6.0.min.js`
+  Plotly.js v3.6.0 (cartesian bundle), Copyright 2012-2026 Plotly, Inc.
+  Licensed under the MIT License.
+  https://github.com/plotly/plotly.js
+
+--------------------------------------------------------------------------
+
+This distribution also bundles motor parameter files, under `motors/`
+and `data/`,
+whose numeric values are transcribed from, or estimated from, the
+third-party sources below. Those values are factual measurements and
+published specifications rather than third-party expression, and each
+file records its own provenance and test conditions in its header
+comments or accompanying README. The sources are listed here for
+attribution.
+
+## Pyleecan machine geometry
+
+`data/prius_2004/pyleecan_geometry.json` is from the Pyleecan project
+(https://github.com/Eomys/pyleecan), licensed under Apache-2.0.
+
+## Oak Ridge National Laboratory
+
+Oak Ridge National Laboratory, operated by UT-Battelle, LLC for the
+U.S. Department of Energy:
+
+  ORNL/TM-2004/137   Hsu et al. — Physical teardown: geometry, winding,
+                     materials (2004 Prius).
+  ORNL/TM-2004/185   Hsu et al. — Measured back-EMF vs speed and
+  (rev. 2007)        temperature (2004 Prius).
+  ORNL/TM-2004/247   Staunton et al. — Dynamometer performance maps
+                     (2004 Prius).
+  ORNL/TM-2010/253   Burress et al. — Teardown and dynamometer
+                     (2010 Prius).
+  ORNL/TM-2005/183   Bailey/McKeever — 6-kW 36s/30p FSCW SPM
+                     prototype (El-Refaie/Jahns, via UW).
+  DOE VTO AMR EDT006  Burress — 2016 BMW i3 motor and PCU teardown
+  (June 2016)        (slides 19–23: motor geometry, mass, efficiency).
+  DOE VTO AMR EDT087  Burress — 2016 BMW i3 benchmarking results and
+  (June 2017)        motor metrics comparison (slides 8–9, 16, 20).
+  EETT Roadmap        U.S. DRIVE — Appendix C: ORNL testing and
+  (Oct 2017)         evaluation data on 2016 BMW i3.
+
+## CREATOR open-benchmark datasets
+
+CREATOR CRC-TRR361 (TU Graz):
+
+  DOI 10.3217/sns1d-77m43  PMSM benchmark (CC BY-NC-ND 4.0)
+  DOI 10.3217/kh3v7-dhn98  IM benchmark (CC BY-NC 4.0)
+
+These datasets are fetched on demand and excluded from the distributed
+wheel and sdist; only transcribed anchor parameters are committed.
+
+## BMW i3 supplementary files (CC BY 4.0)
+
+`data/bmw_i3/BMWi3_GeometryAutoCAD.dxf` and
+`data/bmw_i3/FEMResults_1000rpm.xlsx` are the supplementary files of
+M. Gierczynski and L.M. Grzesiak, Energies 14(9):2343, 2021
+(DOI 10.3390/en14092343), redistributed unmodified under
+CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+`data/bmw_i3/flux_maps_7x7.json` is derived from the xlsx (angle-averaged
+7×7 flux-linkage maps; see `data/bmw_i3/README.md`) and is shared under
+the same license.
+
+## Published research
+
+Motor parameter files cite the following publications. Each file's
+header records its specific source and DOI.
+
+  Awan et al., IEEE TIA 54(6), 2018
+    DOI 10.1109/TIA.2018.2862410
+
+  Belkhadir et al., IECON 2023
+    DOI 10.1109/IECON51785.2023.10312419
+
+  Bozkurt et al., Machines 14(7):729, 2026
+    DOI 10.3390/machines14070729
+
+  Bozkurt, Baba, Oner, Energies 14(13):3739, 2021
+    DOI 10.3390/en14133739
+
+  Caruso et al., IMEKO TC4 2016 (University of Palermo)
+    https://www.imeko.org/publications/tc4-2016/IMEKO-TC4-2016-08.pdf
+
+  Deylami et al., TechRxiv 2024
+    DOI 10.36227/techrxiv.171439839.97768997/v1
+
+  Du et al., CES TEMS 5(2):163–173, 2021
+    DOI 10.30941/cestems.2021.00020
+
+  El-Refaie & Jahns, IEEE TIA 41(3):790–800, 2005
+    DOI 10.1109/TIA.2005.847304
+
+  El-Refaie et al., IEEE TIA 42(2), 2006
+    DOI 10.1109/TIA.2005.863903
+
+  Gierczynski & Grzesiak, Energies 14(9):2343, 2021
+    DOI 10.3390/en14092343
+
+  Goh et al., Energies 18(14):3709, 2025
+    DOI 10.3390/en18143709
+
+  Kuptsov et al., Machines 7(4):75, 2019
+    DOI 10.3390/machines7040075
+
+  Kumar et al. (Tikadar, Kumar, Joshi, Kumar), ASME InterPACK 2019
+    OSTI 1843426 (ARPA-E OPEN 2018, DE-AR0001023)
+
+  Liu, Shang, Gong, WEVJ 16(8):413, 2025
+    DOI 10.3390/wevj16080413
+
+  Mahmoudi, Rahim, Ping, PIER 122:467–496, 2012
+    DOI 10.2528/PIER11090402
+
+  Parviainen, Niemelä, Pyrhönen, IEEE TIA 40(5), 2004
+    DOI 10.1109/TIA.2004.834082
+
+  SAE 2016-01-1228 (Chevrolet Bolt EV motor design)
+
+  Synczak et al., Actuators 13(12):530, 2024
+    DOI 10.3390/act13120530
+
+  Thomas et al., ISRN Renewable Energy 2012:489379
+    DOI 10.5402/2012/489379
+
+  Grabbe, Eriksson, Leijon, Scientific World Journal 2015:812149
+    PMC 4386604
+
+  Wang, WEVJ 16(5):247, 2025
+    DOI 10.3390/wevj16050247
+
+  Zhang et al., IET EPA 15:717–727, 2021
+    DOI 10.1049/elp2.12069
+
+  D. Meeker, "LRK Motor Analysis Worksheet", femm.info, 2004
+    https://www.femm.info/examples/lrk40/lrk-bldc.pdf
+
+  Kent Davey, "Induction Motor Analyses", International TEAM Workshop
+    (TEAM Problem 30a)
+
+## Manufacturer datasheets
+
+Motor parameter files also draw from manufacturer datasheets and
+catalogs for the following products, used as published specifications:
+
+  ABB BSM50N series
+  Beckhoff AM8051 series
+  Emrax 208 / 228 axial-flux motors
+  ETEL TMB torque motor series
+  Kollmorgen AKM44H / B-104-B / GOLDLINE series
+  Magnetic BLQ40
+  Nord 80T1/4
+  Rexroth MS2N series
+  Tecnotion QTR direct-drive series
+  WEG UE921 / UE941 (IEC frame-80)
+
+Parameter values derived from these sources are estimates unless the
+motor file marks them measured. They are not endorsed by, and imply no
+affiliation with, Oak Ridge National Laboratory, UT-Battelle, the
+U.S. Department of Energy, Toyota, Pyleecan/EOMYS, TU Graz, or any
+manufacturer listed above.

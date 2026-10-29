@@ -3,7 +3,7 @@
 Tier 1: analytical cross-checks (no simulation).
 Tier 2: FEM simulation vs measured waveforms from TU Graz dataset.
 
-Source: arXiv:2501.15921, Dhakal et al., COMPEL 44(4), 2025.
+Source: arXiv:2501.15921, Muetze et al., COMPEL 44(4), 2025.
 Dataset: DOI 10.3217/sns1d-77m43
 """
 
@@ -214,8 +214,8 @@ _COGGING_PERIOD = 2 * math.pi / 12
 
 @pytest.fixture(scope="module")
 def creator_cogging(creator):
-    """Cogging sweep via _run_cogging_impl (Arkkio torque, production mesh)."""
-    from phasesweep.solvers.cogging import _run_cogging_impl
+    """Cogging sweep via run_cogging (Arkkio torque, production mesh)."""
+    from phasesweep.solvers.cogging import run_cogging
     from phasesweep.sweep_types import RunConfig
 
     params = prepare_fem(creator)
@@ -226,7 +226,7 @@ def creator_cogging(creator):
         n_theta=360, cogging_points=_COGGING_N_PTS,
         nonlinear=True,
     )
-    return _run_cogging_impl(rc)
+    return run_cogging(rc)
 
 
 @requires_fem

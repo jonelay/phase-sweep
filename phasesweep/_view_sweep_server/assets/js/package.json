@@ -1,0 +1,19 @@
+{
+  "name": "view-sweep",
+  "version": "0.1.0",
+  "description": "Browser ES modules for parameter-sweep dashboards: theme, plot, widgets, chrome, providers",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./theme.js": "./theme.js",
+    "./plot.js": "./plot.js",
+    "./widgets.js": "./widgets.js",
+    "./chrome.js": "./chrome.js",
+    "./export.js": "./export.js",
+    "./providers/*": "./providers/*"
+  },
+  "repository": "https://github.com/jonelay/view-sweep",
+  "private": true
+}

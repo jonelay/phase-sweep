@@ -10,6 +10,7 @@ from math import pi
 import numpy as np
 import pytest
 
+from phasesweep.machines.motor import InductionParams, Motor
 from phasesweep.models.iron_loss import (
     IronLossParams,
     bertotti_loss_density,
@@ -279,3 +280,84 @@ class TestIronLossModel:
         assert compute_run_id(rc1, fields) != compute_run_id(rc2, fields)
         rc3 = RunConfig(motor=m1, model="iron_loss", maxh_fraction=0.2)
         assert compute_run_id(rc1, fields) == compute_run_id(rc3, fields)
+
+
+def _im_motor(n_p=2, f_rated=50.0, s_rated=0.05, **iron):
+    fields = {**_IRON, **iron}
+    return Motor(name="im", geometry=None, n_p=n_p, R_s=1.0,
+                 induction=InductionParams(
+                     R_2=0.5, L_m=0.2, L_sigma_s=0.01, L_sigma_r=0.01,
+                     f_rated=f_rated, s_rated=s_rated, V_LL_rated=400.0),
+                 **fields)
+
+
+class TestInductionPath:
+    """Slip-aware stator lump: the stator frequency is the supply, not
+    n_p·W_REF/2π, and the rotor fundamental s·f is reported, not lumped
+   ."""
+
+    def test_supply_frequency_not_shaft_speed(self):
+        r = run_iron_loss(RunConfig(motor=_im_motor(), model="iron_loss"))
+        assert r["f_e_Hz"] == 50.0
+        assert r["f_rotor_Hz"] == pytest.approx(2.5)
+        assert r["p_fe_hysteresis"] == pytest.approx(0.5 * 0.0275 * 50.0)
+        assert r["p_fe_eddy"] == pytest.approx(0.5 * 0.00026 * 50.0**2)
+        assert r["p_fe"] == pytest.approx(r["p_fe_hysteresis"] + r["p_fe_eddy"])
+
+    def test_w_ref_neither_required_nor_consulted(self):
+        from phasesweep.machines.motor import DriveParams
+        base = _im_motor()
+        with_drive = _im_motor(drive=DriveParams(W_REF=1000.0))
+        assert prepare_iron_loss(base).W_REF is None
+        assert run_iron_loss(RunConfig(motor=with_drive, model="iron_loss")) \
+            == run_iron_loss(RunConfig(motor=base, model="iron_loss"))
+
+    def test_synchronous_output_keys_unchanged(self):
+        # The cache verifier compares key sets: the PM path must not grow
+        # a key it never produced (f_rotor_Hz is induction-only).
+        r = run_iron_loss(RunConfig(motor=make_motor(**_IRON), model="iron_loss"))
+        assert "f_rotor_Hz" not in r
+        assert set(r) == MODEL_REGISTRY["iron_loss"].produces - {"f_rotor_Hz"}
+
+    def test_two_pole_induction_accepted(self):
+        r = run_iron_loss(RunConfig(motor=_im_motor(n_p=1), model="iron_loss"))
+        assert r["f_e_Hz"] == 50.0
+
+    def test_f_rated_required(self):
+        m = _im_motor(f_rated=None)
+        with pytest.raises(ValueError, match="f_rated"):
+            prepare_iron_loss(m)
+        with pytest.raises(ValueError, match="f_rated"):
+            MODEL_REGISTRY["iron_loss"].validate(m)
+
+    def test_s_rated_optional_only_drops_rotor_frequency(self):
+        # The stator lump never consults slip; f_rotor_Hz is the one
+        # conditional key in the registry produces set.
+        with_slip = run_iron_loss(RunConfig(motor=_im_motor(), model="iron_loss"))
+        no_slip = run_iron_loss(RunConfig(motor=_im_motor(s_rated=None),
+                                          model="iron_loss"))
+        assert "f_rotor_Hz" not in no_slip
+        assert set(no_slip) == MODEL_REGISTRY["iron_loss"].produces - {"f_rotor_Hz"}
+        assert set(with_slip) == MODEL_REGISTRY["iron_loss"].produces
+        assert {k: v for k, v in with_slip.items() if k != "f_rotor_Hz"} == no_slip
+
+    def test_params_exactly_one_frequency_source(self):
+        common = dict(n_p=2, k_h=0.03, k_e=1e-4, alpha_fe=1.7, m_core=0.5,
+                      B_core=1.0)
+        with pytest.raises(ValueError, match="exactly one"):
+            IronLossParams(**common)
+        with pytest.raises(ValueError, match="exactly one"):
+            IronLossParams(**common, W_REF=100.0, f_supply=50.0)
+        with pytest.raises(ValueError, match="slip"):
+            IronLossParams(**common, W_REF=100.0, slip=0.05)
+        with pytest.raises(ValueError, match="slip"):
+            IronLossParams(**common, f_supply=50.0, slip=1.0)
+        for bad in (float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="k_e must be > 0 and finite"):
+                IronLossParams(**{**common, "k_e": bad}, W_REF=100.0)
+            with pytest.raises(ValueError, match="f_supply must be > 0 and finite"):
+                IronLossParams(**common, f_supply=bad)
+        two_pole = {**common, "n_p": 1}
+        with pytest.raises(ValueError, match="n_p must be >= 2"):
+            IronLossParams(**two_pole, W_REF=100.0)
+        assert IronLossParams(**two_pole, f_supply=50.0).f_e == 50.0

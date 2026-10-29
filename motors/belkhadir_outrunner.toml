@@ -21,7 +21,6 @@ coils_series = 8       # 24 slots / 3 phases = 8 coils per phase, no parallel br
 layers = 2
 
 [geometry]
-topology = "outrunner"
 # Direct radii (computed from Table I of Belkhadir et al., IECON 2023,
 # DOI 10.1109/IECON51785.2023.10312419)
 # r_stator = R_sext = 88.635 mm (stator outer, faces air gap)

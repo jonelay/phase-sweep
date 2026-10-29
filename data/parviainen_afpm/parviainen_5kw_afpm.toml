@@ -10,7 +10,7 @@
 #   Lappeenrantaensis 208, 2005. Chapter 3, Tables 3.1 and 3.3, Appendix A.3.
 #   PDF (open access): https://web.mit.edu/kirtley/binlustuff/literature/electric%20machine/designOfAxialFluxPMM.pdf
 #   Also published as: Parviainen, Niemelä, Pyrhönen, "Modeling Axial-Flux
-#   Permanent-Magnet Machines," IEEE Trans. Ind. Appl., 40(5), 2004, pp. 1333-1340.
+#   Permanent-Magnet Machines," IEEE TIA 40(5), 2004, DOI 10.1109/TIA.2004.834082
 #
 # Topology: 1-rotor-2-stators (TORUS), surface-mounted NdFeB (Neorem 495a),
 # sinusoidal magnet shape, solid-iron rotor disk (S232JR), stator lamination

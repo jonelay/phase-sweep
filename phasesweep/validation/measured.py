@@ -8,16 +8,41 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, cast, get_args
+from typing import Any, Literal, get_args
 
-from phasesweep.machines.motor import Motor
-from phasesweep.result_store import ResultStore
+from phasesweep.machines.motor import InductionParams, Motor
 from phasesweep.sweep_types import RunConfig, RunResult, Source
+
+__all__ = [
+    "BoundRef",
+    "CurveRef",
+    "KeyMapping",
+    "MeasuredFormatError",
+    "MeasuredResult",
+    "MeasurementConditions",
+    "import_measured",
+    "measured_run_result",
+    "validate_measured",
+]
 
 # Measured data files carry real-world data; "computed" is excluded.
 _VALID_SOURCES = tuple(s for s in get_args(Source) if s != "computed")
+
+Extract = Literal["interp", "max", "min", "rms"]
+Relation = Literal["gte", "lte", "gt", "lt"]
+
+
+class MeasuredFormatError(ValueError):
+    """A measured-data payload is malformed (missing key, wrong type or
+    value). Raised before anything is persisted."""
+
+
+def _finite_real(where: str, v: Any) -> None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        raise MeasuredFormatError(f"{where} must be a finite number, got {v!r}")
 
 
 @dataclass(frozen=True)
@@ -56,7 +81,17 @@ class CurveRef:
     curve_x: str
     curve_y: str
     at_x: float | None = None
-    extract: Literal["interp", "max", "min", "rms"] = "interp"
+    extract: Extract = "interp"
+
+    def __post_init__(self) -> None:
+        if self.extract not in get_args(Extract):
+            raise MeasuredFormatError(
+                f"curve_compare extract must be one of {get_args(Extract)}, "
+                f"got {self.extract!r}")
+        if self.extract == "interp" and self.at_x is None:
+            raise MeasuredFormatError("curve_compare extract 'interp' needs at_x")
+        if self.at_x is not None:
+            _finite_real("curve_compare at_x", self.at_x)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"curve_x": self.curve_x, "curve_y": self.curve_y, "extract": self.extract}
@@ -73,7 +108,13 @@ class CurveRef:
 @dataclass(frozen=True)
 class BoundRef:
     computed_key: str
-    relation: Literal["gte", "lte", "gt", "lt"]
+    relation: Relation
+
+    def __post_init__(self) -> None:
+        if self.relation not in get_args(Relation):
+            raise MeasuredFormatError(
+                f"bound_compare relation must be one of {get_args(Relation)}, "
+                f"got {self.relation!r}")
 
     def to_dict(self) -> dict[str, Any]:
         return {"computed_key": self.computed_key, "relation": self.relation}
@@ -106,7 +147,7 @@ class MeasuredResult:
     uncertainty: dict[str, float]
     source_file: str
     tolerances: dict[str, float] = field(default_factory=dict)
-    source: str = "measured"
+    source: Source = "measured"
     curve_compare: dict[str, CurveRef] = field(default_factory=dict)
     bound_compare: dict[str, BoundRef] = field(default_factory=dict)
     key_mapping: dict[str, KeyMapping] = field(default_factory=dict)
@@ -140,6 +181,16 @@ class MeasuredResult:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> MeasuredResult:
+        try:
+            return cls._from_dict(d)
+        except MeasuredFormatError:
+            raise
+        except (KeyError, TypeError, AttributeError, ValueError) as e:
+            detail = f"missing key {e}" if isinstance(e, KeyError) else str(e)
+            raise MeasuredFormatError(detail) from e
+
+    @classmethod
+    def _from_dict(cls, d: dict[str, Any]) -> MeasuredResult:
         return cls(
             motor_name=d["motor_name"],
             test_type=d["test_type"],
@@ -162,6 +213,17 @@ def validate_measured(data: MeasuredResult) -> None:
 
     if not data.motor_name:
         raise ValueError("motor_name must be non-empty")
+
+    # Values reach crossval and the API as numbers; a string would drop
+    # out of the comparison silently or 500 the validation endpoint.
+    for section in ("quantities", "uncertainty", "tolerances"):
+        table = getattr(data, section)
+        if not isinstance(table, dict):
+            raise MeasuredFormatError(f"{section} must be a table, got {table!r}")
+        for k, v in table.items():
+            _finite_real(f"{section}.{k}", v)
+    for k in ("speed_rpm", "temperature_C", "load_torque_Nm"):
+        _finite_real(f"conditions.{k}", getattr(data.conditions, k))
 
     if data.source not in _VALID_SOURCES:
         raise ValueError(
@@ -190,10 +252,12 @@ def validate_measured(data: MeasuredResult) -> None:
         )
 
     motor_fields = {f.name for f in dataclasses.fields(Motor)}
+    motor_fields |= {f.name for f in dataclasses.fields(InductionParams)}
     unknown = set(data.derived_params) - motor_fields
     if unknown:
         raise ValueError(
-            f"derived_params {sorted(unknown)} are not Motor fields"
+            f"derived_params {sorted(unknown)} are not Motor or "
+            f"InductionParams fields"
         )
 
 
@@ -225,7 +289,7 @@ def measured_run_result(
         status="OK",
         metrics=metrics,
         elapsed_s=0.0,
-        source=cast(Source, data.source),
+        source=data.source,
         tolerances=data.tolerances or None,
     )
 
@@ -237,6 +301,8 @@ def import_measured(
     data = MeasuredResult.from_dict(raw)
     validate_measured(data)
     result = measured_run_result(data, motor, path.stem)
+
+    from phasesweep.result_store import ResultStore
 
     store = ResultStore(output_dir)
     store.save(result)

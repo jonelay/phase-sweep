@@ -1,0 +1,322 @@
+/* viewsweep-core.css — tokens, controls, widgets, and overlays WITHOUT the
+ * app-shell frame (body flex, sidebar grid, tab bar, panel chrome).
+ *
+ * Use this instead of viewsweep.css for document-flow consumers that embed
+ * individual widgets or controls into their own layout. Load a palette
+ * stylesheet (spec/palettes/<name>.css) AFTER this file so the palette's
+ * explicit values override the extended-token fallbacks below.
+ * Alternatively, apply a palette with theme.js (applyInline: true).
+ *
+ * viewsweep.css is a superset: it includes everything here plus the
+ * full-page app frame. The two files share the same token fallbacks. */
+
+/* -- fallbacks for extended tokens (spec/theme.toml [extended]) ------------- */
+
+:root {
+  --vs-warn-ink: var(--vs-status-warning);
+  --vs-banner-text: var(--vs-warn-ink);
+  --vs-shadow: rgba(0, 0, 0, 0.3);
+  --vs-hoverlabel-bg: var(--vs-surface);
+  --vs-legend-bg: var(--vs-surface);
+  --vs-chart-bg: var(--vs-surface);
+  --vs-chart-text: var(--vs-text-2);
+  --vs-chart-muted: var(--vs-text-muted);
+  --vs-chart-grid: var(--vs-hairline);
+  --vs-chart-zeroline: var(--vs-hairline);
+  --vs-chart-ink: var(--vs-shadow);
+  --vs-seq-lo: var(--vs-chart-bg);
+  --vs-seq-mid: var(--vs-accent);
+  --vs-seq-hi: var(--vs-text);
+  --vs-accent-warm: var(--vs-accent);
+  --vs-accent-cool: var(--vs-accent);
+  --vs-font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --vs-font-mono: ui-monospace, monospace;
+  --vs-font-size: 13px;
+  --vs-radius: 4px;
+}
+
+/* -- base ------------------------------------------------------------------- */
+
+* { box-sizing: border-box; }
+
+:focus-visible {
+  outline: 2px solid var(--vs-accent-ink);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+
+/* -- controls (spec/widgets.toml [controls]) -------------------------------- */
+
+.vs-btn {
+  font: inherit;
+  font-size: 0.92em;
+  border: 1px solid var(--vs-hairline);
+  border-radius: var(--vs-radius);
+  background: none;
+  color: var(--vs-text-2);
+  cursor: pointer;
+  padding: 2px 8px;
+}
+
+.vs-btn:hover { border-color: var(--vs-accent-ink); color: var(--vs-accent-ink); }
+
+.vs-btn.primary {
+  border-color: var(--vs-accent-ink);
+  color: var(--vs-accent-ink);
+  padding: 5px 12px;
+}
+
+.vs-btn.primary:hover { background: color-mix(in srgb, var(--vs-accent) 12%, transparent); }
+
+.vs-btn.active { border-color: var(--vs-accent-ink); color: var(--vs-accent-ink); }
+
+.vs-btn.danger:hover { border-color: var(--vs-status-critical); color: var(--vs-status-critical); }
+
+.vs-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--vs-hairline);
+  border-radius: var(--vs-radius);
+  padding: 1px 4px 1px 6px;
+  font-size: 0.92em;
+  color: var(--vs-text-2);
+}
+
+.vs-select:hover { border-color: var(--vs-accent-ink); color: var(--vs-accent-ink); }
+
+.vs-select select {
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 1px 0;
+}
+
+.vs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 9px;
+  border: 1px solid var(--vs-hairline);
+  border-radius: 999px;
+  background: var(--vs-bg);
+  font-size: 0.92em;
+  color: var(--vs-text-2);
+  white-space: nowrap;
+}
+
+.vs-chip-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.vs-chip-x {
+  border: none;
+  background: none;
+  color: var(--vs-text-muted);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.vs-chip-x:hover { color: var(--vs-text); }
+
+/* -- widgets (spec/widgets.toml) -------------------------------------------- */
+
+.vs-empty-hint {
+  color: var(--vs-text-muted);
+  padding: 24px 0;
+  text-align: center;
+}
+
+.vs-caption { color: var(--vs-text-2); font-size: 0.92em; padding: 2px 0 6px; }
+
+.vs-plot { width: 100%; min-height: 240px; }
+
+.vs-stat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  margin: 2px 0 8px;
+}
+
+.vs-stat-label {
+  display: block;
+  font-size: 0.77em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--vs-text-muted);
+}
+
+.vs-stat-value {
+  display: block;
+  font-size: 1.15em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--vs-text);
+}
+
+.vs-stat-tile.is-loading .vs-stat-value { color: var(--vs-text-muted); }
+
+.vs-provenance {
+  margin-top: 6px;
+  font-size: 0.85em;
+  color: var(--vs-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.vs-provenance:empty { display: none; }
+
+.vs-conn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--vs-text-muted);
+}
+
+.vs-conn-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--vs-text-muted);
+}
+
+.vs-conn[data-state="connected"] .vs-conn-dot { background: var(--vs-status-good); }
+.vs-conn[data-state="connecting"] .vs-conn-dot { background: var(--vs-status-warning); }
+.vs-conn[data-state="disconnected"] .vs-conn-dot { background: var(--vs-status-critical); }
+
+.vs-badge {
+  font-size: 0.85em;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--vs-text-muted);
+}
+
+.vs-badge[data-status="running"] { background: var(--vs-accent); }
+.vs-badge[data-status="completed"] { background: var(--vs-status-good); }
+.vs-badge[data-status="failed"] { background: var(--vs-status-critical); }
+.vs-badge[data-status="cancelled"] { background: var(--vs-warn-ink); }
+
+.vs-progress-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--vs-hairline);
+  overflow: hidden;
+}
+
+.vs-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--vs-accent);
+  transition: width 0.2s;
+}
+
+/* -- overlays ---------------------------------------------------------------- */
+
+.vs-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  padding: 7px 16px;
+  border-radius: 8px;
+  background: var(--vs-text);
+  color: var(--vs-bg);
+  font-size: 0.92em;
+  max-width: 80vw;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  z-index: 10;
+}
+
+.vs-toast.show { opacity: 1; }
+
+.vs-scroll-shadow { position: relative; }
+
+.vs-scroll-shadow::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  background: linear-gradient(to left, var(--vs-shadow), transparent);
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+.vs-scroll-shadow.more-right::after { opacity: 1; }
+
+.vs-popover {
+  position: absolute;
+  right: 0;
+  z-index: 20;
+  margin-top: 4px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px 10px;
+  background: var(--vs-surface);
+  border: 1px solid var(--vs-hairline);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px var(--vs-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.vs-kbd-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--vs-shadow);
+}
+
+.vs-kbd-overlay[hidden] { display: none; }
+
+.vs-kbd-card {
+  min-width: 300px;
+  padding: 14px 18px 16px;
+  background: var(--vs-surface);
+  border: 1px solid var(--vs-hairline);
+  border-radius: 6px;
+  box-shadow: 0 8px 30px var(--vs-shadow);
+}
+
+.vs-kbd-card h2 { margin: 0 0 12px; font-size: 1em; }
+
+.vs-kbd-card dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 14px;
+  margin: 0;
+}
+
+.vs-kbd-card dt { text-align: right; }
+.vs-kbd-card dd { margin: 0; color: var(--vs-text-2); }
+
+.vs-kbd-card kbd {
+  font: inherit;
+  font-size: 0.92em;
+  padding: 1px 6px;
+  background: var(--vs-bg);
+  border: 1px solid var(--vs-hairline);
+  border-bottom-width: 2px;
+  border-radius: var(--vs-radius);
+  white-space: nowrap;
+}

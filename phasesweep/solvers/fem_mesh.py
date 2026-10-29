@@ -14,14 +14,30 @@ import logging
 import os
 import tempfile
 import time
+from itertools import pairwise
 from math import pi
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from phasesweep.machines.geometry import Geometry, default_inrunner
+from phasesweep.sweep_types import Magnetization
 
 if TYPE_CHECKING:
     from ngsolve import Mesh
+
+__all__ = [
+    "DEFAULT_GEO",
+    "ENV_CACHE_BUDGET_MB",
+    "build_bar_cell_mesh",
+    "build_cross_section",
+    "clear_mesh_cache",
+    "disk_cache_dir",
+    "geometry_to_step",
+    "get_or_build_cage_mesh",
+    "pm_radii",
+    "set_disk_cache_dir",
+    "slot_source_moment",
+]
 
 # Interpole gaps narrower than this collapse to a full PM ring (α_p = 1.0):
 # OCC boolean cuts on sub-0.5 mm arc slivers fail unreliably ("Could not
@@ -29,7 +45,7 @@ if TYPE_CHECKING:
 _MIN_ARC_GAP_M: float = 5e-4
 
 
-def _pm_radii(geo: Geometry) -> tuple[float, float]:
+def pm_radii(geo: Geometry) -> tuple[float, float]:
     """(r_pm_outer, r_pm_inner) of the magnet annulus, net of the bridge.
 
     A bridge ring (inset rotors) occupies the airgap side of the PM
@@ -55,7 +71,7 @@ def _interpole_gap_width(geo: Geometry, alpha_p: float, n_p: int) -> float:
     refinement must place its ≥2 elements. Using the outer radius here
     overestimated the gap on both topologies (fem v6 and earlier).
     """
-    _, r_pm = _pm_radii(geo)
+    _, r_pm = pm_radii(geo)
     return (1 - alpha_p) * pi / n_p * r_pm
 
 
@@ -74,10 +90,15 @@ def _arcs_active(geo: Geometry, alpha_p: float, n_p: int) -> bool:
 
 # ---------------------------------------------------------------------------
 # Mesh cache — keyed by (config_id, maxh_fraction, n_slots,
-#                        slot_width_ratio, alpha_p, n_p, rotation)
+#                        slot_width_ratio, alpha_p, n_p, rotation, tag)
+# The tag is "" for radial PM meshes, "h{kappa}" for Halbach and "cage"
+# for squirrel-cage rotors, so the topologies never share a cache entry.
 # In-memory + optional disk persistence for subprocess workers.
 # ---------------------------------------------------------------------------
 _CacheKey = tuple[str, float, int, float, float, int, float, str]
+# v2: stator slots named per index (slot0..slotN-1) so a harmonic solve
+# can carry a per-slot winding layout; the PM path keeps one "slot".
+_CAGE_TAG = "cage2"
 _mesh_cache: dict[_CacheKey, Mesh] = {}
 _disk_cache_dir: Path | None = None
 
@@ -86,7 +107,6 @@ _disk_cache_dir: Path | None = None
 # (geometry, angle) pairs rather than geometries alone; the LRU prune below
 # bounds it. ~400 kB/mesh at maxh_fraction=0.05, so the default holds
 # ~1300 meshes (~100 twelve-angle cogging sweeps).
-ENV_CACHE_DIR = "PHASESWEEP_MESH_CACHE"
 ENV_CACHE_BUDGET_MB = "PHASESWEEP_MESH_CACHE_MB"
 
 
@@ -264,7 +284,7 @@ def _save_to_disk(key: _CacheKey, mesh: Mesh) -> None:
 
 
 # Default geometry for analytical model function defaults
-_DEFAULT_GEO = default_inrunner()
+DEFAULT_GEO = default_inrunner()
 
 
 # ---------------------------------------------------------------------------
@@ -520,7 +540,7 @@ def _cut_magnet_arcs(
     R_big = 2.0 * geo.r_outer
 
     # PM annulus radii for intersection (net of the bridge ring)
-    r_pm_outer, r_pm_inner = _pm_radii(geo)
+    r_pm_outer, r_pm_inner = pm_radii(geo)
 
     for k in range(2 * n_p):
         theta_k = _pi * k / n_p + rotation
@@ -590,7 +610,7 @@ def _cut_halbach_segments(
             f"the OCC wedge construction degenerates"
         )
 
-    r_pm_outer, r_pm_inner = _pm_radii(geo)
+    r_pm_outer, r_pm_inner = pm_radii(geo)
 
     seg_arc = _pi / (n_p * kappa_m)
     min_width = seg_arc * r_pm_inner
@@ -635,7 +655,7 @@ def _build_motor_geometry(
     alpha_p: float = 1.0,
     n_p: int = 0,
     rotation: float = 0.0,
-    magnetization: str = "radial",
+    magnetization: Magnetization = "radial",
     halbach_segments: int | None = None,
 ) -> Any:
     """Composable motor geometry builder.
@@ -645,8 +665,11 @@ def _build_motor_geometry(
        offset by ``rotation``
     3. Cut slots (when n_slots > 0), always stator-fixed
     """
-    from netgen.occ import Glue
-
+    if geo.n_bars > 0:
+        raise ValueError(
+            "cage-rotor geometry (n_bars > 0) has no PM annulus; use "
+            "_build_cage_geometry / get_or_build_cage_mesh"
+        )
     faces, _innermost, named = _build_annular_regions(geo)
 
     if magnetization == "halbach" and halbach_segments is not None:
@@ -665,49 +688,285 @@ def _build_motor_geometry(
             faces.extend(arc_faces)
             faces.extend(gap_faces)
 
-    # Cut slots
-    if n_slots > 0 and slot_depth > 0:
-        stator_face = named["stator"]
-        faces = [f for f in faces if f is not stator_face]
-        modified_stator, slot_faces = _cut_slots(
-            stator_face, geo, n_slots, slot_width_ratio, slot_depth,
-            slot_opening_ratio,
-        )
-        faces.append(modified_stator)
-        faces.extend(slot_faces)
+    faces = _apply_slots(faces, named, geo, n_slots, slot_width_ratio,
+                         slot_depth, slot_opening_ratio)
+    return _glue_named(faces, geo.r_outer)
+
+
+def _apply_slots(
+    faces: list[Any],
+    named: dict[str, Any],
+    geo: Geometry,
+    n_slots: int,
+    slot_width_ratio: float,
+    slot_depth: float,
+    slot_opening_ratio: float,
+) -> list[Any]:
+    """Replace the stator face by its slotted version (no-op without slots)."""
+    if not (n_slots > 0 and slot_depth > 0):
+        return faces
+    stator_face = named["stator"]
+    faces = [f for f in faces if f is not stator_face]
+    modified_stator, slot_faces = _cut_slots(
+        stator_face, geo, n_slots, slot_width_ratio, slot_depth,
+        slot_opening_ratio,
+    )
+    faces.append(modified_stator)
+    faces.extend(slot_faces)
+    return faces
+
+
+def _glue_named(faces: list[Any], r_outer: float) -> Any:
+    """Glue faces and name the outer boundary. Edges created before Glue
+    lose their names, so the boundary is matched by circumference."""
+    from netgen.occ import Glue
 
     glued = Glue(faces)
-
-    # Name outer boundary edges on the glued shape — edges created before
-    # Glue lose their names, so match by circumference instead
-    circumference = 2 * pi * _circle_spec(geo)[0][0]
+    circumference = 2 * pi * r_outer
     for e in glued.edges:
         if abs(e.mass - circumference) < 1e-6 * circumference:
             e.name = "outer"
-
     return glued
 
 
-# Legacy wrappers (used by tests that call these directly)
-def _build_geometry(geo: Geometry) -> Any:
-    """Concentric-circle motor cross-section from Geometry."""
-    return _build_motor_geometry(geo)
+# ---------------------------------------------------------------------------
+# Squirrel-cage rotor (induction machines) — separate builder, shared
+# stator-slot cutter and mesh cache
+# ---------------------------------------------------------------------------
+
+def _cage_circle_spec(geo: Geometry) -> list[tuple[float, str]]:
+    """Outside-in regions for a cage rotor: stator, airgap, rotor iron.
+    Like the inrunner PM spec, the rotor iron is meshed solid to r=0
+    (r_inner is not represented)."""
+    return [
+        (geo.r_outer, "stator"),
+        (geo.r_stator, "airgap"),
+        (geo.r_rotor, "rotor"),
+    ]
 
 
-def _build_slotted_geometry(
-    geo: Geometry,
-    n_slots: int | None = None,
-    slot_width_ratio: float | None = None,
-    slot_depth: float | None = None,
-) -> Any:
-    """Motor cross-section with slots cut into the stator."""
-    _n_slots = n_slots if n_slots is not None else geo.n_slots
-    _swr = slot_width_ratio if slot_width_ratio is not None else geo.slot_width_ratio
-    _sd = slot_depth if slot_depth is not None else geo.slot_depth
-    return _build_motor_geometry(
-        geo, n_slots=_n_slots, slot_width_ratio=_swr, slot_depth=_sd,
-        slot_opening_ratio=geo.slot_opening_ratio,
-    )
+def _sector(theta: float, delta: float, r_o: float, r_i: float, R_big: float) -> Any:
+    """Annular sector |θ - theta| < delta, r_i < r < r_o (r_i = 0 gives a
+    wedge to the origin)."""
+    from math import cos, sin
+
+    from netgen.occ import WorkPlane
+
+    wp = WorkPlane()
+    wp.MoveTo(0., 0.)
+    wp.LineTo(R_big * cos(theta - delta), R_big * sin(theta - delta))
+    wp.LineTo(R_big * cos(theta + delta), R_big * sin(theta + delta))
+    wp.Close()
+    face = wp.Face() * WorkPlane().Circle(r_o).Face()
+    if r_i > 0:
+        face = face - WorkPlane().Circle(r_i).Face()
+    return face
+
+
+def _cut_bars(rotor_face: Any, geo: Geometry,
+              bar_offset: float = 0.0) -> tuple[Any, list[Any]]:
+    """Cut the cage bars (and opening notches) from the rotor iron face.
+
+    Returns (modified_rotor, cut_faces). Bars are named ``bar{k}`` so a
+    harmonic solve can constrain each one; notches are ``bar_open``.
+    Rectangular bars are radial-sided wedges whose arc width is
+    ``bar_width`` at the bar mid-radius, so the area is exactly
+    bar_width x bar_height; round bars are circles of diameter bar_width.
+    ``bar_offset`` rotates the whole bar pattern (rad, counterclockwise)
+    — the multi-slice skew models solve one mesh per slice offset.
+    """
+    from math import cos, sin
+
+    from netgen.occ import WorkPlane
+
+    r_top, r_bottom = geo.bar_radii
+    half = geo.bar_arc_width / 2
+    half_open = geo.bar_opening_width / (2 * geo.r_rotor)
+    R_big = 2.0 * geo.r_outer
+
+    def _wedge(theta_k: float, delta: float, r_o: float, r_i: float) -> Any:
+        return _sector(theta_k, delta, r_o, r_i, R_big)
+
+    cut = []
+    for k in range(geo.n_bars):
+        theta_k = 2 * pi * k / geo.n_bars + bar_offset
+        if geo.bar_shape == "round":
+            r_c = r_top - geo.bar_width / 2
+            bar = WorkPlane().MoveTo(r_c * cos(theta_k), r_c * sin(theta_k)) \
+                .Circle(geo.bar_width / 2).Face()
+        else:
+            bar = _wedge(theta_k, half, r_top, r_bottom)
+        bar.faces.name = f"bar{k}"
+        rotor_face = rotor_face - bar
+        cut.append(bar)
+        if geo.bar_opening_width > 0:
+            notch = _wedge(theta_k, half_open, geo.r_rotor, r_top)
+            notch.faces.name = "bar_open"
+            rotor_face = rotor_face - notch
+            cut.append(notch)
+    rotor_face.faces.name = "rotor"
+    return rotor_face, cut
+
+
+def _name_slots_per_index(faces: list[Any], n_slots: int) -> None:
+    """Rename the PM cutter's ``slot`` faces ``slot{k}`` by their angular
+    position (k = 0 at +x, counterclockwise, the cutter's own order); a
+    stepped slot's opening and body share the index."""
+    from math import atan2
+
+    # boolean cuts return compounds: name their sub-faces one by one
+    for f in (sub for shape in faces for sub in shape.faces):
+        if f.name != "slot":
+            continue
+        theta = atan2(f.center.y, f.center.x) % (2 * pi)
+        f.name = f"slot{round(theta * n_slots / (2 * pi)) % n_slots}"
+
+
+def _build_cage_geometry(geo: Geometry, *, n_slots: int = 0,
+                         bar_offset: float = 0.0) -> Any:
+    """Cage-rotor cross-section: annular regions, bars cut from the rotor
+    iron, stator slots cut with the PM slot cutter and then named per
+    index (``slot{k}``) for the per-slot winding layout of the harmonic
+    models. Regex patterns select them as a group (``slot.*``)."""
+    if geo.n_bars <= 0:
+        raise ValueError("_build_cage_geometry needs a cage rotor (n_bars > 0)")
+    from netgen.occ import WorkPlane
+
+    specs = _cage_circle_spec(geo)
+    faces: list[Any] = []
+    named: dict[str, Any] = {}
+    for (r_big, name), (r_small, _n) in pairwise(specs):
+        region = WorkPlane().Circle(r_big).Face() - WorkPlane().Circle(r_small).Face()
+        region.faces.name = name
+        faces.append(region)
+        named[name] = region
+    rotor = WorkPlane().Circle(geo.r_rotor).Face()
+    rotor.faces.name = "rotor"
+    rotor, cut = _cut_bars(rotor, geo, bar_offset)
+    faces.append(rotor)
+    faces.extend(cut)
+    faces = _apply_slots(faces, named, geo, n_slots, geo.slot_width_ratio,
+                         geo.slot_depth if n_slots > 0 else 0.0,
+                         geo.slot_opening_ratio)
+    _name_slots_per_index(faces, n_slots)
+    return _glue_named(faces, geo.r_outer)
+
+
+def get_or_build_cage_mesh(geo: Geometry, maxh_fraction: float,
+                           bar_offset: float = 0.0) -> Mesh:
+    """Cage-rotor cross-section mesh, cached under the ``cage`` tag so it
+    can never be served to (or from) a PM solve. ``bar_offset`` rotates
+    the bar pattern (rad) — one mesh per skew slice — and rides in the
+    rotation slot of the cache key (0.0 keeps existing keys unchanged)."""
+    from netgen.occ import OCCGeometry
+    from ngsolve import Mesh
+
+    if geo.n_bars <= 0:
+        raise ValueError(
+            "get_or_build_cage_mesh needs a cage rotor (n_bars > 0); PM "
+            "geometries go through the magnetostatic mesh path"
+        )
+    n_slots = geo.n_slots
+    cache_key: _CacheKey = (geo.config_id, maxh_fraction, n_slots,
+                            geo.slot_width_ratio, 1.0, 0,
+                            round(bar_offset, 12), _CAGE_TAG)
+    mesh = _mesh_cache.get(cache_key)
+    if mesh is None:
+        mesh = _load_from_disk(cache_key)
+    if mesh is None:
+        maxh = maxh_fraction * geo.r_outer
+        if n_slots > 0:
+            maxh = min(maxh, 0.03 * geo.r_outer)
+        shape = _build_cage_geometry(geo, n_slots=n_slots, bar_offset=bar_offset)
+        shape.faces["airgap"].maxh = (geo.r_stator - geo.r_rotor) / 3
+        # >= 4 elements across a rectangular bar so the F2 skin-depth
+        # profile has something to live on; round bars need ~25 boundary
+        # segments for the polygonized area to sit within 0.5% of pi r^2.
+        # The bridge iron stays at the global size.
+        bar_h = geo.bar_width / (8 if geo.bar_shape == "round" else 4)
+        for k in range(geo.n_bars):
+            shape.faces[f"bar{k}"].maxh = bar_h
+        if geo.bar_opening_width > 0:
+            shape.faces["bar_open"].maxh = geo.bar_opening_width / 2
+        mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=maxh))
+        _save_to_disk(cache_key, mesh)
+    _mesh_cache[cache_key] = mesh
+    return mesh
+
+
+def build_bar_cell_mesh(geo: Geometry, maxh_fraction: float) -> Mesh:
+    """One rotor slot pitch of a cage rotor as a Bloch-periodic cell.
+
+    Sector |θ| < π/n_bars from the origin to the stator bore: rotor iron
+    (solid to r = 0, as the cage mesh), one bar (with its opening notch),
+    and the air gap. The bore arc is ``outer`` (A_z = 0 there kills the
+    magnetizing flux, which is what makes the bar impedance a LEAKAGE
+    quantity); the two radial sides are identified by a rotation of
+    2π/n_bars so a harmonic solve can impose the cage's bar-to-bar
+    phase progression through ``HarmonicSpec.periodic_phase``. Not
+    cached: the cell is a few hundred elements.
+    """
+    from netgen.occ import Axis, Glue, IdentificationType, OCCGeometry, Rotation, Z
+    from ngsolve import Mesh
+
+    if geo.n_bars <= 0:
+        raise ValueError("build_bar_cell_mesh needs a cage rotor (n_bars > 0)")
+    delta = pi / geo.n_bars
+    R_big = 2.0 * geo.r_outer
+    r_top, r_bottom = geo.bar_radii
+    rotor = _sector(0.0, delta, geo.r_rotor, 0.0, R_big)
+    rotor.faces.name = "rotor"
+    faces = []
+    if geo.bar_shape == "round":
+        from netgen.occ import WorkPlane
+        bar = WorkPlane().MoveTo(r_top - geo.bar_width / 2, 0.0).Circle(geo.bar_width / 2).Face()
+    else:
+        bar = _sector(0.0, geo.bar_arc_width / 2, r_top, r_bottom, R_big)
+    bar.faces.name = "bar"
+    rotor = rotor - bar
+    faces.append(bar)
+    if geo.bar_opening_width > 0:
+        notch = _sector(0.0, geo.bar_opening_width / (2 * geo.r_rotor), geo.r_rotor, r_top, R_big)
+        notch.faces.name = "bar_open"
+        rotor = rotor - notch
+        faces.append(notch)
+    rotor.faces.name = "rotor"
+    gap = _sector(0.0, delta, geo.r_stator, geo.r_rotor, R_big)
+    gap.faces.name = "airgap"
+    shape = Glue([rotor, *faces, gap])
+
+    def _angle(e: Any) -> float:
+        from math import atan2
+        return atan2(e.center.y, e.center.x)
+
+    def _radius(e: Any) -> float:
+        return float((e.center.x**2 + e.center.y**2) ** 0.5)
+
+    left = sorted((e for e in shape.edges if abs(_angle(e) + delta) < 1e-9), key=_radius)
+    right = sorted((e for e in shape.edges if abs(_angle(e) - delta) < 1e-9), key=_radius)
+    if len(left) != len(right) or not left:
+        raise RuntimeError(f"bar cell: {len(left)} left vs {len(right)} right side edges")
+    def _on_bore(e: Any) -> bool:
+        return all(abs((v.p.x**2 + v.p.y**2) ** 0.5 - geo.r_stator) < 1e-9 * geo.r_stator
+                   for v in e.vertices)
+
+    named = 0
+    for e in shape.edges:
+        if _on_bore(e):
+            e.name = "outer"
+            named += 1
+    if not named:
+        raise RuntimeError("bar cell: no edge found on the stator bore")
+    trafo = Rotation(Axis((0, 0, 0), Z), 360.0 / geo.n_bars)
+    for lft, rgt in zip(left, right):
+        lft.Identify(rgt, "cell", IdentificationType.PERIODIC, trafo)
+
+    maxh = maxh_fraction * geo.r_outer
+    shape.faces["airgap"].maxh = (geo.r_stator - geo.r_rotor) / 3
+    shape.faces["bar"].maxh = geo.bar_width / (8 if geo.bar_shape == "round" else 4)
+    if geo.bar_opening_width > 0:
+        shape.faces["bar_open"].maxh = geo.bar_opening_width / 2
+    return Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=maxh))
 
 
 def _get_or_build_mesh(
@@ -719,13 +978,18 @@ def _get_or_build_mesh(
     n_p: int,
     has_arcs: bool,
     rotation: float = 0.0,
-    magnetization: str = "radial",
+    magnetization: Magnetization = "radial",
     halbach_segments: int | None = None,
 ) -> Mesh:
     """Motor cross-section mesh: in-process cache → disk cache → build."""
     from netgen.occ import OCCGeometry
     from ngsolve import Mesh
 
+    if geo.n_bars > 0:
+        raise ValueError(
+            "cage-rotor geometry (n_bars > 0) cannot serve a magnetostatic "
+            "PM solve; use get_or_build_cage_mesh"
+        )
     _is_halbach = magnetization == "halbach" and halbach_segments is not None
     hspec = f"h{halbach_segments}" if _is_halbach else ""
     # rotation reaches the geometry through _cut_magnet_arcs (radial) or
@@ -800,6 +1064,8 @@ def build_cross_section(
 ) -> Any:
     """Build the 2D OCC cross-section shape for a motor geometry."""
     n_slots = geo.n_slots if slotted else 0
+    if geo.n_bars > 0:
+        return _build_cage_geometry(geo, n_slots=n_slots)
     return _build_motor_geometry(
         geo,
         n_slots=n_slots,

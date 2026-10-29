@@ -27,6 +27,10 @@ Thumbs.db
 *.swp
 *~
 
+# Coverage (pytest-cov)
+.coverage
+coverage-html/
+
 # mutation-testing scratch (mutmut)
 mutants/
 .mutmut-cache

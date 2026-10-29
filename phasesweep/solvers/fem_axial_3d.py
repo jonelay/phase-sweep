@@ -1,5 +1,9 @@
 """3D scalar-potential axial-flux edge-leakage study (Track B, NOT registered).
 
+Research code: an offline validation study, not a registry model. It is
+exercised by scripts and its (slow-marked) tests only; its API is not part
+of the package's public contract and may change without a version bump.
+
 Offline validation calculator in the ``fem_wedge`` pattern: it is the CV-4
 arbiter for the radial-edge leakage factor ``k_sigma_edge`` used by the
 shipped ``fem_axial`` model, and is never a registry dependency.
@@ -64,8 +68,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from phasesweep.solvers.fem_materials import _MU0
-from phasesweep.solvers.fem_wedge import _sector_ring
+from phasesweep.solvers.fem_materials import MU0
+from phasesweep.solvers.fem_wedge import sector_ring
 
 if TYPE_CHECKING:
     from ngsolve import CoefficientFunction, Mesh
@@ -75,6 +79,15 @@ if TYPE_CHECKING:
 # Minimum collar_factor accepted by the finite model — below this the
 # flux-parallel truncation sits inside the leakage field and the deficit
 # is not converged (plan audit F1: >= 4 gap+magnet lengths).
+__all__ = [
+    "MIN_COLLAR_FACTOR",
+    "AxialSectorResult",
+    "EdgeLeakageResult",
+    "compute_edge_leakage",
+    "radial_edge_leakage_factor",
+    "solve_axial_sector",
+]
+
 MIN_COLLAR_FACTOR = 4.0
 
 
@@ -162,7 +175,7 @@ def _build_axial_sector(
 
     def ring(alpha_s: float, r_in: float, r_out: float, z_lo: float,
              z_hi: float, mat: str, fine: bool):
-        sol = _sector_ring(alpha_s, r_in, r_out, r_big).Extrude(z_hi - z_lo)
+        sol = sector_ring(alpha_s, r_in, r_out, r_big).Extrude(z_hi - z_lo)
         if z_lo != 0.0:
             sol = sol.Move((0.0, 0.0, z_lo))
         sol.mat(mat)
@@ -317,7 +330,7 @@ def solve_axial_sector(
     mesh = Mesh(OCCGeometry(shape).GenerateMesh(maxh=maxh_bulk))
 
     mu = mesh.MaterialCF(
-        {"magnet": _MU0 * mu_r_pm, "air": _MU0, "iron": _MU0 * mu_r_fe}
+        {"magnet": MU0 * mu_r_pm, "air": MU0, "iron": MU0 * mu_r_fe}
     )
     Brem_z = mesh.MaterialCF({"magnet": B_rem, "air": 0.0, "iron": 0.0})
 
@@ -333,7 +346,7 @@ def solve_axial_sector(
     gfu.vec.data = a.mat.Inverse(fes.FreeDofs(), inverse="sparsecholesky") * lf.vec
 
     # B_z in the gap (air): −μ0·∂φ/∂z.
-    B_z_cf = -_MU0 * grad(gfu)[2]
+    B_z_cf = -MU0 * grad(gfu)[2]
 
     inset = 1e-3 * geo.active_length
     r_list = _graded_radii(

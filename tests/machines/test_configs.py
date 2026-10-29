@@ -168,7 +168,7 @@ def test_load_motor_bad_geometry_radii(tmp_path):
 
 def test_load_motor_invalid_n_p(tmp_path):
     p = tmp_path / "bad.toml"
-    p.write_text('[circuit]\nn_p = 1\n[geometry]\nr_outer = 1.0\nr_stator = 0.7\nr_magnet = 0.6\nr_rotor = 0.3\n')
+    p.write_text('[circuit]\nn_p = 0\n[geometry]\nr_outer = 1.0\nr_stator = 0.7\nr_magnet = 0.6\nr_rotor = 0.3\n')
     with pytest.raises(ValueError, match=str(p)):
         load_motor(p)
 
@@ -279,3 +279,134 @@ class TestHalbachToml:
         assert motor.halbach_segments is None
         assert motor.halbach_angles_deg is None
 
+
+class TestUnknownKeys:
+    BASE = '[circuit]\nn_p = 2\n'
+
+    def _load(self, tmp_path, text):
+        p = tmp_path / "m.toml"
+        p.write_text(text)
+        return load_motor(p)
+
+    def test_unknown_field_raises_with_near_miss(self, tmp_path):
+        with pytest.raises(ValueError, match=r"\[circuit\] unknown field\(s\) 'pis_f' \(did you mean 'psi_f'\?\)"):
+            self._load(tmp_path, self.BASE + 'pis_f = 0.1\n')
+
+    def test_unknown_geometry_field_raises(self, tmp_path):
+        text = self.BASE + '[geometry]\nr_outer = 1.0\nr_stator = 0.7\nr_magnet = 0.6\nr_rotor = 0.3\ntooth_width = 0.01\n'
+        with pytest.raises(ValueError, match=r"\[geometry\] unknown field\(s\) 'tooth_width'"):
+            self._load(tmp_path, text)
+
+    def test_geometry_field_set_is_topology_aware(self, tmp_path):
+        axial = ('[motor]\ntopology = "axial"\n' + self.BASE
+                 + '[geometry]\nD_out_mm = 200\nD_in_mm = 100\nairgap_mm = 1.0\n'
+                 + 'magnet_thickness_mm = 5.0\nrotor_yoke_mm = 10.0\nstator_yoke_mm = 10.0\n')
+        assert self._load(tmp_path, axial).geometry is not None
+        radial = self.BASE + '[geometry]\nr_outer = 1.0\nr_stator = 0.7\nr_magnet = 0.6\nr_rotor = 0.3\nD_out_mm = 200\n'
+        with pytest.raises(ValueError, match="D_out_mm"):
+            self._load(tmp_path, radial)
+
+    def test_near_miss_section_raises(self, tmp_path):
+        with pytest.raises(ValueError, match=r"unknown section \[thermall\] \(did you mean \[thermal\]\?\)"):
+            self._load(tmp_path, self.BASE + '[thermall]\nr_th = 1.0\n')
+
+    def test_free_and_descriptive_keys_accepted(self, tmp_path):
+        text = ('[motor]\ntype = "SPMSM"\n' + self.BASE
+                + '[winding]\nlayers = 2\nconnection = "Y"\n'
+                + '[materials]\nsteel_grade = "M250-35A"\n'
+                + '[rated]\ntorque_Nm = 1.0\n[provenance]\nsource = "x"\n'
+                + '[provenance.geometry]\ntooth_width = 0.01\n[mass]\ntotal_kg = 1.0\n')
+        assert self._load(tmp_path, text).n_p == 2
+
+    def test_missing_alpha_p_warns_for_pm_geometry(self, tmp_path, caplog):
+        text = (self.BASE + '[geometry]\nr_outer = 1.0\nr_stator = 0.7\n'
+                'r_magnet = 0.6\nr_rotor = 0.3\n')
+        with caplog.at_level("WARNING"):
+            assert self._load(tmp_path, text).alpha_p == 1.0
+        assert "missing [geometry] alpha_p" in caplog.text
+
+    def test_unknown_section_raises(self, tmp_path):
+        # Not a near-miss of any loader section: must still refuse, or
+        # [loss] k_h would load as "k_h not set".
+        with pytest.raises(ValueError, match=r"unknown section \[loss\]; documentation"):
+            self._load(tmp_path, self.BASE + '[loss]\nk_h = 1.0\n')
+
+    def test_both_rated_current_forms_raise(self, tmp_path):
+        with pytest.raises(ValueError, match="either I_rated"):
+            self._load(tmp_path, self.BASE + 'I_rated = 1.0\nI_rated_rms = 0.7\n')
+
+    def test_bundled_motors_load_strict(self):
+        assert load_motors(MOTORS_DIR, strict=True)
+
+
+class TestCageToml:
+    HEAD = (
+        '[circuit]\nn_p = 2\nR_s = 2.3\n'
+        '[induction]\nR_2 = 1.0\nL_m = 0.2\nL_sigma_s = 0.01\nL_sigma_r = 0.01\n'
+        'f_rated = 50.0\nV_LL_rated = 400.0\nn_bars = 28\n'
+    )
+    GEO = (
+        '[geometry]\nr_outer = 0.1\nr_stator = 0.0628\nr_rotor = 0.0624\n'
+        'r_inner = 0.022\nn_bars = 28\nbar_width = 0.0034\nbar_height = 0.021\n'
+        'bar_bridge_thickness = 0.001\nbar_opening_width = 0.001\n'
+        'end_ring_axial_length = 0.014\nend_ring_radial_height = 0.0216\n'
+    )
+
+    def test_cage_geometry_loads(self, tmp_path):
+        p = tmp_path / "im.toml"
+        p.write_text(self.HEAD + self.GEO)
+        m = load_motor(p)
+        assert m.geometry.n_bars == 28
+        assert m.geometry.r_magnet == m.geometry.r_rotor == 0.0624
+        assert m.geometry.end_ring_radial_height == 0.0216
+
+    def test_n_bars_mismatch_between_sections(self, tmp_path):
+        p = tmp_path / "im.toml"
+        p.write_text(self.HEAD + self.GEO.replace("n_bars = 28", "n_bars = 26"))
+        with pytest.raises(ValueError, match="n_bars mismatch"):
+            load_motor(p)
+
+    def test_cage_keys_rejected_on_outrunner(self, tmp_path):
+        p = tmp_path / "im.toml"
+        p.write_text('[motor]\ntopology = "outrunner"\n' + self.HEAD + self.GEO)
+        with pytest.raises(ValueError, match="unknown field"):
+            load_motor(p)
+
+    def test_cage_key_typo_is_near_miss(self, tmp_path):
+        p = tmp_path / "im.toml"
+        p.write_text(self.HEAD + self.GEO.replace("bar_height", "bar_hieght"))
+        with pytest.raises(ValueError, match="did you mean 'bar_height'"):
+            load_motor(p)
+
+
+@pytest.mark.parametrize("conn", ["delta", "Delta", "DELTA", "D"])
+def test_delta_connection_rejected(tmp_path, conn):
+    """[winding] connection is documentary, but every model deriving a phase
+    voltage divides V_LL by sqrt(3). Accepting "delta" silently put the phase
+    voltage out by that factor."""
+    p = tmp_path / "delta.toml"
+    p.write_text(f'[motor]\nname = "d"\n[circuit]\nn_p = 2\n'
+                 f'[winding]\nconnection = "{conn}"\n')
+    with pytest.raises(ValueError, match="connection"):
+        load_motor(p)
+
+
+@pytest.mark.parametrize("conn", ["wye", "star", "Y", "WYE"])
+def test_wye_connection_accepted(tmp_path, conn):
+    p = tmp_path / "wye.toml"
+    p.write_text(f'[motor]\nname = "w"\n[circuit]\nn_p = 2\n'
+                 f'[winding]\nconnection = "{conn}"\n')
+    assert load_motor(p).name == "w"
+
+
+def test_quoted_number_raises_value_error_naming_field(tmp_path):
+    (tmp_path / "q.toml").write_text(
+        '[circuit]\nn_p = 4\nR_s = "0.2"\n')
+    with pytest.raises(ValueError, match=r"\[circuit\] R_s = '0\.2'"):
+        load_motor(tmp_path / "q.toml")
+
+
+def test_load_motors_skips_quoted_number_file(tmp_path):
+    (tmp_path / "good.toml").write_text("[circuit]\nn_p = 4\n")
+    (tmp_path / "q.toml").write_text('[circuit]\nn_p = 4\nR_s = "0.2"\n')
+    assert len(load_motors(tmp_path)) == 1

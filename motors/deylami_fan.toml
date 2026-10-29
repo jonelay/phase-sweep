@@ -21,7 +21,6 @@ k_w = 0.866                 # concentrated winding, q=0.5 (Table II)
 coils_series = 2            # 4 coils/phase, 2 parallel branches → 2 in series per branch
 
 [geometry]
-topology = "outrunner"
 # Published dimensions (Tables II & III):
 #   Outer diameter = 100 mm → r_outer = 50 mm
 #   Rotor yoke width = 3.8 mm → r_rotor = 50 - 3.8 = 46.2 mm

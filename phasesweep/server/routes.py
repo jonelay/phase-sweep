@@ -1,51 +1,52 @@
-"""REST and WebSocket endpoint handlers."""
+"""REST endpoint handlers. The WebSocket endpoint and
+connection manager come from phasesweep._view_sweep_server.ws."""
 
 from __future__ import annotations
 
-import math
 import re
 import tomllib
 from pathlib import Path
 from typing import Any
 
-import structlog
-import tomli_w
-from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from phasesweep._extras import install_hint
 
+try:
+    import structlog
+    import tomli_w
+    from fastapi import APIRouter, HTTPException, Request, Response
+except ImportError as e:
+    raise ImportError(f"phasesweep.server needs {e.name}; {install_hint('server')}") from None
+
+from phasesweep._view_sweep_server import FiniteJSONResponse
 from phasesweep.machines.configs import motor_from_dict
 from phasesweep.registry import MODEL_REGISTRY
-from phasesweep.result_store import version_current
+from phasesweep.result_store import _row_run_id, record_is_current
 from phasesweep.server.jobs import JobManager
-from phasesweep.server.protocol import ServerMsg
-from phasesweep.sweep_types import RunConfig, _resolve_model, compute_run_id
+from phasesweep.sweep_types import resolve_model
 from phasesweep.validation.measured import MeasuredResult, measured_run_result, validate_measured
+
+__all__ = [
+    "api",
+    "cancel_job",
+    "get_config",
+    "get_config_raw",
+    "get_job",
+    "get_result",
+    "get_validation",
+    "import_measured",
+    "list_configs",
+    "list_jobs",
+    "list_models",
+    "list_results",
+    "model_defaults",
+    "put_config",
+    "submit_job",
+]
 
 log = structlog.get_logger()
 
 
-def _json_finite(obj: Any) -> Any:
-    if isinstance(obj, float):
-        return obj if math.isfinite(obj) else None
-    if isinstance(obj, list):
-        return [_json_finite(v) for v in obj]
-    if isinstance(obj, dict):
-        return {k: _json_finite(v) for k, v in obj.items()}
-    return obj
-
-
-class FiniteJSONResponse(JSONResponse):
-    """NaN/inf → null: starlette's JSONResponse refuses non-finite floats,
-    and drive_sim legitimately produces NaN (e.g. t_settle when the speed
-    never enters the settle band). Installed as the router default so
-    every endpoint is covered without per-handler wrapping."""
-
-    def render(self, content: Any) -> bytes:
-        return super().render(_json_finite(content))
-
-
 api = APIRouter(prefix="/api", default_response_class=FiniteJSONResponse)
-ws_router = APIRouter()
 
 
 def _manager(request: Request) -> JobManager:
@@ -141,22 +142,18 @@ async def list_results(
 async def get_result(request: Request, result_id: str) -> dict[str, Any]:
     found: dict[str, Any] | None = None
     for d in _manager(request).store.load_all():
-        try:
-            rc = RunConfig.from_dict(d["config"])
-        except (KeyError, ValueError, TypeError):
+        if _row_run_id(d) != result_id:
             continue
-        # Same H1 staleness filter as load_slim — this scan bypasses it,
-        # and the recomputed run id would otherwise match stale records.
-        # Computed only: measured/published can't be regenerated.
+        # Same staleness filter as load_slim — this scan bypasses it,
+        # and the run id would otherwise match stale records.
         try:
-            model = _resolve_model(d)
+            model = resolve_model(d)
         except KeyError:
-            model = rc.model
-        if (d.get("source", "computed") == "computed"
-                and not version_current(model, d.get("model_version"))):
             continue
-        if compute_run_id(rc) == result_id:
-            found = d  # last write wins, matching load_slim
+        if not record_is_current(
+                d.get("source", "computed"), model, d.get("model_version")):
+            continue
+        found = d  # last write wins, matching load_slim
     if found is None:
         raise HTTPException(404, f"no result with id {result_id!r}")
     return {"result_id": result_id, **found}
@@ -181,11 +178,11 @@ async def get_validation(request: Request, motor_name: str) -> dict[str, Any]:
 async def list_models() -> list[dict[str, Any]]:
     """Submittable job types: computed registry keys plus the multi-point
     orchestrations. Feeds the dashboard submit form."""
-    from phasesweep.server.jobs import _PARAM_GATED_FIELDS
+    from phasesweep.server.jobs import _PARAM_GATED_FIELDS, server_unsettable
 
     items: list[dict[str, Any]] = []
     for key, info in MODEL_REGISTRY.items():
-        if info.source != "computed" or info.fn is None:
+        if info.source != "computed" or info.fn is None or server_unsettable(info):
             continue
         d: dict[str, Any] = {"key": key, "cost": info.cost, "kind": "single"}
         gates = sorted(info.hash_fields & _PARAM_GATED_FIELDS)
@@ -214,24 +211,8 @@ async def model_defaults(
 
 
 def _derive_model_defaults(motor: Any, model_key: str) -> dict[str, Any]:
-    if model_key == "drive_sim":
-        from phasesweep.simulation.params import prepare_drive_sim
-        from phasesweep.simulation.sim import plan_sim
-        params = prepare_drive_sim(motor)
-        return {"sim_plan": plan_sim(params).to_dict()}
-    if model_key == "thermal_duty":
-        if motor.I_rated is None:
-            raise ValueError(
-                "thermal_duty defaults need I_rated on the motor")
-        from phasesweep.server.jobs import _rated_duty_torque
-        return {"duty_profile": [[_rated_duty_torque(motor), 3600.0]]}
-    if model_key == "demag_screen":
-        if motor.drive.MAX_I_S is None:
-            raise ValueError(
-                "demag_screen defaults need [drive] MAX_I_S for i_fault"
-            )
-        return {"i_fault": motor.drive.MAX_I_S}
-    return {}
+    from phasesweep.server.jobs import derive_model_defaults
+    return derive_model_defaults(motor, model_key)
 
 
 # -- configs ----------------------------------------------------
@@ -380,64 +361,3 @@ async def import_measured(
         "status": result.status,
         "dataset_id": dataset_id,
     }
-
-
-# -- WebSocket ---------------------------------------------------
-
-class ConnectionManager:
-    """Tracks WS clients and their job subscriptions. Stateless across
-    reconnects — clients re-subscribe and re-fetch via REST."""
-
-    def __init__(self) -> None:
-        self._subs: dict[WebSocket, set[str]] = {}
-
-    async def connect(self, ws: WebSocket) -> None:
-        await ws.accept()
-        self._subs[ws] = set()
-
-    def disconnect(self, ws: WebSocket) -> None:
-        self._subs.pop(ws, None)
-
-    def handle(self, ws: WebSocket, msg: Any) -> None:
-        if not isinstance(msg, dict):
-            return
-        job_ids = msg.get("job_ids")
-        if not isinstance(job_ids, list):
-            return
-        ids = {j for j in job_ids if isinstance(j, str)}
-        kind = msg.get("type")
-        if kind == "subscribe":
-            self._subs[ws].update(ids)
-        elif kind == "unsubscribe":
-            self._subs[ws].difference_update(ids)
-
-    async def broadcast(self, msg: ServerMsg) -> None:
-        job_id = msg["job_id"]
-        dead = []
-        for ws, subs in list(self._subs.items()):
-            if job_id not in subs:
-                continue
-            try:
-                await ws.send_json(msg)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect(ws)
-
-
-@ws_router.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket) -> None:
-    cm: ConnectionManager = ws.app.state.ws_manager
-    await cm.connect(ws)
-    try:
-        while True:
-            try:
-                msg = await ws.receive_json()
-            except ValueError:
-                await ws.close(code=1003)  # unsupported data: not JSON
-                return
-            cm.handle(ws, msg)
-    except WebSocketDisconnect:
-        pass
-    finally:
-        cm.disconnect(ws)

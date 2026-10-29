@@ -96,15 +96,39 @@ class TestCliCrossval:
 
     def test_crossval_strict_passes_when_all_pass(self, monkeypatch, capsys, tmp_path):
         from phasesweep.machines.configs import load_motor
+        from phasesweep.registry import MODEL_REGISTRY
+        from phasesweep.result_store import ResultStore
+        from phasesweep.sweep_types import RunConfig, RunResult
         from phasesweep.validation.measured import import_measured
 
         motor = load_motor(REPO_ROOT / "motors" / "belkhadir_outrunner.toml")
         import_measured(MEASURED_JSON, motor, tmp_path)
+        rc = RunConfig(motor=motor, model="rated_torque")
+        info = MODEL_REGISTRY["rated_torque"]
+        ResultStore(tmp_path).save(RunResult(
+            config=rc, model="rated_torque", status="OK", metrics=info.fn(rc),
+            elapsed_s=0.1, model_version=info.version))
 
         _run_main(monkeypatch, cli_crossval, [
             "phase-sweep-crossval", "--output-dir", str(tmp_path), "--strict",
-        ])
+        ])  # a real passing comparison: no SystemExit
         assert "Diagnosis:" in capsys.readouterr().out
+
+    def test_crossval_strict_fails_when_nothing_compared(
+            self, monkeypatch, capsys, tmp_path):
+        """Measured data with no computed result: all() over no rows is
+        True, but --strict must not report that as a pass."""
+        from phasesweep.machines.configs import load_motor
+        from phasesweep.validation.measured import import_measured
+
+        motor = load_motor(REPO_ROOT / "motors" / "belkhadir_outrunner.toml")
+        import_measured(MEASURED_JSON, motor, tmp_path)
+        with pytest.raises(SystemExit) as exc:
+            _run_main(monkeypatch, cli_crossval, [
+                "phase-sweep-crossval", "--output-dir", str(tmp_path), "--strict",
+            ])
+        assert exc.value.code == 1
+        assert "no comparisons were made" in capsys.readouterr().err
 
     def test_crossval_excludes_stale_computed(self, monkeypatch, capsys, tmp_path):
         """A superseded-physics computed record must
@@ -124,12 +148,17 @@ class TestCliCrossval:
                              metrics={"tau_rated": 999.0}, elapsed_s=0.1,
                              model_version=1))  # superseded (registry v4)
 
-        _run_main(monkeypatch, cli_crossval, [
-            "phase-sweep-crossval", "--output-dir", str(tmp_path), "--strict",
-        ])  # no SystemExit: the stale FAIL-bait record was filtered out
-        out = capsys.readouterr().out
-        assert "rated_torque" not in out
-        assert "Diagnosis:" in out
+        with pytest.raises(SystemExit):
+            _run_main(monkeypatch, cli_crossval, [
+                "phase-sweep-crossval", "--output-dir", str(tmp_path), "--strict",
+            ])
+        # The stale FAIL-bait record was filtered out: nothing left to
+        # compare, rather than a failed comparison.
+        captured = capsys.readouterr()
+        assert "rated_torque" not in captured.out
+        assert "Diagnosis:" in captured.out
+        assert "no comparisons were made" in captured.err
+        assert "at least one comparison failed" not in captured.err
 
     def test_crossval_strict_exits_on_failure(self, monkeypatch, capsys, tmp_path):
         from phasesweep.machines.configs import load_motor
@@ -141,6 +170,7 @@ class TestCliCrossval:
 
         class _FailDiag:
             all_pass = False
+            total = 1
 
         monkeypatch.setattr(
             crossval, "diagnose_detailed", lambda group: _FailDiag())

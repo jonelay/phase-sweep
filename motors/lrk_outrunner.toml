@@ -22,7 +22,6 @@ k_w = 0.966                 # single-layer (SPS) 12s/14p: kp = sin(105deg), kd =
 coils_series = 2            # 2 coils per phase in series (SPS: 6 of 12 teeth wound)
 
 [geometry]
-topology = "outrunner"
 # r_stator = 12.8 mm (published: "outer radius of the stator")
 # r_rotor = 14.14 mm (published: "inner radius of the rotor")
 # g_tot = r_rotor - r_stator = 1.34 mm (total gap including magnet)

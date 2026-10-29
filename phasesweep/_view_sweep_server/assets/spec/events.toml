@@ -1,0 +1,64 @@
+# Chrome event contract.
+#
+# chrome.js and theme.js (Phase 2) dispatch these as CustomEvents on
+# `document`, with the payload under `event.detail`. Panels bind to the
+# names here rather than to chrome.js internals. Job events mirror the
+# WebSocket protocol (py/view_sweep_server/protocol.py) so a panel sees
+# one vocabulary whether the provider is WS, Tauri, or static.
+
+[meta]
+version = 1
+prefix = "vs:"
+target = "document"
+
+[events.tab-change]
+detail = { tab_id = "string", params = "Record<string, string>" }
+description = "Active tab changed (user click, hash navigation, or keyboard); params from hash query"
+
+[events.theme-change]
+detail = { theme = "string" }
+description = "Light/dark variant changed; panels re-read chart tokens and redraw"
+
+[events.palette-change]
+detail = { palette = "string", categorical = "string" }
+description = "Categorical series set changed; every slot re-hues at once"
+
+[events.sequential-change]
+detail = { sequential = "string" }
+description = "Sequential ramp selection changed"
+
+[events.sidebar-toggle]
+detail = { collapsed = "boolean" }
+
+[events.panel-toggle]
+detail = { panel_id = "string", collapsed = "boolean" }
+
+[events.panel-maximize]
+detail = { panel_id = "string", maximized = "boolean" }
+
+[events.panel-reorder]
+detail = { tab_id = "string", order = "string[]" }
+
+[events.connection-change]
+detail = { state = "string" }
+description = "Provider connection state: connected | connecting | disconnected"
+
+[events.job-progress]
+detail = { job_id = "string", completed = "integer", total = "integer", latest_result_id = "string | null" }
+
+[events.job-complete]
+detail = { job_id = "string", result_ids = "string[]" }
+
+[events.job-failed]
+detail = { job_id = "string", error = "string" }
+
+[events.job-cancelled]
+detail = { job_id = "string" }
+
+[events.result-routed]
+detail = { result_id = "string" }
+description = "A result was fetched and dispatched to panels; status bar stamps the time"
+
+[events.export-request]
+detail = { scope = "string" }
+description = "User asked for a PNG export of the given scope (e.g. active tab)"

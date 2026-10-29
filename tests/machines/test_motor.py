@@ -24,9 +24,15 @@ class TestMotorConstruction:
         assert m.R_s == 0.2
         assert m.B_rem == 0.5
 
-    def test_n_p_below_2_raises(self):
+    def test_n_p_below_1_raises(self):
         with pytest.raises(ValueError, match="n_p"):
-            Motor(name="bad", geometry=default_inrunner(), n_p=1)
+            Motor(name="bad", geometry=default_inrunner(), n_p=0)
+
+    def test_n_p_1_accepted_at_motor_level(self):
+        # 2-pole machines are legal on Motor; the PM field/torque models
+        # keep their own n_p >= 2 guard at the params boundary
+        m = Motor(name="two-pole", geometry=default_inrunner(), n_p=1)
+        assert m.n_p == 1
 
     def test_R_s_negative_raises(self):
         with pytest.raises(ValueError, match="R_s"):
@@ -98,6 +104,17 @@ class TestMotorConfigId:
         m = Motor(name="a", geometry=default_inrunner(), n_p=2)
         assert len(m.config_id) == 12
 
+    def test_integral_float_counts_hash_as_int(self):
+        geo = default_inrunner()
+        m_int = Motor(name="a", geometry=geo, n_p=2, N=40, coils_series=2)
+        m_flt = Motor(name="a", geometry=geo, n_p=2.0, N=40.0, coils_series=2.0)
+        assert isinstance(m_flt.n_p, int) and isinstance(m_flt.N, int)
+        assert m_flt.config_id == m_int.config_id
+
+    def test_non_integral_count_rejected(self):
+        with pytest.raises(ValueError, match=r"Motor 'a': n_p must be an integer"):
+            Motor(name="a", geometry=default_inrunner(), n_p=2.5)
+
 
 class TestKEndField:
 
@@ -160,6 +177,12 @@ class TestDriveParams:
             with pytest.raises(ValueError, match=field):
                 DriveParams(**{field: bad})
 
+    @pytest.mark.parametrize("field", ["U_DC", "MAX_I_S", "W_REF", "I_LIMIT"])
+    @pytest.mark.parametrize("val", [float("nan"), float("inf")])
+    def test_drive_fields_reject_nan_inf(self, field, val):
+        with pytest.raises(ValueError, match="finite"):
+            DriveParams(**{field: val})
+
 
 class TestMotorGuardSweep:
     """One parametrized sweep over every positive-only Motor field plus
@@ -174,6 +197,26 @@ class TestMotorGuardSweep:
         for bad in (0.0, -1.0):
             with pytest.raises(ValueError, match=field):
                 Motor(name="bad", geometry=None, n_p=2, **{field: bad})
+
+    @pytest.mark.parametrize("field", [
+        "L_d", "L_q", "B_rem", "J", "L_stk", "I_rated", "r_th",
+        "thermal_time_constant", "k_h", "k_e", "m_core", "B_core",
+        "mu_r_fe", "mu_r_pm",
+    ])
+    @pytest.mark.parametrize("val", [float("nan"), float("inf")])
+    def test_float_field_rejects_nan_inf(self, field, val):
+        with pytest.raises(ValueError, match="finite"):
+            Motor(name="bad", geometry=None, n_p=2, **{field: val})
+
+    @pytest.mark.parametrize("val", [float("nan"), float("inf")])
+    def test_R_s_rejects_nan_inf(self, val):
+        with pytest.raises(ValueError, match="finite"):
+            Motor(name="bad", geometry=None, n_p=2, R_s=val)
+
+    @pytest.mark.parametrize("val", [float("nan"), float("inf")])
+    def test_psi_f_rejects_nan_inf(self, val):
+        with pytest.raises(ValueError, match="finite"):
+            Motor(name="bad", geometry=None, n_p=2, psi_f=val)
 
     def test_alpha_fe_out_of_range_raises(self):
         for bad in (0.9, 3.1):
@@ -503,3 +546,89 @@ class TestHalbachFields:
         assert "magnetization" not in d
         assert "halbach_segments" not in d
         assert "halbach_angles_deg" not in d
+
+
+class TestCageRotorGates:
+    """A cage geometry and [induction] imply each other."""
+
+    CAGE = dict(r_outer=0.1, r_stator=0.0628, r_magnet=0.0624, r_rotor=0.0624,
+                r_inner=0.022, n_bars=28, bar_width=0.0034, bar_height=0.021)
+
+    def test_cage_without_induction_rejected(self):
+        from phasesweep.machines.geometry import inrunner
+        with pytest.raises(ValueError, match="no \\[induction\\] section"):
+            Motor(name="x", geometry=inrunner(**self.CAGE), n_p=2)
+
+    def test_induction_with_pm_geometry_rejected(self):
+        from phasesweep.machines.geometry import default_inrunner
+        with pytest.raises(ValueError, match="no cage rotor"):
+            Motor(name="x", geometry=default_inrunner(), n_p=2,
+                  induction=InductionParams(R_2=1.0))
+
+    def test_n_bars_mismatch_rejected(self):
+        from phasesweep.machines.geometry import inrunner
+        with pytest.raises(ValueError, match="n_bars mismatch"):
+            Motor(name="x", geometry=inrunner(**self.CAGE), n_p=2,
+                  induction=InductionParams(R_2=1.0, n_bars=26))
+
+    def test_cage_induction_motor_round_trips(self):
+        from phasesweep.machines.geometry import inrunner
+        m = Motor(name="x", geometry=inrunner(**self.CAGE), n_p=2,
+                  induction=InductionParams(R_2=1.0, n_bars=28, sigma_bar=28e6))
+        m2 = Motor.from_dict(m.to_dict())
+        assert m2 == m
+        assert m2.config_id == m.config_id
+        assert m2.induction.sigma_bar == 28e6
+
+    def test_sigma_bar_positive(self):
+        with pytest.raises(ValueError, match="sigma_bar"):
+            InductionParams(sigma_bar=0.0)
+
+    @pytest.mark.parametrize("field", [
+        "R_2", "L_m", "L_sigma_s", "L_sigma_r", "f_rated", "V_LL_rated", "sigma_bar",
+    ])
+    @pytest.mark.parametrize("val", [float("nan"), float("inf")])
+    def test_induction_fields_reject_nan_inf(self, field, val):
+        with pytest.raises(ValueError, match="finite"):
+            InductionParams(**{field: val})
+
+
+# ---------------------------------------------------------------------------
+# [materials] bh_curve (induction FEM saturation, F5)
+# ---------------------------------------------------------------------------
+
+_BH_ROWS = ((68.0, 0.1), (157.0, 1.0), (521.0, 1.5), (4057.0, 1.7))
+
+
+def test_bh_curve_round_trip_and_hash():
+    base = Motor(name="m", geometry=None, n_p=2)
+    m = Motor(name="m", geometry=None, n_p=2, bh_curve=[[68, 0.1], [157, 1], [521, 1.5], [4057, 1.7]])
+    assert m.bh_curve == _BH_ROWS                      # float-normalized tuples
+    assert m.config_id != base.config_id               # a material property
+    assert Motor.from_dict(m.to_dict()).config_id == m.config_id
+    assert Motor.from_dict(m.to_dict()).bh_curve == _BH_ROWS
+    assert "bh_curve" not in base.to_dict()            # append-only: absent stays absent
+
+
+@pytest.mark.parametrize("rows, msg", [
+    (((68, 0.1),), "rows"),
+    (((68, 0.1), (60, 0.2)), "increasing"),
+    (((68, 0.1), (80, 0.1)), "strictly"),
+    (((0, 0.0), (80, 0.1)), "> 0"),
+    (((68, 0.1, 99), (157, 1.0, 99)), "pairs"),
+    (((68,), (157,)), "pairs"),
+])
+def test_bh_curve_rejects_bad_tables(rows, msg):
+    with pytest.raises(ValueError, match=msg):
+        Motor(name="m", geometry=None, n_p=2, bh_curve=rows)
+
+
+def test_bh_curve_loads_from_toml(tmp_path):
+    from phasesweep.machines.configs import load_motor
+
+    path = tmp_path / "m.toml"
+    path.write_text(
+        '[motor]\nname = "bh"\n[circuit]\nn_p = 2\n'
+        '[materials]\nmu_r_fe = 1170\nbh_curve = [[68, 0.1], [157, 1.0], [521, 1.5]]\n')
+    m = load_motor(path)
+    assert m.bh_curve == ((68.0, 0.1), (157.0, 1.0), (521.0, 1.5))

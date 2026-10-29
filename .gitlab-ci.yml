@@ -38,7 +38,27 @@ test:
     # STRICT_SKIP fails the run on any skip whose reason is not in the
     # conftest allowlist — an optional dependency dropping out of the CI
     # environment must not read as a green suite.
-    - uv run pytest -m "not fem and not slow" -q -rs
+    - >-
+      uv run pytest -m "not fem and not slow" -q -rs
+      --cov=phasesweep --cov-report=html:coverage-html --cov-report=term
+  artifacts:
+    paths:
+      - coverage-html/
+    expire_in: 30 days
+
+lint-js:
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "schedule"
+      changes:
+        - phasesweep/dashboard/**/*.js
+        - phasesweep/dashboard/.eslintrc.json
+  image: node:18-bookworm-slim
+  script:
+    - npm install -g eslint@8
+    - >-
+      eslint --no-eslintrc -c phasesweep/dashboard/.eslintrc.json
+      phasesweep/dashboard/app.js phasesweep/dashboard/config-editor.js
+      phasesweep/dashboard/panels/*.js
 
 core:
   rules:
@@ -69,8 +89,8 @@ fem:
   script:
     - uv sync --extra all --extra test
     # The whole point of this tier. ngsolve failing to load makes every FEM
-    # test skip under an allowlisted reason, which is how CI went FEM-blind
-    # for ~20 sessions. Fail here instead, loudly.
+    # test skip under an allowlisted reason, which is how CI once went
+    # FEM-blind unnoticed. Fail here instead, loudly.
     - uv run python -c "import ngsolve; print('ngsolve', ngsolve.__version__)"
     - uv run pytest -m "fem and not slow" -q -rs
     # output/reference_br/*.npz are committed repo content for this step.

@@ -1,27 +1,19 @@
-"""Timeout-safe motulator simulation runner via subprocess isolation.
-
-Entry point: python -m phasesweep.simulation.sim_runner '<config_json>'
-
-Subprocess isolation guarantees that hung or crashing simulations are killed
-cleanly rather than wedging the parent process. Default timeout: 60s.
-"""
+"""motulator drive-simulation runner: RunConfig in, metrics dict out."""
 
 from __future__ import annotations
 
-import json
-import subprocess
-import sys
-import time
 from typing import Any
 
-from phasesweep.sweep_types import RunConfig, RunResult
+from phasesweep.sweep_types import RunConfig
 
-_DEFAULT_TIMEOUT = 60
+__all__ = [
+    "run_drive_sim",
+]
 
 
-def _run_sim_impl(config: RunConfig) -> dict[str, Any]:
-    """Run motulator simulation from RunConfig. Executes inside subprocess."""
-    from phasesweep.simulation.params import prepare_drive_sim
+def run_drive_sim(config: RunConfig) -> dict[str, Any]:
+    """Run motulator simulation from RunConfig."""
+    from phasesweep.simulation.params import prepare_drive_sim, uses_flux_map
     from phasesweep.simulation.sim import build_sim, extract_metrics, extract_waveforms
 
     params = prepare_drive_sim(config.motor)
@@ -45,62 +37,5 @@ def _run_sim_impl(config: RunConfig) -> dict[str, Any]:
         res, plan=plan, w_ref=params.drive.W_REF, two_mass=two_mass,
     )
     metrics.update(extract_waveforms(res, two_mass=two_mass))
+    metrics["machine_model"] = "flux_map" if uses_flux_map(params) else "constant_L"
     return metrics
-
-
-def run_sim_safe(config: RunConfig, timeout_s: int = _DEFAULT_TIMEOUT) -> RunResult:
-    """Run simulation with true timeout via subprocess."""
-    t0 = time.time()
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "phasesweep.simulation.sim_runner",
-             json.dumps(config.to_dict())],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-        )
-        if proc.returncode != 0:
-            return RunResult(
-                config=config, model=config.model, status="ERROR", metrics=None,
-                elapsed_s=time.time() - t0,
-                error_msg=proc.stderr[:500] if proc.stderr else f"Exit {proc.returncode}",
-            )
-        return RunResult(
-            config=config, model=config.model, status="OK",
-            metrics=json.loads(proc.stdout),
-            elapsed_s=time.time() - t0,
-        )
-    except subprocess.TimeoutExpired:
-        return RunResult(
-            config=config, model=config.model, status="TIMEOUT", metrics=None,
-            elapsed_s=float(timeout_s),
-            error_msg=f"Exceeded {timeout_s}s timeout",
-        )
-    except Exception as e:
-        return RunResult(
-            config=config, model=config.model, status="ERROR", metrics=None,
-            elapsed_s=time.time() - t0,
-            error_msg=str(e),
-        )
-
-
-def _cli_main() -> None:
-    def _json_safe(obj: Any) -> float:
-        if hasattr(obj, "item"):  # numpy scalar
-            return obj.item()
-        raise TypeError(f"{type(obj)} is not JSON serializable")
-
-    if len(sys.argv) != 2:
-        print("Usage: python -m phasesweep.simulation.sim_runner '<config_json>'", file=sys.stderr)
-        sys.exit(1)
-    try:
-        config = RunConfig.from_dict(json.loads(sys.argv[1]))
-        metrics = _run_sim_impl(config)
-        print(json.dumps(metrics, default=_json_safe))
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    _cli_main()

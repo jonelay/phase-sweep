@@ -1,4 +1,4 @@
-"""Contract tests for scripts/check_motor.py status semantics.
+"""Contract tests for phasesweep.check_motor status semantics.
 
 These protect the evidence-level wording and objective-failure boundary:
 solver agreement must never read as validation, and a psi_f/B_rem conflict
@@ -7,13 +7,11 @@ must warn without invalidating the config.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-import check_motor as cm
+from phasesweep import check_motor as cm
 
 MOTORS_DIR = Path(__file__).resolve().parent.parent / "motors"
 

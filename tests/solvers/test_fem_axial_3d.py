@@ -32,6 +32,8 @@ from tests.crossval.axial_fem_contract import (
     slotless_reference_B1,
 )
 
+pytestmark = pytest.mark.slow
+
 # Convergence gates, pinned from measured runs on the Parviainen fixture
 # collar 4 -> 6 moved the deficit ratio by 1.3e-4 (0.7%
 # of the deficit); maxh_fine edge/3 -> edge/6 moved it by 6.6e-4 with

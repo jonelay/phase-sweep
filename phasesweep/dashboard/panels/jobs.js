@@ -30,9 +30,9 @@ function makeRow(job) {
   title.className = "title";
   title.textContent = `${job.motor_name} · ${job.job_type}`;
   const badge = document.createElement("span");
-  badge.className = "badge";
+  badge.className = "vs-badge";
   const cancelBtn = document.createElement("button");
-  cancelBtn.className = "cancel-btn";
+  cancelBtn.className = "vs-btn danger cancel-btn";
   cancelBtn.textContent = "Cancel";
   cancelBtn.addEventListener("click", async () => {
     try {
@@ -42,7 +42,7 @@ function makeRow(job) {
     }
   });
   const copyBtn = document.createElement("button");
-  copyBtn.className = "copy-meta-btn";
+  copyBtn.className = "vs-btn copy-meta-btn";
   copyBtn.textContent = "Copy";
   copyBtn.title = "Copy job metadata as JSON";
   copyBtn.addEventListener("click", (ev) => {
@@ -66,9 +66,9 @@ function makeRow(job) {
   sub.className = "sub";
 
   const track = document.createElement("div");
-  track.className = "progress-track";
+  track.className = "vs-progress-track";
   const fill = document.createElement("div");
-  fill.className = "progress-fill";
+  fill.className = "vs-progress-fill";
   track.append(fill);
 
   const errEl = document.createElement("div");
@@ -148,11 +148,12 @@ async function buildForm(container) {
   const summary = document.createElement("summary");
   summary.textContent = "params (JSON)";
   const paramsTa = document.createElement("textarea");
-  paramsTa.placeholder = '{"axes": [{"field": "r_magnet", "start": 0.6, "stop": 0.68, "steps": 5}]}';
+  paramsTa.placeholder = '{"axes": [{"field": "airgap", "start": 0.0005, "stop": 0.0015, "steps": 5}]}';
   details.append(summary, paramsTa);
 
   const submitBtn = document.createElement("button");
   submitBtn.type = "submit";
+  submitBtn.className = "vs-btn primary";
   submitBtn.textContent = "Submit job";
   formErrEl = document.createElement("div");
   formErrEl.className = "form-error";

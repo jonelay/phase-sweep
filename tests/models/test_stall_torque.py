@@ -7,7 +7,7 @@ Stall torque emits two values:
 Same Morimoto formula as rated_torque, evaluated at each current level.
 
 Validation sources:
-- CREATOR Case PMSM: Dhakal et al. (2025), COMPEL 44(4), Table 10 circuit params.
+- CREATOR Case PMSM: Muetze et al. (2025), COMPEL 44(4), Table 10 circuit params.
 - Awan 2.2-kW IPM: Awan (2019), Aalto doctoral dissertation 187/2019, Table 6.2.
 """
 

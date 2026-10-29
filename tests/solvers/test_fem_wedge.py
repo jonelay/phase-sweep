@@ -17,6 +17,8 @@ from phasesweep.solvers.fem_wedge import (
 )
 from tests.conftest import requires_fem
 
+pytestmark = pytest.mark.slow
+
 
 def _outrunner_14mm():
     return outrunner(
@@ -164,7 +166,7 @@ def test_bh_mu_h_inverts_bh_nu():
     iterates mu = 1/nu(mu*|H|)) and Newton share one fixed point."""
     import numpy as np
 
-    from phasesweep.solvers.fem_materials import _BH_H, _bh_mu_h, _bh_nu
+    from phasesweep.solvers.fem_materials import _BH_H, bh_mu_h, bh_nu
 
     # Cover the corners: H = 0 and near-0 (first-segment plateau), every
     # table knot +/- half the FD step, the clip crossover, and beyond
@@ -174,9 +176,9 @@ def test_bh_mu_h_inverts_bh_nu():
         np.logspace(-1, 5.6, 400),
         _BH_H[1:], _BH_H[1:] - 0.25, _BH_H[1:] + 0.25,
     ])
-    mu = _bh_mu_h(H)
+    mu = bh_mu_h(H)
     B = mu * H
-    np.testing.assert_allclose(1.0 / _bh_nu(B), mu, rtol=1e-12)
+    np.testing.assert_allclose(1.0 / bh_nu(B), mu, rtol=1e-12)
     # H -> 0 limit is the initial permeability B1/H1, not vacuum.
     assert mu[0] == pytest.approx(0.1 / 25.0, rel=1e-12)
 
@@ -279,7 +281,7 @@ def test_endeffect_overhang_exceeding_air_box_raises():
 @requires_fem
 def test_wedge_picard_nonconvergence_raises(monkeypatch):
     """F6b: a non-converged wedge Picard solve must raise, mirroring the 2D
-    _picard_solve contract — never silently return a bad field."""
+    picard_solve contract — never silently return a bad field."""
     import phasesweep.solvers.fem_wedge as fw
     real = fw._picard_solve_wedge
 

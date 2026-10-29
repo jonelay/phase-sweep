@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from ngsolve.comp import FESpace, LinearForm
 
 from phasesweep.machines.geometry import Geometry
-from phasesweep.solvers.fem_materials import _MU0, _bh_nu, _bh_nu_prime
+from phasesweep.solvers.fem_materials import MU0, bh_nu, bh_nu_prime
 from phasesweep.solvers.fem_mesh import (
     _MIN_ARC_GAP_M,
     _arcs_active,
@@ -34,6 +34,13 @@ from phasesweep.solvers.fem_mesh import (
     _interpole_gap_width,
 )
 from phasesweep.solvers.fem_sampling import sample_Br
+from phasesweep.sweep_types import _DEFAULTS, Magnetization, NonlinearSolver
+
+__all__ = [
+    "newton_solve",
+    "picard_solve",
+    "solve_field_fem",
+]
 
 # ---------------------------------------------------------------------------
 # Physical constants
@@ -46,7 +53,7 @@ _MIN_PICARD_RELAX: float = 0.02
 # (scripts/newton_bh_spike.py). Before the Newton loop, a few relaxed
 # Picard nu-updates improve the seed (the Elmer MagnetoDynamics2D /
 # Vande Sande hybrid start-up pattern); unrelaxed start-up steps are
-# not safe — see the divergence comment in _picard_solve.
+# not safe — see the divergence comment in picard_solve.
 _NEWTON_RTOL: float = 1e-4
 _NEWTON_STARTUP_PICARD: int = 2
 
@@ -66,7 +73,124 @@ def _demoivre(n_p: int) -> tuple[CoefficientFunction, CoefficientFunction]:
     return cr, si
 
 
-def _picard_solve(
+def _halbach_source_cf(
+    nu_pm: float,
+    B_rem: float,
+    n_p: int,
+    halbach_segments: int,
+    halbach_angles_rad: tuple[float, ...] | None,
+    rotation: float,
+    topology: str,
+    pm_region_names: list[str],
+    region_names: list[str],
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+]:
+    M_mag = nu_pm * B_rem
+    kappa_m = halbach_segments
+    seg_pitch = pi / (n_p * kappa_m)
+    sign = -1.0 if topology == "inrunner" else 1.0
+    mx_cf: dict[str, Any] = {}
+    my_cf: dict[str, Any] = {}
+    for m, name in enumerate(pm_region_names):
+        theta_c = rotation + m * seg_pitch
+        local_idx = m % (2 * kappa_m)
+        if local_idx < kappa_m:
+            if halbach_angles_rad is not None:
+                phi_local = halbach_angles_rad[local_idx]
+            else:
+                phi_local = sign * n_p * local_idx * seg_pitch
+        else:
+            mirror_idx = local_idx - kappa_m
+            if halbach_angles_rad is not None:
+                phi_local = halbach_angles_rad[mirror_idx] - pi
+            else:
+                phi_local = sign * n_p * mirror_idx * seg_pitch - pi
+        psi = theta_c + phi_local
+        mx_cf[name] = M_mag * float(np.cos(psi))
+        my_cf[name] = M_mag * float(np.sin(psi))
+    for name in region_names:
+        if name not in pm_region_names:
+            mx_cf[name] = 0.
+            my_cf[name] = 0.
+    return mx_cf, my_cf
+
+
+def _radial_source_cf(
+    nu_pm: float,
+    B_rem: float,
+    cos_np: CoefficientFunction,
+    sin_np: CoefficientFunction,
+    cos_t: CoefficientFunction,
+    sin_t: CoefficientFunction,
+    n_p: int,
+    rotation: float,
+    region_names: list[str],
+    IfPos: Any,
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+]:
+    if rotation != 0.0:
+        cos_np_rot = (cos_np * float(np.cos(n_p * rotation))
+                      + sin_np * float(np.sin(n_p * rotation)))
+    else:
+        cos_np_rot = cos_np
+    M_r = nu_pm * B_rem * IfPos(cos_np_rot, 1.0, -1.0)
+    mx_cf: dict[str, Any] = {}
+    my_cf: dict[str, Any] = {}
+    for name in region_names:
+        if name == "pm":
+            mx_cf[name] = M_r * cos_t
+            my_cf[name] = M_r * sin_t
+        else:
+            mx_cf[name] = 0.
+            my_cf[name] = 0.
+    return mx_cf, my_cf
+
+
+def _nonlinear_dispatch(
+    nonlinear: bool,
+    nonlinear_solver: NonlinearSolver,
+    mesh: Any,
+    fes: Any,
+    lf: Any,
+    gfu: Any,
+    nu: Any,
+    region_names: list[str],
+    iron_regions: set[str],
+    max_picard: int,
+    picard_tol: float,
+    picard_relax: float,
+    info: dict[str, float] | None,
+    BilinearForm: Any,
+    grad: Any,
+    dx: Any,
+) -> None:
+    u, v = fes.TnT()
+    if not nonlinear:
+        a = BilinearForm(nu * grad(u) * grad(v) * dx)
+        a.Assemble()
+        gfu.vec.data = a.mat.Inverse(fes.FreeDofs(), inverse="sparsecholesky") * lf.vec
+    elif nonlinear_solver == "newton":
+        try:
+            newton_solve(mesh, fes, lf, gfu, nu, region_names,
+                          iron_regions, max_picard, info)
+        except RuntimeError as e:
+            logging.warning("Newton BH solve failed (%s); falling back "
+                            "to Picard", e)
+            if info is not None:
+                info["newton_fell_back"] = 1.0
+            picard_solve(mesh, fes, lf, gfu, nu, region_names,
+                          iron_regions, max_picard, picard_tol,
+                          picard_relax, info)
+    else:
+        picard_solve(mesh, fes, lf, gfu, nu, region_names, iron_regions,
+                      max_picard, picard_tol, picard_relax, info)
+
+
+def picard_solve(
     mesh: Mesh,
     fes: FESpace,
     lf: LinearForm,
@@ -119,7 +243,7 @@ def _picard_solve(
         gfu_Bmag.Set(B_mag_cf)
         B_vals = gfu_Bmag.vec.FV().NumPy().copy()
 
-        nu_new = _bh_nu(B_vals)
+        nu_new = bh_nu(B_vals)
         nu_old = gfu_nu.vec.FV().NumPy().copy()
 
         # Stop criterion on the raw (unrelaxed) step: relax-independent,
@@ -169,7 +293,7 @@ def _picard_solve(
         info["picard_residual"] = float(delta_raw_rel)
 
 
-def _newton_solve(
+def newton_solve(
     mesh: Mesh,
     fes: FESpace,
     lf: LinearForm,
@@ -182,7 +306,7 @@ def _newton_solve(
 ) -> None:
     """Nonlinear BH solve: Newton iteration with line-search damping.
 
-    Same discrete system as ``_picard_solve`` (element-wise L2^0 nu from
+    Same discrete system as ``picard_solve`` (element-wise L2^0 nu from
     the BH table, element-averaged |B|), so both solvers converge to the
     same solution — verified to ~1e-6 T on the production cases by
     scripts/newton_bh_spike.py. Stops on the algebraic residual
@@ -201,7 +325,7 @@ def _newton_solve(
 
     Raises:
         RuntimeError: If the line search stalls or ``max_newton`` is
-            exhausted. Callers fall back to ``_picard_solve``.
+            exhausted. Callers fall back to ``picard_solve``.
     """
     from ngsolve import L2, BilinearForm, GridFunction, dx, grad, sqrt
 
@@ -267,7 +391,7 @@ def _newton_solve(
     # Picard start-up: a few relaxed nu-updates before Newton (hybrid
     # Picard->Newton pattern). Relaxed with the shipping Picard factor —
     # unrelaxed steps diverge on saturating geometries (see
-    # _picard_solve). Capped by the shared iteration budget, always
+    # picard_solve). Capped by the shared iteration budget, always
     # reserving at least one Newton iteration.
     from phasesweep.defaults import PICARD_RELAXATION
     n_startup = min(_NEWTON_STARTUP_PICARD, max(0, max_newton - 1))
@@ -275,7 +399,7 @@ def _newton_solve(
         nu_cur = gfu_nu.vec.FV().NumPy().copy()
         nu_upd = nu_cur.copy()
         nu_upd[iron_mask] = (
-            PICARD_RELAXATION * _bh_nu(project_Bmag())[iron_mask]
+            PICARD_RELAXATION * bh_nu(project_Bmag())[iron_mask]
             + (1 - PICARD_RELAXATION) * nu_cur[iron_mask]
         )
         gfu_nu.vec.FV().NumPy()[:] = nu_upd
@@ -288,7 +412,7 @@ def _newton_solve(
     for _newton_i in range(max(1, max_newton - n_startup)):
         B_vals = project_Bmag()
         nu_upd = nu_seed.copy()
-        nu_upd[iron_mask] = _bh_nu(B_vals)[iron_mask]
+        nu_upd[iron_mask] = bh_nu(B_vals)[iron_mask]
         gfu_nu.vec.FV().NumPy()[:] = nu_upd
         r_np = residual_np()
         rnorm = float(np.linalg.norm(r_np))
@@ -300,7 +424,7 @@ def _newton_solve(
         # nu + B*nu' — analytic from the BH spline (equals nu on the
         # clip plateau, where the correction vanishes). Positive by
         # monotonicity; floored well below nu_0 as pure safety.
-        nu_p = _bh_nu_prime(B_vals)
+        nu_p = bh_nu_prime(B_vals)
         nu_l = np.maximum(nu_upd + B_vals * nu_p, 1.0)
         gfu_coeff.vec.FV().NumPy()[:] = np.where(
             iron_mask, nu_l - nu_upd, 0.0)
@@ -317,7 +441,7 @@ def _newton_solve(
         for _ in range(8):
             gfu.vec.FV().NumPy()[:] = u0 - alpha * step_np
             nu_trial = nu_seed.copy()
-            nu_trial[iron_mask] = _bh_nu(project_Bmag())[iron_mask]
+            nu_trial[iron_mask] = bh_nu(project_Bmag())[iron_mask]
             gfu_nu.vec.FV().NumPy()[:] = nu_trial
             if float(np.linalg.norm(residual_np())) < rnorm:
                 accepted = True
@@ -382,10 +506,10 @@ def solve_field_fem(
     n_slots: int | None = ..., j_s: float = ..., k_w: float = ...,
     slot_width_ratio: float | None = ..., nonlinear: bool = ...,
     max_picard: int = ..., picard_tol: float = ..., picard_relax: float = ...,
-    nonlinear_solver: str = ...,
+    nonlinear_solver: NonlinearSolver = ...,
     alpha_p: float = ..., rotation: float = ..., sheet_phase: float = ...,
     info: dict[str, float] | None = ...,
-    magnetization: str = ..., halbach_segments: int | None = ...,
+    magnetization: Magnetization = ..., halbach_segments: int | None = ...,
     halbach_angles_rad: tuple[float, ...] | None = ...,
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]: ...
 
@@ -397,10 +521,10 @@ def solve_field_fem(
     n_slots: int | None = ..., j_s: float = ..., k_w: float = ...,
     slot_width_ratio: float | None = ..., nonlinear: bool = ...,
     max_picard: int = ..., picard_tol: float = ..., picard_relax: float = ...,
-    nonlinear_solver: str = ...,
+    nonlinear_solver: NonlinearSolver = ...,
     alpha_p: float = ..., rotation: float = ..., sheet_phase: float = ...,
     info: dict[str, float] | None = ...,
-    magnetization: str = ..., halbach_segments: int | None = ...,
+    magnetization: Magnetization = ..., halbach_segments: int | None = ...,
     halbach_angles_rad: tuple[float, ...] | None = ...,
 ) -> tuple[NDArray[np.floating], NDArray[np.floating], Any, Any]: ...
 
@@ -410,23 +534,23 @@ def solve_field_fem(
     B_rem: float,
     mu_r_pm: float,
     mu_r_fe: float,
-    n_theta: int = 360,
-    maxh_fraction: float = 0.05,
+    n_theta: int = _DEFAULTS["n_theta"],
+    maxh_fraction: float = _DEFAULTS["maxh_fraction"],
     return_full: bool = False,
     n_slots: int | None = None,
-    j_s: float = 0.0,
+    j_s: float = _DEFAULTS["j_s"],
     k_w: float = 0.966,
     slot_width_ratio: float | None = None,
-    nonlinear: bool = False,
+    nonlinear: bool = _DEFAULTS["nonlinear"],
     max_picard: int | None = None,
     picard_tol: float | None = None,
     picard_relax: float | None = None,
-    nonlinear_solver: str = "newton",
+    nonlinear_solver: NonlinearSolver = _DEFAULTS["nonlinear_solver"],
     alpha_p: float = 1.0,
-    rotation: float = 0.0,
+    rotation: float = _DEFAULTS["rotation"],
     sheet_phase: float = 0.0,
     info: dict[str, float] | None = None,
-    magnetization: str = "radial",
+    magnetization: Magnetization = "radial",
     halbach_segments: int | None = None,
     halbach_angles_rad: tuple[float, ...] | None = None,
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]] | tuple[NDArray[np.floating], NDArray[np.floating], Any, Any]:
@@ -446,9 +570,9 @@ def solve_field_fem(
     term (uniform magnitude, per-pole sign) integrates only over ``"pm"``
     regions. Pass physical remanence as ``B_rem`` (no sin(πα_p/2) or 4/π
     pre-scaling needed). Interpole gaps narrower than 0.5 mm
-    (``_MIN_ARC_GAP_M``) cannot be cut reliably by OCC: the arcs collapse
-    to a full PM ring and the solve is effectively ``alpha_p = 1.0`` — a
-    warning is logged and ``info["arcs_collapsed"]`` is set. This fires
+    (``_MIN_ARC_GAP_M``) cannot be cut reliably by OCC: the arcs would
+    collapse to a full PM ring, so the solve raises ValueError rather than
+    solving ``alpha_p = 1.0`` in place of the request. This fires
     for ``alpha_p >= 1 - _MIN_ARC_GAP_M * n_p / (pi * r_pm_inner)``, where
     ``r_pm_inner`` is the inner PM-annulus radius (``r_rotor`` inrunner,
     ``r_magnet`` outrunner) — the gap wedge is narrowest there.
@@ -460,8 +584,7 @@ def solve_field_fem(
     the airgap. Both regions are nonlinear iron; ``nonlinear=True`` is
     mandatory (the leakage shunt through them saturates by design, a
     linear solve grossly overestimates it) and the solve raises if the
-    magnet arcs cannot be built (``alpha_p = 1.0`` or a sub-threshold
-    interpole gap).
+    magnet arcs cannot be built (``alpha_p = 1.0``).
 
     ``n_slots`` and ``slot_width_ratio`` default to the geometry's values;
     pass an explicit value (including 0) to override, e.g. ``n_slots=0``
@@ -509,9 +632,7 @@ def solve_field_fem(
     ``info["newton_fell_back"]``.
 
     ``info``, when provided, is populated with solve diagnostics:
-    ``b_iron_max`` (peak |B| in iron regions, T), ``arcs_collapsed``
-    (only when a sub-0.5 mm interpole gap collapsed the magnet arcs, see
-    above) and — nonlinear only — ``picard_iterations``,
+    ``b_iron_max`` (peak |B| in iron regions, T) and — nonlinear only — ``picard_iterations``,
     ``picard_relax_final`` and ``picard_residual`` (raw, i.e. unrelaxed,
     step — the stop criterion), or for the Newton path
     ``newton_iterations``, ``newton_backtracks`` and
@@ -538,8 +659,19 @@ def solve_field_fem(
         picard_tol = PICARD_TOLERANCE
     if picard_relax is None:
         picard_relax = PICARD_RELAXATION
+    if n_p < 1:
+        raise ValueError(f"n_p must be >= 1, got {n_p}")
     if n_slots is None:
         n_slots = geo.n_slots
+    if n_slots not in (0, geo.n_slots) and geo.slot_opening_width > 0:
+        # slot_opening_ratio is derived from geo.n_slots; cutting a
+        # different count with it gives the wrong opening angle.
+        raise ValueError(
+            f"n_slots={n_slots} overrides geometry n_slots={geo.n_slots}, "
+            f"but slot_opening_width={geo.slot_opening_width} is set; the "
+            "opening ratio is per the geometry's slot pitch. Override to 0 "
+            "(smooth bore) or build a geometry with the new count"
+        )
     if slot_width_ratio is None:
         slot_width_ratio = geo.slot_width_ratio
     if j_s != 0.0 and n_slots == 0:
@@ -570,30 +702,22 @@ def solve_field_fem(
         )
 
     # Determine if discrete arcs will actually be built (same threshold as
-    # _build_motor_geometry). A sub-threshold gap collapses the arcs to a
-    # full PM ring — the FEM then solves α_p = 1.0, not the requested α_p.
+    # _build_motor_geometry). A sub-threshold gap would collapse the arcs to
+    # a full PM ring, so the FEM would solve α_p = 1.0, not the requested α_p.
     _wants_arcs = alpha_p < 1.0 and n_p > 0
     _has_arcs = _arcs_active(geo, alpha_p, n_p)
-    if _is_inset and not _has_arcs:
+    if _is_inset and not _wants_arcs:
         raise ValueError(
             "magnet_mount='inset' needs discrete magnet arcs, but "
-            + ("alpha_p=1.0 builds none"
-               if not _wants_arcs else
-               f"the interpole gap "
-               f"{_interpole_gap_width(geo, alpha_p, n_p) * 1e3:.3g} mm is "
-               f"below the {_MIN_ARC_GAP_M * 1e3:.3g} mm OCC limit and the "
-               f"arcs would silently collapse to a full ring")
-        )
+            "alpha_p=1.0 builds none")
     if _wants_arcs and not _has_arcs:
-        logging.warning(
-            "interpole gap %.3g mm < %.3g mm OCC limit: magnet arcs "
-            "collapsed, FEM solves alpha_p=1.0 instead of requested "
-            "alpha_p=%.4g (fundamental error ~1/sin(pi*alpha_p/2) - 1)",
-            _interpole_gap_width(geo, alpha_p, n_p) * 1e3,
-            _MIN_ARC_GAP_M * 1e3, alpha_p,
-        )
-        if info is not None:
-            info["arcs_collapsed"] = 1.0
+        raise ValueError(
+            f"interpole gap {_interpole_gap_width(geo, alpha_p, n_p) * 1e3:.3g} mm "
+            f"is below the {_MIN_ARC_GAP_M * 1e3:.3g} mm OCC limit: the magnet "
+            f"arcs would collapse to a full ring and the FEM would solve "
+            f"alpha_p=1.0 instead of the requested alpha_p={alpha_p:.4g} "
+            f"(fundamental error ~1/sin(pi*alpha_p/2) - 1). Pass alpha_p=1.0 "
+            f"for a full ring")
 
     if magnetization not in ("radial", "halbach"):
         raise ValueError(
@@ -675,70 +799,31 @@ def solve_field_fem(
     nu_cf: dict[str, float] = {}
     for name in region_names:
         if name in pm_region_names:
-            nu_cf[name] = 1 / (_MU0 * mu_r_pm)
+            nu_cf[name] = 1 / (MU0 * mu_r_pm)
         elif name in iron_regions:
-            nu_cf[name] = 1 / (_MU0 * mu_r_fe)
+            nu_cf[name] = 1 / (MU0 * mu_r_fe)
         else:
-            nu_cf[name] = 1 / _MU0
+            nu_cf[name] = 1 / MU0
     nu = mesh.MaterialCF(nu_cf)
 
-    nu_pm = 1 / (_MU0 * mu_r_pm)
+    nu_pm = 1 / (MU0 * mu_r_pm)
     cos_np, sin_np = _demoivre(n_p)
 
     r_cf = sqrt(x**2 + y**2)
     cos_t = x / r_cf
     sin_t = y / r_cf
 
-    mx_cf: dict[str, CoefficientFunction | float] = {}
-    my_cf: dict[str, CoefficientFunction | float] = {}
-
     if _is_halbach:
-        # Per-segment constant magnetization: each segment m carries M of
-        # magnitude nu_pm*B_rem in absolute direction psi(m).
-        # theta_c(m) = rotation + m*pi/(n_p*kappa_m)
-        # phi_local: ideal rule or custom angles (half-wave symmetry for
-        # the second pole in each pole pair).
-        M_mag = nu_pm * B_rem
-        assert halbach_segments is not None  # _is_halbach guarantees this
-        kappa_m = halbach_segments
-        seg_pitch = pi / (n_p * kappa_m)
-        sign = -1.0 if geo.topology == "inrunner" else 1.0
-        for m, name in enumerate(pm_region_names):
-            theta_c = rotation + m * seg_pitch
-            local_idx = m % (2 * kappa_m)
-            if local_idx < kappa_m:
-                if halbach_angles_rad is not None:
-                    phi_local = halbach_angles_rad[local_idx]
-                else:
-                    phi_local = sign * n_p * local_idx * seg_pitch
-            else:
-                mirror_idx = local_idx - kappa_m
-                if halbach_angles_rad is not None:
-                    phi_local = halbach_angles_rad[mirror_idx] - pi
-                else:
-                    phi_local = sign * n_p * mirror_idx * seg_pitch - pi
-            psi = theta_c + phi_local
-            mx_cf[name] = M_mag * float(np.cos(psi))
-            my_cf[name] = M_mag * float(np.sin(psi))
-        for name in region_names:
-            if name not in pm_region_names:
-                mx_cf[name] = 0.
-                my_cf[name] = 0.
+        assert halbach_segments is not None
+        mx_cf, my_cf = _halbach_source_cf(
+            nu_pm, B_rem, n_p, halbach_segments, halbach_angles_rad,
+            rotation, geo.topology, pm_region_names, region_names,
+        )
     else:
-        # Radial square-wave magnetization (bit-identical to pre-Halbach)
-        if rotation != 0.0:
-            cos_np_rot = (cos_np * float(np.cos(n_p * rotation))
-                          + sin_np * float(np.sin(n_p * rotation)))
-        else:
-            cos_np_rot = cos_np
-        M_r = nu_pm * B_rem * IfPos(cos_np_rot, 1.0, -1.0)
-        for name in region_names:
-            if name == "pm":
-                mx_cf[name] = M_r * cos_t
-                my_cf[name] = M_r * sin_t
-            else:
-                mx_cf[name] = 0.
-                my_cf[name] = 0.
+        mx_cf, my_cf = _radial_source_cf(
+            nu_pm, B_rem, cos_np, sin_np, cos_t, sin_t, n_p, rotation,
+            region_names, IfPos,
+        )
 
     Mx = mesh.MaterialCF(mx_cf)
     My = mesh.MaterialCF(my_cf)
@@ -762,25 +847,11 @@ def solve_field_fem(
     lf.Assemble()
     gfu = GridFunction(fes)
 
-    if not nonlinear:
-        a = BilinearForm(nu * grad(u) * grad(v) * dx)
-        a.Assemble()
-        gfu.vec.data = a.mat.Inverse(fes.FreeDofs(), inverse="sparsecholesky") * lf.vec
-    elif nonlinear_solver == "newton":
-        try:
-            _newton_solve(mesh, fes, lf, gfu, nu, region_names,
-                          iron_regions, max_picard, info)
-        except RuntimeError as e:
-            logging.warning("Newton BH solve failed (%s); falling back "
-                            "to Picard", e)
-            if info is not None:
-                info["newton_fell_back"] = 1.0
-            _picard_solve(mesh, fes, lf, gfu, nu, region_names,
-                          iron_regions, max_picard, picard_tol,
-                          picard_relax, info)
-    else:
-        _picard_solve(mesh, fes, lf, gfu, nu, region_names, iron_regions,
-                      max_picard, picard_tol, picard_relax, info)
+    _nonlinear_dispatch(
+        nonlinear, nonlinear_solver, mesh, fes, lf, gfu, nu,
+        region_names, iron_regions, max_picard, picard_tol, picard_relax,
+        info, BilinearForm, grad, dx,
+    )
 
     _check_iron_saturation(mesh, gfu, region_names, iron_regions, info)
 

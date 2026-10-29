@@ -1,7 +1,7 @@
 {
   "source": {
     "paper": "arXiv:2501.15921",
-    "journal": "Dhakal et al., COMPEL 44(4), 2025",
+    "journal": "Muetze et al., COMPEL 44(4), 392-410, 2025",
     "doi_dataset": "10.3217/sns1d-77m43",
     "doi_paper": "10.1108/compel-11-2024-0462",
     "license": "CC BY-NC-ND 4.0",
@@ -97,7 +97,7 @@
     "density_kg_m3": 4950
   },
   "mtpa": {
-    "_source": "Dhakal et al. (2025) COMPEL 44(4), arXiv:2501.15921, Fig. 12 / §5.2 MTPA analysis",
+    "_source": "Muetze et al. (2025) COMPEL 44(4), arXiv:2501.15921, §6.2.2 (text)",
     "_convention": "angle measured from d-axis in electrical degrees; gamma = angle - 90 deg",
     "angles_deg_electrical": [100.0, 110.0],
     "currents_Arms": [0.15, 0.30]

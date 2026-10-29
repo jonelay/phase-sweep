@@ -6,6 +6,10 @@ import argparse
 import sys
 from pathlib import Path
 
+__all__ = [
+    "main",
+]
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(

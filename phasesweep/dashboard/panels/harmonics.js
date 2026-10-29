@@ -6,8 +6,9 @@
 // Color = config (compare-set slot); bars can't dash, so model identity
 // is a pattern fill on fem bars (analytical plain).
 
-import { SERIES, axisStyle, baseLayout, makeOverlay, redrawOverlay, traceName } from "./plot_theme.js";
-import { provenanceText } from "./widgets.js";
+import { makeOverlay } from "/view-sweep/js/plot.js";
+import { provenanceText } from "/view-sweep/js/widgets.js";
+import { traceName } from "./format.js";
 
 // bar-chart rendering of MODEL_DASH's identity split
 const MODEL_BAR_PATTERN = {
@@ -19,13 +20,13 @@ const SCALES = { linear: "linear", log: "log", pct: "% of fund." };
 let scaleMode = localStorage.getItem(SCALE_KEY);
 if (!Object.hasOwn(SCALES, scaleMode ?? "")) scaleMode = "linear";
 
-// built per redraw so a theme switch picks up the current --chart-* colors
-const layout = () => baseLayout({
+// built per redraw so a theme switch picks up the current chart tokens
+const layout = () => ({
   hovermode: "closest",
   barmode: "group",
-  xaxis: axisStyle("electrical order h = n / n_p"),
+  xaxis: appCtx.plot.axisStyle("electrical order h = n / n_p"),
   yaxis: {
-    ...axisStyle(scaleMode === "pct"
+    ...appCtx.plot.axisStyle(scaleMode === "pct"
       ? "|B_r| [% of fundamental]" : "|B_r| harmonic amplitude [T]"),
     type: scaleMode === "log" ? "log" : "linear",
     // tie the axis revision to the scale so a toggle resets the
@@ -39,9 +40,9 @@ const layout = () => baseLayout({
 // different motors stay comparable
 function displayTraces() {
   return overlay.traces.map((t) => {
-    // re-read the slot's hue so a palette switch (SERIES mutated in place,
-    // plot_theme.js) re-hues bars colored at route time
-    const marker = { ...t.marker, color: SERIES[t._slot] };
+    // re-read the slot's hue so a palette switch (theme.series mutated in
+    // place) re-hues bars colored at route time
+    const marker = { ...t.marker, color: appCtx.theme.series[t._slot] };
     if (scaleMode !== "pct" || !(t._fund > 0)) {
       return { ...t, marker, y: t._rawY,
         hovertemplate: "n=%{customdata} (h=%{x:.2f}) · %{y:.4f} T<extra>%{fullData.name}</extra>" };
@@ -76,7 +77,7 @@ let hoverBound = false;
 const overlay = makeOverlay();
 
 function redraw() {
-  return redrawOverlay(plotEl, hintEl, displayTraces(), layout());
+  return appCtx.plot.redraw(plotEl, displayTraces(), layout(), hintEl);
 }
 
 // linked highlight: bars can't fatten, so dim the
@@ -128,20 +129,21 @@ export default {
       redraw();
     });
     const clearBtn = document.createElement("button");
+    clearBtn.className = "vs-btn";
     clearBtn.textContent = "Clear overlay";
     // drops compare-set overlays app-wide (chips + all panels together)
     clearBtn.addEventListener("click", () => app.compare.clearOverlays());
     headerSlot.append(scaleSel, clearBtn);
 
     hintEl = document.createElement("div");
-    hintEl.className = "empty-hint";
+    hintEl.className = "vs-empty-hint";
     hintEl.textContent = "No spectrum yet — select a config or submit an analytical/fem job.";
 
     plotEl = document.createElement("div");
     plotEl.style.height = "340px";
 
     provEl = document.createElement("div");
-    provEl.className = "provenance";
+    provEl.className = "vs-provenance";
 
     container.append(hintEl, plotEl, provEl);
     app.onHighlight((id, origin) => {
@@ -174,7 +176,7 @@ export default {
     );
     const amps = harmonicAmps(m.B_r_list, maxOrder);
 
-    const marker = { color: SERIES[slot] };
+    const marker = { color: appCtx.theme.series[slot] };
     if (MODEL_BAR_PATTERN[result.model]) marker.pattern = MODEL_BAR_PATTERN[result.model];
     overlay.add(result.result_id, {
       _slot: slot,

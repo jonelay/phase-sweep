@@ -1,13 +1,16 @@
 """Tests for solver parameter types and factory functions."""
 
+import dataclasses
+
 import pytest
 
 from phasesweep.machines.geometry import default_inrunner, inrunner, outrunner
-from phasesweep.machines.motor import DriveParams
+from phasesweep.machines.motor import DriveParams, Motor
 from phasesweep.simulation.params import DriveSimParams, prepare_drive_sim
 from phasesweep.solver_params import (
     j_s_from_phase_current,
     phase_current_from_j_s,
+    resolve_psi_f,
     winding_transfer,
 )
 from phasesweep.solvers.analytical import AnalyticalParams, prepare_analytical
@@ -323,6 +326,15 @@ class TestPrepareDriveSim:
         motor = make_motor(psi_f=None)
         with pytest.raises(ValueError, match="cannot determine psi_f"):
             prepare_drive_sim(motor)
+
+    def test_derivation_error_names_missing_geometry(self):
+        # Datasheet-only motor: B_rem and the winding are set, but with no
+        # geometry the B_rem -> psi_f transfer cannot run. The error must
+        # name the geometry, not claim psi_f's own absence as the cause.
+        motor = Motor(name="ds", geometry=None, n_p=4, R_s=0.1, L_d=1e-3,
+                      L_q=1e-3, B_rem=1.2, N=20, k_w=0.95, L_stk=0.05)
+        with pytest.raises(ValueError, match=r"missing for derivation: \[geometry\]"):
+            resolve_psi_f(motor)
 
     def test_missing_R_s_raises(self):
         motor = make_motor(R_s=None)
@@ -648,3 +660,104 @@ class TestSynRMParams:
             prepare_analytical(motor)
         with pytest.raises(ValueError, match="reluctance machine"):
             prepare_fem(motor)
+
+
+class TestDerate:
+    """One temperature rule for every circuit model: the
+    same motor thermal fields give the same psi_f / R_s to rated_torque,
+    stall_torque, torque_speed, thermal_duty, drive_sim and
+    operating_point, and the same range guard fires in all of them."""
+
+    HOT = dict(alpha_Br=-0.0012, magnet_temp=100.0, winding_temp_limit=120.0,
+               I_rated=10.0)
+    PSI_FACTOR = 1 - 0.0012 * 80.0
+    R_FACTOR = 1 + 0.00393 * 100.0
+
+    def test_every_factory_sees_the_same_temperatures(self):
+        from phasesweep.models.operating_point import operating_point, prepare_operating_point
+        from phasesweep.models.rated_torque import prepare_rated_torque, prepare_stall_torque
+        from phasesweep.models.thermal_duty import prepare_thermal_duty
+        from phasesweep.models.torque_speed import prepare_torque_speed
+
+        m = make_motor(**self.HOT)
+        psi_f, R_s = 0.1 * self.PSI_FACTOR, 0.2 * self.R_FACTOR
+        assert prepare_rated_torque(m).psi_f == pytest.approx(psi_f)
+        st = prepare_stall_torque(m)
+        assert (st.psi_f, st.I_stall_em) == (
+            pytest.approx(psi_f), pytest.approx(540.0 / (3**0.5 * R_s)))
+        ts = prepare_torque_speed(m)
+        assert (ts.psi_f, ts.R_s) == (pytest.approx(psi_f), pytest.approx(R_s))
+        td = prepare_thermal_duty(m, ((1.0, 1.0),))
+        assert (td.psi_f, td.R_s) == (pytest.approx(psi_f), pytest.approx(R_s))
+        ds = prepare_drive_sim(m)
+        assert (ds.psi_f, ds.R_s) == (pytest.approx(psi_f), pytest.approx(R_s))
+        op = prepare_operating_point(m)
+        assert (op.psi_f, op.R_s) == (0.1, 0.2)  # cold inputs, derated at solve
+        r = operating_point(op.n_p, op.psi_f, op.R_s, op.L_d, op.L_q, op.I_max,
+                            op.U_max, op.U_DC, 10.0, 0.5, flux_map=op.flux_map,
+                            winding_temp=op.winding_temp,
+                            magnet_temp=op.magnet_temp, alpha_Br=op.alpha_Br)
+        assert (r.psi_f_op, r.R_s_op) == (pytest.approx(psi_f), pytest.approx(R_s))
+
+    def test_cold_motor_is_untouched(self):
+        from phasesweep.models.rated_torque import prepare_stall_torque
+        from phasesweep.models.torque_speed import prepare_torque_speed
+
+        m = make_motor(alpha_Br=-0.0012)  # material data alone derates nothing
+        assert prepare_torque_speed(m).R_s == 0.2
+        assert prepare_torque_speed(m).psi_f == 0.1
+        assert prepare_stall_torque(m).I_stall_em == pytest.approx(540.0 / (3**0.5 * 0.2))
+        assert prepare_drive_sim(m) == prepare_drive_sim(make_motor())
+
+    @pytest.mark.parametrize("model", [
+        "rated_torque", "stall_torque", "torque_speed", "thermal_duty",
+        "drive_sim", "demag_screen",
+    ])
+    def test_range_guard_fires_in_every_model(self, model):
+        """A Motor-accepted (alpha_Br, magnet_temp) pair that derates psi_f
+        below zero is refused by every factory, not only operating_point."""
+        from phasesweep.machines.configs import load_motor
+        from phasesweep.models.demag_screen import prepare_demag_screen
+        from phasesweep.models.rated_torque import prepare_rated_torque, prepare_stall_torque
+        from phasesweep.models.thermal_duty import prepare_thermal_duty
+        from phasesweep.models.torque_speed import prepare_torque_speed
+        from tests.conftest import REPO_ROOT
+
+        extreme = dict(alpha_Br=-0.009, magnet_temp=140.0)  # factor -0.08
+        factories = {
+            "rated_torque": lambda m: prepare_rated_torque(m),
+            "stall_torque": lambda m: prepare_stall_torque(m),
+            "torque_speed": lambda m: prepare_torque_speed(m),
+            "thermal_duty": lambda m: prepare_thermal_duty(m, ((1.0, 1.0),)),
+            "drive_sim": lambda m: prepare_drive_sim(m),
+            "demag_screen": lambda m: prepare_demag_screen(m),
+        }
+        if model == "demag_screen":
+            base = load_motor(REPO_ROOT / "motors/creator_case_pmsm.toml")
+            motor = dataclasses.replace(base, alpha_B_knee=-0.001, **extreme)
+        else:
+            motor = make_motor(I_rated=10.0, **extreme)
+        with pytest.raises(ValueError, match="outside the linear alpha_Br range"):
+            factories[model](motor)
+
+    def test_derate_guards_inputs(self):
+        from phasesweep.solver_params import derate
+
+        assert derate(None, 0.1, None, None, None) == (None, 0.1)
+        assert derate(0.2, 0.1, 120.0, None, -0.0012) == (
+            pytest.approx(0.2 * self.R_FACTOR), 0.1)
+        with pytest.raises(ValueError, match="alpha_Br is not"):
+            derate(0.2, 0.1, None, 100.0, None)
+        with pytest.raises(ValueError, match="must be finite"):
+            derate(0.2, 0.1, float("nan"), None, None)
+        with pytest.raises(ValueError, match="below zero"):
+            derate(0.2, 0.1, -300.0, None, None)
+
+
+def test_salient_pair_rejects_one_sided_inductance():
+    from phasesweep.solver_params import salient_pair
+    assert salient_pair(make_motor(L_d=None, L_q=None)) == (None, None)
+    with pytest.raises(ValueError, match="set together"):
+        salient_pair(make_motor(L_d=None))
+    with pytest.raises(ValueError, match="set together"):
+        salient_pair(make_motor(L_q=None))

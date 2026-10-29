@@ -3,20 +3,25 @@
 Terms, symbols, and abbreviations appearing in the phase-sweep validation
 report (`scripts/validation_report.py`) and supporting modules.
 
-See also: [naming-crossref.md](naming-crossref.md) for naming collisions across domains.
-
 ---
 
 ## Conventions
 
-**Peak vs RMS:** All current and flux linkage values in the code follow
-motulator's peak-value convention. TOML files may specify `I_rated_rms`
+**Peak vs RMS:** PM-tier current and flux-linkage values follow motulator's
+peak-value convention; outputs with an `_rms` suffix (e.g. `k_T_rms`,
+`I_s_rms`) are the RMS companions. The induction tier is per-phase RMS
+throughout (see [Induction-Machine Circuit Tier](#induction-machine-circuit-tier-im_-models)). TOML files may specify `I_rated_rms`
 which is converted to peak via `I_rated = I_rated_rms × √2` at load time
 (`machines/configs.py`). Torque formulas use the 3/2 factor that pairs with
 peak values: `τ = 1.5 × n_p × (ψ_f × i_q + (L_d − L_q) × i_d × i_q)`.
 
 **Units:** All geometry values are in SI (meters), not millimeters or
 normalized radii. The Geometry dataclass enforces physical ordering.
+Temperatures are °C for absolute values and K for differences.
+
+**"Peak" means amplitude** in symbols and units (`A_peak`, `I_s_peak`).
+The traction-rating sense (peak power, a short-time capability) is
+covered under [Thermal](#thermal).
 
 ---
 
@@ -31,6 +36,7 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | Inrunner | Rotor inside stator (conventional layout) | Zhu Fig 1(a): "Internal rotor" |
 | Outrunner | Stator inside rotor (e.g. Belkhadir 22p/24s) | Zhu Fig 1(b): "External rotor" |
 | FSCW | Fractional-Slot Concentrated Winding | — (Zhu §IV covers nonoverlapping windings) |
+| SCIM / IM | Squirrel-Cage Induction Machine (`[induction]` TOML section; `motor.induction is not None`) | CREATOR IM anchor (`data/creator_case_im/`) |
 
 > **Zhu disambiguation:** Zhu calls these "internal rotor" and "external rotor."
 > We use the more common "inrunner"/"outrunner" terminology.
@@ -53,18 +59,19 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | slot_width_ratio | — | Slot body width as fraction of slot pitch | — |
 | slot_opening_width | m | Slot opening width at the bore (stored field; Carter input) | Zhu: b_o |
 | slot_opening_ratio | — | Derived: slot_opening_width / slot pitch at bore | — |
-| topology | — | `"inrunner"` or `"outrunner"` | "internal" / "external" rotor |
+| topology | — | `"inrunner"`, `"outrunner"`, or `"axial"` | "internal" / "external" rotor |
 | α_p | — | Magnet pole-arc / pole-pitch ratio (default 1.0) | Zhu Eq 7a: α_p. On Motor, AnalyticalParams, FemParams. See note below. |
 
 > **α_p scaling (Zhu Eq 7a).** For the fundamental harmonic, the ratio of
 > partial-pitch to full-pitch magnetization is exactly `sin(πα_p/2)`.
-> **Analytical:** the harmonic source applies this factor directly.
+> **Analytical:** the harmonic source applies `sin(kπα_p/2)` to each odd harmonic k.
 > **FEM:** the mesh models discrete magnet arcs from unscaled `B_rem` and
-> `alpha_p`, so the geometry captures the inter-magnet gaps. The geometry
-> guide and physics spec own the arc-collapse rule.
+> `alpha_p`, so the geometry captures the inter-magnet gaps. An interpole gap
+> narrower than 0.5 mm raises `ValueError` (`fem_field.solve_field_fem`);
+> pass `alpha_p = 1.0` for a full ring.
 
 > **Key collision (resolved):** Zhu's R_s (stator bore radius) ≠ motulator's R_s
-> (stator winding resistance). Our `r_stator` sidesteps this. See `naming-crossref.md §1`.
+> (stator winding resistance). Our `r_stator` sidesteps this.
 
 > **Outrunner radius ordering** flips: r_outer > r_rotor > r_magnet > r_stator > r_inner.
 > The names stay the same — r_stator is always the bore, r_magnet always the PM/air
@@ -121,16 +128,87 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | γ (gamma) | rad | MTPA angle from q-axis (0 for non-salient; < 0 for reverse saliency, magnetizing i_d) |
 | gamma_opt_deg | deg | Optimal MTPA angle at I_rated |
 | I_s | A_peak | Stator current magnitude (peak, per motulator convention) |
-| I_rated | A_peak | Rated continuous stator current (peak; TOML may specify I_rated_rms) |
-| I_stall | A_peak | Stall current = drive limit (I_LIMIT, else MAX_I_S); electromagnetic limit U_DC / (√3 × R_s) reported separately as I_stall_em |
+| I_rated | A_peak | Rated continuous stator current from the datasheet; "continuous" is the source's definition (see [Thermal](#thermal)). Peak amplitude; TOML may specify I_rated_rms |
+| I_stall | A_peak | Stall current = drive limit (I_LIMIT, else MAX_I_S); electromagnetic limit U_DC / (√3 × R_s) reported separately as `I_stall_electromagnetic` (with `tau_stall_electromagnetic`) |
 | i_d | A_peak | d-axis current = −I_s sin(γ) (field-weakening) |
 | i_q | A_peak | q-axis current = I_s cos(γ) (torque-producing) |
 | L_d | H | d-axis inductance |
 | L_q | H | q-axis inductance |
 | saliency | — | L_q/L_d ratio; >1 = salient (IPM), ~1 = non-salient |
+| i_d_curve_peak / i_q_curve_peak | A_peak | `torque_speed`: envelope currents at each `speed_curve` point (`_cont` at I_rated) |
+| w_mech / tau_ref | rad/s, N·m | `operating_point` demand on the RunConfig (mechanical speed, torque) |
+| I_s_peak / I_s_rms | A | `operating_point`: stator current magnitude, peak and rms |
+| u_d / u_q / u_mag / u_max | V_peak | `operating_point`: dq voltage components, magnitude, and the limit U_DC/√3 |
+| m_index | — | `operating_point`: modulation index 2·u_mag/U_DC (≤ 1 SPWM linear, ≤ 2/√3 SVPWM linear) |
+| pf | — | `operating_point`: power factor cos∠(u, i); `None` at zero current |
+| regime | — | `operating_point`: `"mtpa"` (voltage-feasible MTPA point) or `"field_weakening"` |
+| op_source | — | `operating_point`: `"flux_map"` or `"analytical"` (constant-L) surface used |
+| R_s_op / psi_f_op | Ω, Wb | `operating_point`: resistance and PM flux at the temperatures the solve used — its `winding_temp` argument (the motor's winding_temp_limit by default) and magnet_temp, or the node temperatures when `motor_thermal` drives the solve |
+| p_cu / p_shaft / p_elec | W | `operating_point`: copper loss 1.5·R_s_op·I_s², shaft power tau·w_mech, their sum (no iron loss) |
+| psi_d / psi_q | Wb_peak | `operating_point`: dq flux linkages the voltages were built from (constant-L or map) |
 
 > **Peak convention:** see Conventions section above. motulator's
 > `i_s_max` on CurrentVectorControllerCfg is also peak amps.
+
+## Thermal
+
+Two motor-side thermal models: `thermal_duty` (one winding-to-ambient
+resistance, continuous loss budget and first-order transient) and
+`motor_thermal` (a three-node lumped network coupled to
+`operating_point`).
+
+| Symbol | Units | Meaning |
+|--------|-------|---------|
+| winding_temp_limit | °C | `[thermal]` maximum winding temperature (datasheet θmax or a thermal-class value). Circuit models evaluate R_s at it, the worst-case convention; `motor_thermal` evaluates R_s at its solved winding temperature and reports headroom against the limit. A limit is only comparable with a model temperature on the same measurement basis (below) |
+| winding_temp_limit_basis / _source | — | `[thermal]` tags on the limit: basis `thermometer`, `resistance`, `ETD` or `hot_spot`; source `published`, `measured`, `computed`, `fitted` or `assumed`. Unhashed |
+| magnet_temp_max | °C | `[thermal]` magnet grade maximum operating temperature: a limit only, never a derating temperature. Same `_basis` / `_source` tags |
+| insulation_class | — | `[thermal]` thermal class label, IEC 60085: 130 (B), 155 (F), 180 (H), 200 (N), 220 (R). Descriptive; not parsed into a limit |
+| magnet_temp | °C | `[thermal]` magnet operating temperature for the ψ_f / flux-map derating. An operating assumption, not a limit |
+| r_th / ambient_temp | K/W, °C | `[thermal]` winding-to-ambient thermal resistance and ambient for the `thermal_duty` budget |
+| thermal_time_constant | s | `[thermal]` winding time constant for the `thermal_duty` transient march |
+| p_s1_budget / within_s1 / over_budget_ratio | W, —, — | `thermal_duty`: continuous (S1) loss budget (`budget_source` names the path that set it), the verdict, and consumed loss over budget. This `within_s1` compares loss with a budget at the rated point; `motor_thermal`'s compares node temperatures with limits at the demanded point. Both are S1 equilibrium verdicts |
+| winding_temp_peak / within_s1_transient | °C, — | `thermal_duty`: peak winding temperature of the first-order transient march and its verdict |
+| T_coolant | °C | `motor_thermal` coolant temperature on the RunConfig (an operating condition, not a Motor field). Industry specifications state coolant *inlet* temperature; whether a fitted network's reference was inlet or mean depends on its source |
+| T_winding / T_iron / T_magnet | °C | `motor_thermal`: steady node temperatures of the three-node network; T_magnet = T_iron at steady state |
+| G_WFe / G_FeS / G_FeM | W/K | `[thermal_network]` conductances winding→iron, iron→coolant, iron→rotor (G = 1/R_th) |
+| C_W / C_Fe / C_M | J/K | `[thermal_network]` node heat capacities |
+| psi_s / psi_ratio | Wb_peak, — | `motor_thermal`: stator flux linkage magnitude and its ratio to the cold reference (map ψ_d(0,0) or psi_f) that scales B_core in the iron loss |
+| iterations / residual_K | —, K | `motor_thermal`: fixed-point iterations to converge and the last unrelaxed temperature update |
+| headroom_winding_K / headroom_magnet_K | K | `motor_thermal`: node limit minus node temperature; negative is over the limit (a result, not an error); `None` without a limit |
+| binding_limit / within_s1 | —, — | `motor_thermal`: the node with the least headroom (a tie reports `"winding"`), and whether no headroom is negative (the S1 equilibrium verdict, named as in `thermal_duty`); `None` with no limits |
+| winding_basis / magnet_basis | — | `[thermal_network]` measurement basis of a fitted node; a limit on a different basis is rejected |
+
+### Industry terms
+
+| Term | Source / usage | In phase-sweep |
+|------|----------------|----------------|
+| LPTN (lumped-parameter thermal network) | Motor thermal design (Motor-CAD; Boglietti et al.) | `[thermal_network]` is a three-node LPTN; `thermal_duty` is the one-node case |
+| Thermal resistance R_th / conductance G | Datasheets, thermal-network tools (`Rth_*`, K/W) | `[thermal_network]` stores conductances (W/K); `[thermal] r_th` is a resistance |
+| Measurement method: thermometer, resistance, ETD | IEC 60034-1 (resistance = winding average; ETD = embedded temperature detector), with a permitted temperature rise per method; IEC 60085 thermal class rates the insulation system | The basis of a winding temperature. The BMW i3 winding node is fitted to a trace from a coil-mounted sensor, so its basis is taken as ETD |
+| Hot spot | Design allowance and thermal-model output (e.g. Motor-CAD winding hot spot); not a measurement method | Above any measured winding temperature; a hot-spot value and a measured one are not directly comparable |
+| Coolant inlet temperature | IEC 60034-1; automotive component specifications | `T_coolant` |
+| S1 duty | IEC 60034-1: continuous operation at constant load to thermal equilibrium | `thermal_duty` budget; `motor_thermal` steady solve |
+| Continuous power | SAE J2907: maximum power held for 30 min | Not S1. A rating labeled "continuous" should name which definition it uses |
+| Peak power | SAE J2907 maximum (net) power; manufacturers state a duration (BMW i3: 125 kW for at most 30 s) | A short-time capability; unrelated to peak amplitude |
+| Derating | Automotive: the controller reduces power when a temperature limit is approached ("power reduction") | Not modeled. `solver_params.derate` is a different sense: the temperature correction of R_s and ψ_f |
+| Thermal runaway | Loss rises with temperature faster than heat removal; no steady state exists | `motor_thermal` raises `ThermalRunaway` (growing residual, or an iterate outside the derating range), beside `InfeasibleDemand` (the demand leaves the envelope) and `NoConvergence` (budget exhausted). The types are diagnostic: only `InfeasibleDemand` with `at_coolant` says the demand itself is infeasible; any later failure means no fixed point was found on the climb. None is a limit exceedance, which is reported as negative headroom |
+| Losses / heat source | Motor design / FEM and thermal-network tools | `p_cu`, `p_fe` are the heat sources of the winding and iron nodes |
+
+## Induction-Machine Circuit Tier (im_* models)
+
+Per-phase RMS convention — every output is suffixed `_rms` or is a
+per-phase power/torque; deliberately not the PM tier's peak convention.
+
+| Symbol | Units | Meaning |
+|--------|-------|---------|
+| s (slip) | — | (n_sync − n) / n_sync; RunConfig.slip, motoring range (0, 1] |
+| f_rotor_Hz | Hz | Rotor (slip) frequency s·f — the deep-bar table key |
+| R_2 | Ω | Rotor resistance referred to the stator (DC reference; R_2_vs_f table above it) |
+| tau | N·m | Electromagnetic torque = p_ag / ω_s (ω_s = 2πf/n_p mechanical synchronous) |
+| tau_breakdown / slip_breakdown | N·m / — | Swept curve maximum (deep-bar-aware); `_thevenin` variants are the constant-parameter closed form |
+| tau_starting / I_locked_rotor_rms | N·m / A rms | s = 1 point of the sweep |
+| p_ag / p_cu_s / p_cu_r / p_mech | W | Air-gap power, stator/rotor copper loss (p_cu_r = s·p_ag), gross mechanical power |
+| eta_circuit | — | p_mech / p_in — CIRCUIT losses only (no iron, friction, windage; documented over-estimate) |
 
 ## Drive Simulation
 
@@ -175,8 +253,8 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 |------|---------|
 | NGSolve | Open-source FEM library (Netgen/NGSolve, LGPL) for 2-D magnetostatics |
 | ElmerFEM | Independent open-source FEM code (CSC) used only to cross-verify the `fem`/`fem_axial` solvers via pinned comparisons (`scripts/elmer_*/`); never imported by the package |
-| maxh_fraction | Max mesh element size as fraction of r_outer; see `defaults.toml` for the default |
-| n_theta | Angular sampling points in air-gap; see `defaults.toml` for the default |
+| maxh_fraction | Max mesh element size as fraction of r_outer; default 0.05 (`RunConfig.maxh_fraction`) |
+| n_theta | Angular sampling points in air-gap; default 360 (`RunConfig.n_theta`) |
 | nonlinear | Enables the B-H curve; damped Newton is the default nonlinear method, with Picard startup/fallback |
 | Newton iteration | Line-search-damped nonlinear solve using the B-H tangent; the v0.5 default |
 | Picard iteration | Fixed-point iteration updating reluctivity from local \|B\|; used for Newton startup/fallback or when explicitly selected |
@@ -203,7 +281,7 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | f_Br(r) | Zhu Eq 17/18: radial variation function. Depends on evaluation radius and R_s/R_m. |
 | M_n | Zhu Eq 10b: effective magnetization harmonic = M_rn + np × M_θn |
 | A_3n | Zhu: magnetization shape factor (= np for radial magnetization, more complex for parallel) |
-| α_p | Zhu Eq 7a: magnet pole-arc / pole-pitch ratio. Configurable on Motor (default 1.0). Scaling: bp *= sin(πα_p/2). |
+| α_p | Zhu Eq 7a: magnet pole-arc / pole-pitch ratio. Configurable on Motor (default 1.0). Scaling: odd harmonic k of the square-wave magnetization carries (4/(kπ))·sin(kπα_p/2) (`field_solution.py`, analytical v4); the fundamental factor is sin(πα_p/2). |
 
 ## Sensitivity Analysis
 
@@ -229,6 +307,7 @@ normalized radii. The Geometry dataclass enforces physical ordering.
 | L_stk | Stack axial length | Cross-section | Linear (ψ_f ∝ L_stk) |
 | B_rem | Magnet remanence (grade) | Geometry | Exactly linear (B₁ = C(geometry) × B_rem) |
 | k_w | Winding factor (bounded to [0.75, 1.0]; skipped outside) | Geometry, B_rem | Linear in ψ_f-derived metrics; no effect on B₁ |
+| R_2, L_m, L_sigma_s, L_sigma_r | Induction-circuit scalar + its matching table (scaled together) | Geometry, other circuit params | Accepted by `perturb_motor` for `[induction]` motors — fittable in `calibrate()` and swept on the validation report's `τ_rated_im` track; None for synchronous machines |
 
 > **Why B_rem is exactly linear:** Zhu's K_B(n) (Eq 17) is proportional to M_n
 > (Eq 10b), and M_n = (B_rem/μ₀) × geometric factor (Eq 7a). So B_r(θ) = C(geometry) × B_rem × Σ cos(npθ).

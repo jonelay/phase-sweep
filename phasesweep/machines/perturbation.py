@@ -11,10 +11,19 @@ second-order at sweep deltas (±5%).
 from __future__ import annotations
 
 import dataclasses as dc
+import logging
 from typing import Any, Literal
 
-from phasesweep.machines.geometry import AxialFluxGeometry, inrunner, outrunner
+from phasesweep.machines.geometry import AxialFluxGeometry
 from phasesweep.machines.motor import Motor
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "PerturbParam",
+    "perturb_motor",
+    "scale_inductances",
+]
 
 PerturbParam = Literal[
     "OD", "gap", "L_stk", "B_rem", "k_w", "psi_f", "R_s", "L_d", "L_q",
@@ -38,6 +47,30 @@ _INDUCTION_PARAMS: dict[str, str] = {
     "L_sigma_s": "L_sigma_s_vs_f",
     "L_sigma_r": "L_sigma_r_vs_f",
 }
+
+
+_MAP_REFUSAL = "flux map is extracted, not derivable from geometry"
+
+
+def _rederive_refusal(motor: Motor) -> str | None:
+    """Why a geometry perturbation cannot re-derive psi_f, or None.
+
+    OD/gap clear psi_f so the field models re-derive it from the new
+    geometry. The radial Zhu & Howe derivation does not cover Halbach,
+    inset or bridged rotors, and an extracted flux map cannot follow a
+    geometry change — perturbing the scalars under a fixed map is a
+    mixed state. Those motors read "n/a" rather than a wrong number.
+    """
+    if motor.flux_map is not None:
+        return _MAP_REFUSAL
+    if motor.magnetization == "halbach":
+        return "Halbach psi_f is not derivable"
+    geo = motor.geometry
+    if getattr(geo, "magnet_mount", "surface") == "inset":
+        return "inset psi_f is not derivable"
+    if getattr(geo, "bridge_thickness", None) is not None:
+        return "bridged psi_f is not derivable"
+    return None
 
 
 def scale_inductances(motor: Motor, factor: float) -> dict[str, Any]:
@@ -81,8 +114,27 @@ def perturb_motor(motor: Motor, param: PerturbParam, delta: float) -> Motor | No
 
     if motor.geometry is None or isinstance(motor.geometry, AxialFluxGeometry):
         return None
+    if motor.induction is not None:
+        # The geometry/magnet transforms are PM field-model levers; the
+        # circuit tier never reads geometry, so a cage geometry would only
+        # yield a flat 0% curve. Skip, as for a geometry-less motor.
+        return None
     geo = motor.geometry
     topo = geo.topology
+
+    # Every geometry/magnet lever clears psi_f. A flux map cannot follow
+    # any of them; the non-derivable rotors only matter for OD/gap, where
+    # the field models would otherwise re-derive from a changed geometry
+    # (on L_stk/B_rem/k_w they raise explicitly in resolve_psi_f).
+    if param in ("OD", "gap"):
+        reason = _rederive_refusal(motor)
+    elif motor.flux_map is not None:
+        reason = _MAP_REFUSAL
+    else:
+        reason = None
+    if reason is not None:
+        logger.info("perturb_motor: %s %s skipped — %s", motor.name, param, reason)
+        return None
 
     if param == "OD":
         # OEM frame-size model: stator and rotor grow together while air gap,
@@ -91,24 +143,20 @@ def perturb_motor(motor: Motor, param: PerturbParam, delta: float) -> Motor | No
         r_outer_new = geo.r_outer * (1.0 + delta)
         shift = r_outer_new - geo.r_outer
         r_stator_new = geo.r_stator + shift
-        r_magnet_new = geo.r_magnet + shift
-        r_rotor_new = geo.r_rotor + shift
         # Smallest shifted radius must clear the shaft.
-        r_min_shifted = r_stator_new if topo == "outrunner" else r_rotor_new
+        r_min_shifted = r_stator_new if topo == "outrunner" else geo.r_rotor + shift
         if r_min_shifted <= geo.r_inner:
             return None
-        builder = outrunner if topo == "outrunner" else inrunner
         try:
-            new_geo = builder(
-                r_outer=r_outer_new, r_stator=r_stator_new,
-                r_magnet=r_magnet_new, r_rotor=r_rotor_new,
-                r_inner=geo.r_inner,
-                n_slots=geo.n_slots, slot_depth=geo.slot_depth,
-                slot_width_ratio=geo.slot_width_ratio,
-                # opening tracks the bore circumference (slot pitch grows
-                # with r). Radial build is NOT scaled: slot_depth and the
-                # [r_stator, r_outer] annulus are preserved by the shift —
-                # a diameter change, not a uniform lamination scale.
+            # dc.replace carries every non-radial field (mount, overhang,
+            # back iron, skew). Radial build is NOT scaled: slot_depth and
+            # the [r_stator, r_outer] annulus are preserved by the shift —
+            # a diameter change, not a uniform lamination scale. The
+            # opening tracks the bore circumference (slot pitch grows with r).
+            new_geo = dc.replace(
+                geo, r_outer=r_outer_new, r_stator=r_stator_new,
+                r_magnet=geo.r_magnet + shift, r_rotor=geo.r_rotor + shift,
+                r_ag=geo.r_ag + shift,
                 slot_opening_width=geo.slot_opening_width * (r_stator_new / geo.r_stator),
             )
         except ValueError:
@@ -121,44 +169,27 @@ def perturb_motor(motor: Motor, param: PerturbParam, delta: float) -> Motor | No
                           name=f"{motor.name} [OD {delta:+.1%}]")
 
     elif param == "gap":
-        # Change gap thickness while keeping magnet and yoke unchanged
-        if topo == "inrunner":
-            gap = geo.r_stator - geo.r_magnet
-            new_gap = gap * (1.0 + delta)
-            new_r_stator = geo.r_magnet + new_gap
-            if new_r_stator >= geo.r_outer:
-                return None
-            try:
-                new_geo = inrunner(
-                    r_outer=geo.r_outer, r_stator=new_r_stator,
-                    r_magnet=geo.r_magnet, r_rotor=geo.r_rotor,
-                    r_inner=geo.r_inner,
-                    n_slots=geo.n_slots, slot_depth=geo.slot_depth,
-                    slot_width_ratio=geo.slot_width_ratio,
-                    slot_opening_width=geo.slot_opening_width * (new_r_stator / geo.r_stator),
-                )
-            except ValueError:
-                return None
-        else:
-            gap = geo.r_magnet - geo.r_stator
-            new_gap = gap * (1.0 + delta)
-            # Move the stator surface, not the magnet face: the magnet ring
-            # [r_magnet, r_rotor] is a fixed component (mirrors the inrunner
-            # branch, which moves the bore).
-            new_r_stator = geo.r_magnet - new_gap
-            if new_r_stator <= geo.r_inner:
-                return None
-            try:
-                new_geo = outrunner(
-                    r_outer=geo.r_outer, r_rotor=geo.r_rotor,
-                    r_magnet=geo.r_magnet, r_stator=new_r_stator,
-                    r_inner=geo.r_inner,
-                    n_slots=geo.n_slots, slot_depth=geo.slot_depth,
-                    slot_width_ratio=geo.slot_width_ratio,
-                    slot_opening_width=geo.slot_opening_width * (new_r_stator / geo.r_stator),
-                )
-            except ValueError:
-                return None
+        # Move the stator surface, not the magnet face: the magnet ring
+        # [r_magnet, r_rotor] is a fixed component in both topologies.
+        gap = abs(geo.r_stator - geo.r_magnet)
+        new_gap = gap * (1.0 + delta)
+        sign = 1.0 if topo == "inrunner" else -1.0
+        new_r_stator = geo.r_magnet + sign * new_gap
+        if topo == "inrunner" and new_r_stator >= geo.r_outer:
+            return None
+        if topo == "outrunner" and new_r_stator <= geo.r_inner:
+            return None
+        # r_ag keeps its fractional position in the gap (mid-gap stays
+        # mid-gap; a custom sampling radius moves with the stator face).
+        frac = (geo.r_ag - geo.r_magnet) / (geo.r_stator - geo.r_magnet)
+        try:
+            new_geo = dc.replace(
+                geo, r_stator=new_r_stator,
+                r_ag=geo.r_magnet + frac * (new_r_stator - geo.r_magnet),
+                slot_opening_width=geo.slot_opening_width * (new_r_stator / geo.r_stator),
+            )
+        except ValueError:
+            return None
         # Magnetizing L scales ~1/g_eff with g_eff = g + l_m/mu_r_pm — the
         # magnet recoil path dominates for surface PM, so a pure-1/g scaling
         # overstates the sensitivity by ~g_eff/g. Leakage (k_w-independent,

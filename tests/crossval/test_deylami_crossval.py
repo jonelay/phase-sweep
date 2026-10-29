@@ -111,16 +111,17 @@ class TestDeylamiCrossValidation:
     @requires_fem
     @pytest.mark.timeout(30)
     def test_analytical_vs_fem_agreement(self, analytical_result, fem_result):
-        """Analytical and FEM fundamentals within 5% (shared source
-        convention; currently < 1%)."""
+        """Analytical and FEM fundamentals within 2% (shared source
+        convention; measured 0.57% on this motor, worst-case across six
+        motors). Tightened from 5% to 2% (< 1% target)."""
         anal_fund = analytical_result.metrics["fundamental"]
         B_r = np.array(fem_result.metrics["B_r_list"])
         fem_amps = harmonics_1sided(B_r)
         n_p = 4
         fem_fund = float(fem_amps[n_p]) if n_p < len(fem_amps) else 0.0
         rel = abs(anal_fund - fem_fund) / max(anal_fund, fem_fund, 1e-12) * 100
-        assert rel < 5.0, (
-            f"analytical={anal_fund:.4f} vs FEM={fem_fund:.4f}: {rel:.1f}% > 5%"
+        assert rel < 2.0, (
+            f"analytical={anal_fund:.4f} vs FEM={fem_fund:.4f}: {rel:.1f}% > 2%"
         )
 
     @requires_fem

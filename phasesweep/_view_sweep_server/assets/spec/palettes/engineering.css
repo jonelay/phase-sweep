@@ -1,0 +1,122 @@
+/* Generated from spec/palettes/engineering.toml by scripts/generate_json.py.
+   Do not edit; edit the TOML and regenerate. */
+
+:root {
+  --vs-bg: #f9f9f7;
+  --vs-surface: #fcfcfb;
+  --vs-text: #0b0b0b;
+  --vs-text-2: #52514e;
+  --vs-text-muted: #706e69;
+  --vs-hairline: #e1e0d9;
+  --vs-accent: #2a78d6;
+  --vs-accent-ink: #2a78d6;
+  --vs-warn-ink: #b47b00;
+  --vs-banner-text: #7a5800;
+  --vs-shadow: rgba(11, 11, 11, 0.12);
+  --vs-status-good: #0ca30c;
+  --vs-status-warning: #fab219;
+  --vs-status-critical: #d03b3b;
+  --vs-hoverlabel-bg: #fcfcfb;
+  --vs-legend-bg: #fcfcfb;
+  --vs-chart-bg: #fcfcfb;
+  --vs-chart-text: #52514e;
+  --vs-chart-muted: #706e69;
+  --vs-chart-grid: #e1e0d9;
+  --vs-chart-zeroline: #c3c2b7;
+  --vs-chart-ink: rgba(11, 11, 11, 0.35);
+  --vs-seq-lo: #f4f7fb;
+  --vs-seq-mid: #2a78d6;
+  --vs-seq-hi: #12294a;
+  --vs-font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --vs-font-mono: ui-monospace, monospace;
+  --vs-font-size: 13px;
+  --vs-radius: 4px;
+  --vs-series-1: #0072b2;
+  --vs-series-2: #009e73;
+  --vs-series-3: #d55e00;
+  --vs-series-4: #cc79a7;
+  --vs-series-5: #56b4e9;
+  --vs-series-6: #e69f00;
+  --vs-series-7: #999999;
+  --vs-series-8: #f0e442;
+}
+
+:root[data-theme="light"] {
+  --vs-bg: #f9f9f7;
+  --vs-surface: #fcfcfb;
+  --vs-text: #0b0b0b;
+  --vs-text-2: #52514e;
+  --vs-text-muted: #706e69;
+  --vs-hairline: #e1e0d9;
+  --vs-accent: #2a78d6;
+  --vs-accent-ink: #2a78d6;
+  --vs-warn-ink: #b47b00;
+  --vs-banner-text: #7a5800;
+  --vs-shadow: rgba(11, 11, 11, 0.12);
+  --vs-status-good: #0ca30c;
+  --vs-status-warning: #fab219;
+  --vs-status-critical: #d03b3b;
+  --vs-hoverlabel-bg: #fcfcfb;
+  --vs-legend-bg: #fcfcfb;
+  --vs-chart-bg: #fcfcfb;
+  --vs-chart-text: #52514e;
+  --vs-chart-muted: #706e69;
+  --vs-chart-grid: #e1e0d9;
+  --vs-chart-zeroline: #c3c2b7;
+  --vs-chart-ink: rgba(11, 11, 11, 0.35);
+  --vs-seq-lo: #f4f7fb;
+  --vs-seq-mid: #2a78d6;
+  --vs-seq-hi: #12294a;
+  --vs-font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --vs-font-mono: ui-monospace, monospace;
+  --vs-font-size: 13px;
+  --vs-radius: 4px;
+  --vs-series-1: #0072b2;
+  --vs-series-2: #009e73;
+  --vs-series-3: #d55e00;
+  --vs-series-4: #cc79a7;
+  --vs-series-5: #56b4e9;
+  --vs-series-6: #e69f00;
+  --vs-series-7: #999999;
+  --vs-series-8: #f0e442;
+}
+
+:root[data-theme="dark"] {
+  --vs-bg: #141518;
+  --vs-surface: #1b1d20;
+  --vs-text: #e8e6e3;
+  --vs-text-2: #b3b1ac;
+  --vs-text-muted: #908e89;
+  --vs-hairline: #2c2e33;
+  --vs-accent: #2a78d6;
+  --vs-accent-ink: #4a8de0;
+  --vs-warn-ink: #d99a2b;
+  --vs-banner-text: #edc35c;
+  --vs-shadow: rgba(0, 0, 0, 0.45);
+  --vs-status-good: #0ca30c;
+  --vs-status-warning: #fab219;
+  --vs-status-critical: #d03b3b;
+  --vs-hoverlabel-bg: #1b1d20;
+  --vs-legend-bg: #1b1d20;
+  --vs-chart-bg: #1b1d20;
+  --vs-chart-text: #b3b1ac;
+  --vs-chart-muted: #908e89;
+  --vs-chart-grid: #2c2e33;
+  --vs-chart-zeroline: #45474d;
+  --vs-chart-ink: rgba(232, 230, 227, 0.35);
+  --vs-seq-lo: #16181b;
+  --vs-seq-mid: #4a8de0;
+  --vs-seq-hi: #dbe9fb;
+  --vs-font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --vs-font-mono: ui-monospace, monospace;
+  --vs-font-size: 13px;
+  --vs-radius: 4px;
+  --vs-series-1: #0072b2;
+  --vs-series-2: #009e73;
+  --vs-series-3: #d55e00;
+  --vs-series-4: #cc79a7;
+  --vs-series-5: #56b4e9;
+  --vs-series-6: #e69f00;
+  --vs-series-7: #999999;
+  --vs-series-8: #f0e442;
+}

@@ -4,19 +4,17 @@
 // dataset's _uncertainty. Delta vs the reference model in the legend.
 // The validation summary panel jumps here via app.selectQuantity.
 
-import { PLOT_CONFIG, SERIES, axisStyle, baseLayout } from "./plot_theme.js";
-
 let appRef = null;
 let plotEl = null;
 let hintEl = null;
 let selectEl = null;
 const byModel = new Map(); // model -> full result (latest OK per model)
-const modelSlots = new Map(); // model -> SERIES index, stable per panel life
+const modelSlots = new Map(); // model -> series slot index, stable per panel life
 let selectedQuantity = null;
 let refreshTok = 0;
 
 function slotFor(model) {
-  if (!modelSlots.has(model)) modelSlots.set(model, modelSlots.size % SERIES.length);
+  if (!modelSlots.has(model)) modelSlots.set(model, modelSlots.size % appRef.theme.series.length);
   return modelSlots.get(model);
 }
 
@@ -51,7 +49,7 @@ function tracesFor(q) {
     const r = byModel.get(model);
     const v = r.metrics?.[q];
     if (typeof v !== "number") continue;
-    const color = SERIES[slotFor(model)];
+    const color = appRef.theme.series[slotFor(model)];
     const measured = r.source !== "computed";
     let name = model + (measured ? ` (${r.source})` : "");
     if (ref && model !== ref && typeof refVal === "number" && Math.abs(refVal) > 1e-12) {
@@ -90,9 +88,10 @@ function redraw() {
   hintEl.style.display = traces.length ? "none" : "";
   plotEl.style.display = traces.length ? "" : "none";
   if (traces.length) {
-    const layout = baseLayout({
-      xaxis: axisStyle("model"),
-      yaxis: axisStyle(selectedQuantity),
+    const { plot } = appRef;
+    const layout = plot.layout({
+      xaxis: plot.axisStyle("model"),
+      yaxis: plot.axisStyle(selectedQuantity),
       hovermode: "closest",
       // this panel keeps its legend (color=model in a single-config,
       // multi-model context — deliberate split from the Results tab's
@@ -100,7 +99,7 @@ function redraw() {
       showlegend: true,
       legend: { orientation: "h", y: -0.25 },
     });
-    Plotly.react(plotEl, traces, layout, PLOT_CONFIG);
+    Plotly.react(plotEl, traces, layout, plot.config);
   }
 }
 
@@ -141,12 +140,13 @@ export default {
       redraw();
     });
     const refreshBtn = document.createElement("button");
+    refreshBtn.className = "vs-btn";
     refreshBtn.textContent = "Refresh";
     refreshBtn.addEventListener("click", refresh);
     headerSlot.append(selectEl, refreshBtn);
 
     hintEl = document.createElement("div");
-    hintEl.className = "empty-hint";
+    hintEl.className = "vs-empty-hint";
     hintEl.textContent = "No comparable results — run 2+ models (or import measured data) for this config.";
 
     plotEl = document.createElement("div");
@@ -160,7 +160,7 @@ export default {
     app.onQuantitySelect((q) => {
       selectedQuantity = q;
       redraw();
-      container.closest(".panel-card")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      container.closest(".vs-panel")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     });
   },
 

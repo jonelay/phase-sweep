@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
+
+from phasesweep._extras import SERVER_MODULES, install_hint, missing_modules
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="phase-sweep local server (single-user, localhost)")
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="bind address; also whitelisted as a literal Host value. "
+                             "The Host/Origin check guards a local browser against DNS "
+                             "rebinding; it is not access control. Binding a "
+                             "non-loopback address such as 0.0.0.0 exposes the "
+                             "unauthenticated server to every client that can reach it")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--motors-dir", type=Path, default=Path("motors"))
     parser.add_argument("--user-configs-dir", type=Path, default=Path("user_configs"),
@@ -25,13 +33,11 @@ def main() -> None:
                         help="JSON log output (default: colored console)")
     args = parser.parse_args()
 
-    try:
-        import uvicorn
-    except ImportError:
-        raise ImportError(
-            "phasesweep-server requires the server extra: "
-            "pip install phasesweep[server]"
-        ) from None
+    missing = missing_modules(SERVER_MODULES)
+    if missing:
+        sys.exit(f"phasesweep-server: needs {', '.join(missing)}; {install_hint('server')}")
+
+    import uvicorn
 
     from phasesweep.server.app import ServerSettings, create_app
 

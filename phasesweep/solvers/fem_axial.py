@@ -72,15 +72,29 @@ from phasesweep.defaults import (
     PICARD_RELAXATION,
     PICARD_TOLERANCE,
 )
-from phasesweep.solver_params import _reject_induction, _require_axial_geometry
-from phasesweep.solvers.fem_field import _newton_solve, _picard_solve
-from phasesweep.solvers.fem_materials import _MU0
+from phasesweep.solver_params import reject_induction, require_axial_geometry
+from phasesweep.solvers.fem_field import newton_solve, picard_solve
+from phasesweep.solvers.fem_materials import MU0
+from phasesweep.sweep_types import NonlinearSolver
 
 if TYPE_CHECKING:
     from ngsolve import GridFunction, Mesh
 
     from phasesweep.machines.geometry import AxialFluxGeometry
     from phasesweep.machines.motor import Motor
+    from phasesweep.sweep_types import RunConfig
+
+__all__ = [
+    "FemAxialParams",
+    "clear_mesh_cache",
+    "fundamental_amplitude",
+    "pm_edge_leakage_factor",
+    "prepare_fem_axial",
+    "run_fem_axial",
+    "solve_axial_multiplane",
+    "solve_plane",
+    "solve_plane_periodic",
+]
 
 # Regions treated as iron by the nonlinear (BH) solve.
 IRON_REGIONS: frozenset[str] = frozenset({"rotor_yoke", "stator_yoke", "tooth"})
@@ -359,7 +373,7 @@ def _solve_on_mesh(
     *,
     periodic: bool = False,
     nonlinear: bool = False,
-    nonlinear_solver: str = "newton",
+    nonlinear_solver: NonlinearSolver = "newton",
 ) -> GridFunction:
     """Assemble and solve the A_z problem on a built plane mesh.
 
@@ -384,16 +398,16 @@ def _solve_on_mesh(
     region_names = list(mesh.GetMaterials())
     nu_cf: dict[str, float] = {}
     my_cf: dict[str, float] = {}
-    nu_pm = 1.0 / (_MU0 * mu_r_pm)
+    nu_pm = 1.0 / (MU0 * mu_r_pm)
     for name in region_names:
         if name in ("pm_n", "pm_s"):
             nu_cf[name] = nu_pm
             my_cf[name] = nu_pm * B_rem if name == "pm_n" else -nu_pm * B_rem
         elif name in IRON_REGIONS:
-            nu_cf[name] = 1.0 / (_MU0 * mu_r_fe)
+            nu_cf[name] = 1.0 / (MU0 * mu_r_fe)
             my_cf[name] = 0.0
         else:  # airgap, pm_gap, slot
-            nu_cf[name] = 1.0 / _MU0
+            nu_cf[name] = 1.0 / MU0
             my_cf[name] = 0.0
     nu = mesh.MaterialCF(nu_cf)
     My = mesh.MaterialCF(my_cf)
@@ -408,21 +422,26 @@ def _solve_on_mesh(
     lf.Assemble()
     gfu = GridFunction(fes)
 
+    if nonlinear_solver not in ("picard", "newton"):
+        raise ValueError(
+            f"nonlinear_solver must be 'picard' or 'newton', "
+            f"got {nonlinear_solver!r}"
+        )
     if nonlinear and nonlinear_solver == "newton":
         try:
-            _newton_solve(mesh, fes, lf, gfu, nu, region_names,
+            newton_solve(mesh, fes, lf, gfu, nu, region_names,
                           set(IRON_REGIONS), PICARD_MAX_ITERATIONS, None)
         except RuntimeError as e:
             import logging
             logging.warning("Newton BH solve failed (%s); falling back "
                             "to Picard", e)
-            _picard_solve(
+            picard_solve(
                 mesh, fes, lf, gfu, nu, region_names, set(IRON_REGIONS),
                 PICARD_MAX_ITERATIONS, PICARD_TOLERANCE, PICARD_RELAXATION,
                 None,
             )
     elif nonlinear:
-        _picard_solve(
+        picard_solve(
             mesh, fes, lf, gfu, nu, region_names, set(IRON_REGIONS),
             PICARD_MAX_ITERATIONS, PICARD_TOLERANCE, PICARD_RELAXATION,
             None,
@@ -459,7 +478,7 @@ def solve_plane(
     maxh_fraction: float = 0.1,
     n_x: int = 256,
     nonlinear: bool = False,
-    nonlinear_solver: str = "newton",
+    nonlinear_solver: NonlinearSolver = "newton",
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     """Solve the mirror plane at radius r and return the full electrical
     period.
@@ -582,7 +601,7 @@ def solve_axial_multiplane(
     maxh_fraction: float = 0.1,
     n_theta: int = 720,
     nonlinear: bool = False,
-    nonlinear_solver: str = "newton",
+    nonlinear_solver: NonlinearSolver = "newton",
 ) -> dict[str, Any]:
     """Multi-plane quasi-3D solve: K mirror planes, midpoint rule.
 
@@ -720,8 +739,8 @@ def prepare_fem_axial(motor: Motor, n_planes: int = 3,
     open-circuit model and j_s is not in the model's hash_fields, so
     accepting it would alias distinct armature loadings to one run ID.
     """
-    _reject_induction(motor, "fem_axial")
-    geo = _require_axial_geometry(motor, "fem_axial")
+    reject_induction(motor, "fem_axial")
+    geo = require_axial_geometry(motor, "fem_axial")
     if motor.B_rem is None:
         raise ValueError(
             f"Motor '{motor.name}': fem_axial needs an explicit "
@@ -742,3 +761,55 @@ def prepare_fem_axial(motor: Motor, n_planes: int = 3,
         alpha_p=motor.alpha_p,
         n_planes=n_planes,
     )
+
+
+def run_fem_axial(config: RunConfig) -> dict[str, Any]:
+    from phasesweep.solver_params import backemf_from_flux, backemf_source, check_nyquist, n_eff
+    from phasesweep.solvers.analytical_axial import GAP_LINKAGE
+    from phasesweep.solvers.harmonics import compute_thd, harmonics_1sided
+
+    params = prepare_fem_axial(config.motor, n_planes=config.n_planes,
+                               j_s=config.j_s)
+    geo = params.geometry
+    n_p = params.n_p
+    check_nyquist(config.n_theta, n_p, series=True)
+
+    out = solve_axial_multiplane(
+        geo, n_p, params.B_rem, params.mu_r_pm, params.mu_r_fe,
+        params.alpha_p,
+        n_planes=params.n_planes,
+        maxh_fraction=config.maxh_fraction,
+        n_theta=config.n_theta,
+        nonlinear=config.nonlinear,
+        nonlinear_solver=config.nonlinear_solver,
+    )
+
+    theta = out["theta_list"]
+    B_z = out["B_z_list"]
+    amps = harmonics_1sided(B_z)
+    thd_pct = compute_thd(amps, n_p)
+
+    m = config.motor
+    flux_linkage_peak = None
+    if m.N is not None and m.k_w is not None and m.coils_series is not None:
+        flux_linkage_peak = float(
+            GAP_LINKAGE[geo.variant]
+            * out["k_sigma_edge"]
+            * 2.0 * n_eff(m) * m.k_w * out["S"] / n_p
+        )
+
+    backemf_fundamental = backemf_from_flux(m, flux_linkage_peak)
+
+    return {
+        "theta_list": theta.tolist(),
+        "B_r_list": B_z.tolist(),
+        "fundamental": float(out["fundamental"]),
+        "peak_Br": float(out["peak"]),
+        "thd_pct": thd_pct,
+        "backemf_fundamental": backemf_fundamental,
+        "backemf_source": backemf_source(m, backemf_fundamental),
+        "flux_linkage_peak": flux_linkage_peak,
+        "k_sigma_edge": float(out["k_sigma_edge"]),
+        "plane_r_list": out["plane_r_list"],
+        "plane_B1_list": out["plane_B1_list"],
+    }

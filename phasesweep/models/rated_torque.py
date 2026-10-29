@@ -6,15 +6,45 @@ saliency signs), with k_T * I_rated fallback for non-salient.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from math import asin, cos, degrees, sin, sqrt
+from math import asin, cos, degrees, pi, sin, sqrt
 from typing import TYPE_CHECKING, Any
 
-from phasesweep.solver_params import _reject_induction, _resolve_psi_f, _salient_pair
+import numpy as np
+
+from phasesweep.models.flux_map import (
+    cold_psi_f,
+    derated_flux_map,
+    flux_map_torque,
+    make_flux_map_interpolators,
+    map_covers,
+)
+from phasesweep.solver_params import (
+    derate_motor,
+    reject_induction,
+    resolve_psi_f,
+    salient_pair,
+)
 
 if TYPE_CHECKING:
-    from phasesweep.machines.motor import Motor
+    from phasesweep.machines.motor import FluxMap, Motor
     from phasesweep.sweep_types import RunConfig
+
+__all__ = [
+    "RatedTorqueParams",
+    "StallTorqueParams",
+    "magnet_torque_constant",
+    "mtpa_curve",
+    "mtpa_gamma",
+    "mtpa_numeric",
+    "mtpa_torque",
+    "prepare_rated_torque",
+    "prepare_stall_torque",
+    "resolve_psi_f_or_map",
+    "run_rated_torque",
+    "run_stall_torque",
+]
 
 
 def magnet_torque_constant(n_p: int, psi_f: float) -> float:
@@ -83,20 +113,66 @@ def mtpa_curve(n_p: int, psi_f: float, L_d: float, L_q: float,
 _CURVE_KEYS = ("I_curve", "gamma_curve_deg", "angle_d_curve_deg", "tau_curve")
 
 
+def mtpa_numeric(
+    n_p: int, flux_map: FluxMap, I_s: float, n_pts: int = 72,
+) -> tuple[float, float, float] | None:
+    """Numeric MTPA on the flux-linkage surface: sweep the current angle
+    gamma from 0 to π/2 (i_d = -I_s sin γ, i_q = I_s cos γ) and return
+    (tau_max, i_d_opt, i_q_opt). Only gamma values whose (i_d, i_q) lies
+    within the tabulated grid are evaluated; returns None when no feasible
+    point exists (caller falls back to the analytical path).
+    """
+    if I_s <= 0:
+        return 0.0, 0.0, 0.0
+    psi_d_interp, psi_q_interp = make_flux_map_interpolators(flux_map)
+    gamma = np.linspace(0.0, pi / 2, n_pts)
+    i_d = -I_s * np.sin(gamma)
+    i_q = I_s * np.cos(gamma)
+    feasible = (
+        (i_d >= flux_map.i_d_A[0]) & (i_d <= flux_map.i_d_A[-1])
+        & (i_q >= flux_map.i_q_A[0]) & (i_q <= flux_map.i_q_A[-1])
+    )
+    if not feasible.any():
+        return None
+    i_d_f, i_q_f = i_d[feasible], i_q[feasible]
+    tau = np.asarray(flux_map_torque(n_p, psi_d_interp, psi_q_interp, i_d_f, i_q_f))
+    k = int(np.argmax(tau))
+    return float(tau[k]), float(i_d_f[k]), float(i_q_f[k])
+
+
 def _mtpa_result(
     n_p: int,
     psi_f: float,
     I_s: float,
     L_d: float | None,
     L_q: float | None,
+    flux_map: FluxMap | None = None,
 ) -> dict[str, Any]:
     """Shared MTPA computation at a given current magnitude.
 
     Returns tau, k_T, k_T_effective (= tau / I_s, folds in reluctance
     torque), gamma_opt_deg (< 0 for reverse saliency, magnetizing i_d),
-    and curve data.
+    mtpa_source ("flux_map" | "analytical"), and curve data. With a
+    flux_map whose grid covers the current circle (flux_map.map_covers)
+    the optimum comes from the tabulated surface (mtpa_numeric); past the
+    grid the search would pin to its edge, so the analytical path runs.
+    k_T stays the zero-current magnet constant either way.
     """
     k_T = magnet_torque_constant(n_p, psi_f)
+
+    if flux_map is not None and map_covers(flux_map, I_s):
+        result_fm = mtpa_numeric(n_p, flux_map, I_s)
+        if result_fm is not None:
+            tau, i_d_opt, i_q_opt = result_fm
+            return {
+                "tau": tau,
+                "k_T": k_T,
+                "k_T_effective": tau / I_s,
+                "gamma_opt_deg": degrees(np.arctan2(-i_d_opt, i_q_opt)),
+                "i_d_opt": i_d_opt,
+                "i_q_opt": i_q_opt,
+                "mtpa_source": "flux_map",
+            }
 
     if L_d is None or L_q is None or L_q == L_d:
         if psi_f == 0.0:
@@ -114,12 +190,19 @@ def _mtpa_result(
         g = mtpa_gamma(psi_f, Ld, Lq, I_s)
         tau = mtpa_torque(n_p, psi_f, Ld, Lq, I_s, g)
         gamma_opt = degrees(g)
+        # MTPA optimum can never lose to gamma=0 (pure q-axis current)
+        tau_q0 = k_T * I_s
+        if tau < tau_q0 * (1 - 1e-9):
+            raise RuntimeError(
+                f"MTPA solver regression: tau={tau:.6e} < k_T*I_s={tau_q0:.6e}"
+            )
 
     result: dict[str, Any] = {
         "tau": tau,
         "k_T": k_T,
         "k_T_effective": tau / I_s,
         "gamma_opt_deg": gamma_opt,
+        "mtpa_source": "analytical",
     }
 
     if Ld > 0 and Lq > 0:
@@ -132,7 +215,8 @@ def run_rated_torque(config: RunConfig) -> dict[str, Any]:
     """Rated torque computation. Returns scalars + curves."""
 
     p = prepare_rated_torque(config.motor)
-    r = _mtpa_result(p.n_p, p.psi_f, p.I_rated, p.L_d, p.L_q)
+    r = _mtpa_result(p.n_p, p.psi_f, p.I_rated, p.L_d, p.L_q,
+                     derated_flux_map(config.motor))
 
     return {
         "tau_mtpa": r["tau"],
@@ -140,6 +224,7 @@ def run_rated_torque(config: RunConfig) -> dict[str, Any]:
         "k_T_rms": r["k_T"] * sqrt(2),
         "k_T_effective": r["k_T_effective"],
         "gamma_opt_deg": r["gamma_opt_deg"],
+        "mtpa_source": r["mtpa_source"],
         **{k: r[k] for k in _CURVE_KEYS if k in r},
     }
 
@@ -152,7 +237,8 @@ def run_stall_torque(config: RunConfig) -> dict[str, Any]:
     """
 
     p = prepare_stall_torque(config.motor)
-    r = _mtpa_result(p.n_p, p.psi_f, p.I_stall, p.L_d, p.L_q)
+    flux_map = derated_flux_map(config.motor)
+    r = _mtpa_result(p.n_p, p.psi_f, p.I_stall, p.L_d, p.L_q, flux_map)
 
     saturation_ratio = None
     saturation_warning = False
@@ -168,15 +254,17 @@ def run_stall_torque(config: RunConfig) -> dict[str, Any]:
         "k_T": r["k_T"],
         "k_T_effective": r["k_T_effective"],
         "gamma_opt_deg": r["gamma_opt_deg"],
+        "mtpa_source": r["mtpa_source"],
         "saturation_ratio": saturation_ratio,
         "saturation_warning": saturation_warning,
         **{k: r[k] for k in _CURVE_KEYS if k in r},
     }
 
     if p.I_stall_em is not None:
-        r_em = _mtpa_result(p.n_p, p.psi_f, p.I_stall_em, p.L_d, p.L_q)
+        r_em = _mtpa_result(p.n_p, p.psi_f, p.I_stall_em, p.L_d, p.L_q, flux_map)
         result["tau_stall_electromagnetic"] = r_em["tau"]
         result["I_stall_electromagnetic"] = p.I_stall_em
+        result["mtpa_source_electromagnetic"] = r_em["mtpa_source"]
 
     return result
 
@@ -195,7 +283,17 @@ class RatedTorqueParams:
     L_d: float | None = None
     L_q: float | None = None
 
+    @property
+    def is_reluctance(self) -> bool:
+        return self.psi_f == 0.0
+
     def __post_init__(self) -> None:
+        # NaN passes every inequality below, so finiteness comes first.
+        non_finite = [f for f in ('psi_f', 'I_rated', 'L_d', 'L_q')
+                      if getattr(self, f) is not None
+                      and not math.isfinite(getattr(self, f))]
+        if non_finite:
+            raise ValueError(f"rated_torque got non-finite {', '.join(non_finite)}")
         if self.n_p < 2:
             raise ValueError(f"n_p must be >= 2, got {self.n_p}")
         if self.psi_f < 0:
@@ -225,7 +323,17 @@ class StallTorqueParams:
     L_d: float | None = None
     L_q: float | None = None
 
+    @property
+    def is_reluctance(self) -> bool:
+        return self.psi_f == 0.0
+
     def __post_init__(self) -> None:
+        # NaN passes every inequality below, so finiteness comes first.
+        non_finite = [f for f in ('psi_f', 'I_stall', 'I_stall_em', 'L_d', 'L_q')
+                      if getattr(self, f) is not None
+                      and not math.isfinite(getattr(self, f))]
+        if non_finite:
+            raise ValueError(f"stall_torque got non-finite {', '.join(non_finite)}")
         if self.n_p < 2:
             raise ValueError(f"n_p must be >= 2, got {self.n_p}")
         if self.psi_f < 0:
@@ -240,17 +348,26 @@ class StallTorqueParams:
             raise ValueError(f"L_q must be > 0, got {self.L_q}")
 
 
+def resolve_psi_f_or_map(motor: Motor) -> float:
+    """Cold (20 °C) psi_f from the motor, else ψ_d(0, 0) of its flux map
+    referred to 20 °C (flux_map.cold_psi_f)."""
+    if motor.psi_f is None and motor.flux_map is not None:
+        return cold_psi_f(motor.flux_map, motor.alpha_Br)
+    return resolve_psi_f(motor)
+
+
 def prepare_rated_torque(motor: Motor) -> RatedTorqueParams:
-    """Derive, validate, and extract rated torque params from a Motor."""
-    _reject_induction(motor, "rated_torque")
-    psi_f = _resolve_psi_f(motor)
+    """Derive, validate, and extract rated torque params from a Motor.
+    psi_f is at magnet_temp when set (solver_params.derate)."""
+    reject_induction(motor, "rated_torque")
+    psi_f = derate_motor(motor, None, resolve_psi_f_or_map(motor))[1]
 
     if motor.I_rated is None:
         raise ValueError(
             f"Motor '{motor.name}': rated_torque needs I_rated"
         )
 
-    L_d, L_q = _salient_pair(motor)
+    L_d, L_q = salient_pair(motor)
 
     return RatedTorqueParams(
         n_p=motor.n_p,
@@ -265,17 +382,18 @@ def prepare_stall_torque(motor: Motor) -> StallTorqueParams:
     """Derive, validate, and extract stall torque params from a Motor.
 
     I_stall = I_LIMIT (or MAX_I_S when I_LIMIT is not set).
-    I_stall_em = U_DC / (sqrt(3) * R_s) — electromagnetic stall (no drive limit).
+    I_stall_em = U_DC / (sqrt(3) * R_s) — electromagnetic stall (no drive
+    limit), with R_s at winding_temp_limit and psi_f at magnet_temp when set.
     """
     from math import sqrt
 
-    _reject_induction(motor, "stall_torque")
-    psi_f = _resolve_psi_f(motor)
-
+    reject_induction(motor, "stall_torque")
     if motor.R_s is None:
         raise ValueError(
             f"Motor '{motor.name}': stall_torque needs R_s"
         )
+    R_s, psi_f = derate_motor(motor, motor.R_s, resolve_psi_f_or_map(motor))
+    assert R_s is not None
 
     drive = motor.drive
     if drive.I_LIMIT is None and drive.MAX_I_S is None:
@@ -289,9 +407,9 @@ def prepare_stall_torque(motor: Motor) -> StallTorqueParams:
         raise ValueError(
             f"Motor '{motor.name}': stall_torque needs [drive] U_DC"
         )
-    I_stall_em = drive.U_DC / (sqrt(3) * motor.R_s) if motor.R_s > 0 else None
+    I_stall_em = drive.U_DC / (sqrt(3) * R_s) if R_s > 0 else None
 
-    L_d, L_q = _salient_pair(motor)
+    L_d, L_q = salient_pair(motor)
 
     return StallTorqueParams(
         n_p=motor.n_p,

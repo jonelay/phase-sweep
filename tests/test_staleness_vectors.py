@@ -1,18 +1,19 @@
 """Test staleness and attachment rules against portable test vectors.
 
-Vectors live in tests/staleness_vectors.json (docs/result-store-contract.md).
+Vectors ship with the vendored sweepstore
+(`phasesweep._sweepstore.load_vectors()`); the contract is
+docs/result-store-contract.md.
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from phasesweep.result_store import _attached, version_current
+from phasesweep._sweepstore import attached, load_vectors
+from phasesweep.result_store import version_current
 
-VECTORS = json.loads((Path(__file__).parent / "staleness_vectors.json").read_text())
+VECTORS = load_vectors()
 
 
 class _FakeModelInfo:
@@ -56,7 +57,7 @@ def test_staleness(case):
     ids=[c["label"] for c in VECTORS["attachment"]["cases"]],
 )
 def test_attachment(case):
-    result = _attached(
+    result = attached(
         case["source"],
         case["record_config_id"],
         case["record_name"],

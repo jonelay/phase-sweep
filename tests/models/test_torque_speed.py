@@ -1,5 +1,6 @@
 """Tests for the torque-speed envelope model."""
 
+import dataclasses
 from itertools import pairwise
 from math import pi, sqrt
 
@@ -7,7 +8,7 @@ import numpy as np
 import pytest
 
 import phasesweep.models.torque_speed as ts
-from phasesweep.machines.motor import DriveParams
+from phasesweep.machines.motor import DriveParams, FluxMap
 from phasesweep.models.rated_torque import mtpa_gamma, mtpa_torque
 from phasesweep.models.torque_speed import (
     TorqueSpeedParams,
@@ -16,6 +17,7 @@ from phasesweep.models.torque_speed import (
     envelope_at_speed,
     envelope_curve,
     envelope_curve_batch,
+    envelope_curve_map,
     max_speed,
     prepare_torque_speed,
     run_torque_speed,
@@ -221,10 +223,68 @@ class TestRunner:
         rc = RunConfig(motor=make_motor(), model="torque_speed")
         r = run_torque_speed(rc)
         for key in ("speed_curve", "tau_curve_peak", "base_speed_peak",
-                    "max_speed_peak", "p_max_peak", "u_max", "I_env_peak"):
+                    "max_speed_peak", "p_max_peak", "u_max", "I_env_peak",
+                    "i_d_curve_peak", "i_q_curve_peak"):
             assert key in r
         assert len(r["speed_curve"]) == len(r["tau_curve_peak"])
         assert "tau_curve_cont" not in r  # no I_rated on make_motor()
+        assert "i_d_curve_cont" not in r
+
+    @staticmethod
+    def _check_current_curves(r, suffix, I_env):
+        """The current curves reproduce tau and sit inside the current
+        circle on every speed point; the MTPA point below base speed
+        carries the full envelope current."""
+        i_d = np.asarray(r[f"i_d_curve_{suffix}"])
+        i_q = np.asarray(r[f"i_q_curve_{suffix}"])
+        tau = np.asarray(r[f"tau_curve_{suffix}"])
+        assert i_d.shape == i_q.shape == tau.shape
+        assert np.all(np.hypot(i_d, i_q) <= I_env * (1 + 1e-9))
+        assert np.hypot(i_d[1], i_q[1]) == pytest.approx(I_env, rel=1e-9)
+        assert np.all(i_q >= 0.0) and np.all(i_d <= 1e-12)
+
+    def test_current_curves_serial_and_batch_paths(self):
+        m = make_motor(I_rated=10.0)
+        rc = RunConfig(motor=m, model="torque_speed")
+        serial = run_torque_speed(rc)
+        n_p, psi_f, L_d, L_q = m.n_p, m.psi_f, m.L_d, m.L_q
+        for suffix, I_env in (("peak", 20.0), ("cont", 10.0)):
+            self._check_current_curves(serial, suffix, I_env)
+            i_d = np.asarray(serial[f"i_d_curve_{suffix}"])
+            i_q = np.asarray(serial[f"i_q_curve_{suffix}"])
+            tau_from_i = 1.5 * n_p * (psi_f + (L_d - L_q) * i_d) * i_q
+            np.testing.assert_allclose(
+                tau_from_i, serial[f"tau_curve_{suffix}"], rtol=1e-9, atol=1e-12)
+        [batch] = run_torque_speed_batch([rc])
+        assert not isinstance(batch, Exception)
+        for key in ("i_d_curve_peak", "i_q_curve_peak",
+                    "i_d_curve_cont", "i_q_curve_cont"):
+            assert batch[key] == serial[key]
+
+    def test_current_curves_map_path(self):
+        n_p, psi_f, R_s, L_d, L_q = 4, 0.1, 0.05, 2e-3, 4e-3
+        I_max = 45.0
+        fm = _make_linear_flux_map(psi_f, L_d, L_q, I_max)
+        m = make_motor(n_p=n_p, psi_f=psi_f, R_s=R_s, L_d=L_d, L_q=L_q,
+                       flux_map=fm,
+                       drive=DriveParams(U_DC=100.0 * sqrt(3), MAX_I_S=I_max))
+        r = run_torque_speed(RunConfig(motor=m, model="torque_speed"))
+        assert r["envelope_source"] == "flux_map"
+        self._check_current_curves(r, "peak", I_max)
+
+    def test_current_curves_batch_mixed_cont_alignment(self):
+        """The continuous batch is compacted to the designs with I_rated;
+        curves must land on the right design."""
+        cfgs = [RunConfig(motor=m, model="torque_speed") for m in (
+            make_motor(I_rated=10.0, L_d=2e-3, L_q=4e-3),
+            make_motor(I_rated=None, L_d=1e-3, L_q=1e-3),
+            make_motor(I_rated=5.0, L_d=3e-3, L_q=2e-3))]
+        batch = run_torque_speed_batch(cfgs)
+        for rc, b in zip(cfgs, batch):
+            serial = run_torque_speed(rc)
+            assert set(serial) == set(b)
+            for key in ("i_d_curve_peak", "i_q_curve_peak", "i_d_curve_cont", "i_q_curve_cont"):
+                assert b.get(key) == serial.get(key), key
 
     def test_cont_envelope_with_i_rated(self):
         rc = RunConfig(motor=make_motor(I_rated=10.0), model="torque_speed")
@@ -354,17 +414,28 @@ class TestBatch:
         assert b == serial
 
     def test_run_batch_catalog_motors(self):
+        """Batch and serial agree per design, including the per-design
+        failure contract: the 0450 VA trips the hot-R_s resistive-drop
+        guard (test_etel_0450_peak_current_unreachable_hot) and must land
+        in its slot as the same ValueError."""
         from phasesweep.machines.configs import load_motor
         from tests.conftest import REPO_ROOT
         rcs = [RunConfig(motor=load_motor(REPO_ROOT / toml),
                          model="torque_speed")
                for toml, *_ in _ETEL_ENVELOPE_ANCHORS]
         batch = run_torque_speed_batch(rcs)
+        n_failed = 0
         for b, rc in zip(batch, rcs):
-            s = run_torque_speed(rc)
+            try:
+                s = run_torque_speed(rc)
+            except ValueError as e:
+                assert isinstance(b, ValueError) and str(b) == str(e)
+                n_failed += 1
+                continue
             assert set(b) == set(s)
             for key in s:
                 assert b[key] == s[key]
+        assert n_failed == 1
 
     def test_bad_design_mid_batch(self):
         good0 = RunConfig(motor=make_motor(), model="torque_speed")
@@ -461,6 +532,50 @@ def test_etel_base_speed_at_rated_current(toml, in_rms, nb, nm, tn, nb_ratio):
     nb_model = base_speed(*args, sqrt(2) * in_rms, u_max) * _RPM
     assert nb_model < nb  # one-sided at rated current, all five frames
     assert nb_model / nb == pytest.approx(nb_ratio, abs=0.005)
+
+
+def test_etel_run_path_derates_r_s_to_the_coil_limit():
+    """The registry path runs the envelope at the ETEL θmax (130 °C) R_s,
+    +43% over the catalog value; the pure-function anchors above stay on
+    the cold constants deliberately (pinned nb ratios). The hot base
+    speed at In sits 3-9% below the cold one across the four frames that
+    clear the resistive-drop guard — a bracket on where ETEL's nb is
+    quoted, not a re-pin."""
+    from phasesweep.machines.configs import load_motor
+    from phasesweep.models.torque_speed import (
+        cold_torque_speed_params,
+        prepare_torque_speed,
+    )
+    from tests.conftest import REPO_ROOT
+    for toml, *_ in _ETEL_ENVELOPE_ANCHORS[:4]:
+        m = load_motor(REPO_ROOT / toml)
+        cold, hot = cold_torque_speed_params(m), prepare_torque_speed(m)
+        assert hot.R_s == pytest.approx(cold.R_s * (1 + 0.00393 * 110.0))
+        assert hot.psi_f == cold.psi_f  # no magnet_temp on the sheets
+        nb_cold = base_speed(cold.n_p, cold.psi_f, cold.R_s, cold.L_d,
+                             cold.L_q, cold.I_cont, cold.U_max)
+        nb_hot = base_speed(hot.n_p, hot.psi_f, hot.R_s, hot.L_d, hot.L_q,
+                            hot.I_cont, hot.U_max)
+        assert 0.90 < nb_hot / nb_cold < 0.97
+
+
+def test_etel_0450_peak_current_unreachable_hot():
+    """Finding: at the 130 °C coil limit the TMB0450 VA resistive drop at
+    Ip (5.70 Ω × 61.9 A = 353 V) exceeds U_max = 600/√3 = 346 V, so the
+    hot envelope at the peak current has no feasible point at any speed
+    and prepare_torque_speed refuses (cold: 246 V, fine). The sheet's
+    Ip is a short-duty rating that a winding starting below θmax can
+    reach; the worst-case steady-state R_s convention
+    cannot. Pinned so the convention's edge stays visible."""
+    from phasesweep.machines.configs import load_motor
+    from phasesweep.models.torque_speed import prepare_torque_speed
+    from tests.conftest import REPO_ROOT
+    m = load_motor(REPO_ROOT / _ETEL_ENVELOPE_ANCHORS[4][0])
+    assert m.winding_temp_limit == 130.0
+    with pytest.raises(ValueError, match="resistive drop"):
+        prepare_torque_speed(m)
+    cold = dataclasses.replace(m, winding_temp_limit=None)
+    assert prepare_torque_speed(cold).R_s == m.R_s
 
 
 @pytest.mark.parametrize("toml,in_rms,nb,nm,tn,nb_ratio",
@@ -1020,6 +1135,113 @@ class TestPriusEnvelope:
 
 
 # ---------------------------------------------------------------------------
+# BMW i3 IPM — first EV traction motor envelope anchor
+# ---------------------------------------------------------------------------
+#
+# 12-pole, 72-slot V-shape IPM, 125 kW / 250 Nm published ratings.
+# Circuit parameters from Gierczynski & Grzesiak (Energies 2021) Ansys
+# Maxwell 2D FEM model — L_d/L_q are SECANT values at the peak-torque
+# operating point (i_d=-401 A, i_q=399 A), heavily saturated.
+#
+# ORNL dyno test at 355 Vdc, 375 Arms (Burress, DOE VTO AMR EDT087,
+# June 2017, slide 16). EETT Roadmap Appendix C (Oct 2017) publishes
+# motor/inverter/combined efficiency maps with the 125 kW power boundary.
+#
+# Characteristic current (612 A) slightly exceeds I_peak (566 A):
+# i_ch/I_peak = 1.08 — bounded but very wide CPSR. Contrast with the
+# Prius (i_ch/I_peak = 0.28, infinite CPSR via deep flux reversal).
+
+
+class TestBmwI3Envelope:
+    TOML = "motors/bmw_i3.toml"
+    ORNL_I_RMS = 375.0    # A rms (Burress 2017 slide 16)
+    ORNL_U_DC = 355.0     # V (Burress 2017 slide 16)
+
+    def test_stall_torque_gte_published(self):
+        """Model MTPA at MAX_I_S (565.7 A peak) should reach or exceed
+        the published 250 Nm peak torque."""
+        m, args, u_max = _envelope_args(self.TOML)
+        gamma = mtpa_gamma(m.psi_f, m.L_d, m.L_q, m.drive.MAX_I_S)
+        tau = mtpa_torque(m.n_p, m.psi_f, m.L_d, m.L_q,
+                          m.drive.MAX_I_S, gamma)
+        assert tau >= 250.0
+        assert tau == pytest.approx(279.8, abs=1.0)
+
+    def test_stall_torque_at_ornl_current(self):
+        """MTPA at ORNL test current (375 Arms = 530.3 A peak): 257.3 Nm,
+        +2.9% vs published 250 Nm. Tight for a linear model on a machine
+        whose Gierczynski paper shows 15-20% inductance variation across
+        the operating range."""
+        m, args, u_max = _envelope_args(self.TOML)
+        I_ornl = self.ORNL_I_RMS * sqrt(2)
+        gamma = mtpa_gamma(m.psi_f, m.L_d, m.L_q, I_ornl)
+        tau = mtpa_torque(m.n_p, m.psi_f, m.L_d, m.L_q, I_ornl, gamma)
+        assert tau >= 250.0
+        assert tau == pytest.approx(257.3, abs=1.0)
+
+    def test_characteristic_current_near_crossover(self):
+        """i_ch/I_peak = 1.08: characteristic current just exceeds peak
+        current. The motor cannot enter deep flux reversal (unlike the
+        Prius), but the CPSR is still wide enough for EV traction."""
+        m, _, _ = _envelope_args(self.TOML)
+        i_ch = m.psi_f / m.L_d
+        assert i_ch / m.drive.MAX_I_S == pytest.approx(1.082, abs=0.005)
+
+    def test_base_speed_at_peak_current(self):
+        """Base speed at MAX_I_S: ~4360 rpm. The TOML's approximate base
+        speed from the efficiency map knee is 4800 rpm; the ~9% gap is
+        consistent with the saturation caveat (actual L_d at lower
+        current exceeds the secant 71.2 µH, raising the back-EMF)."""
+        m, args, u_max = _envelope_args(self.TOML)
+        nb = base_speed(*args, m.drive.MAX_I_S, u_max) * _RPM
+        assert nb == pytest.approx(4360, abs=20)
+
+    def test_base_speed_at_ornl_current(self):
+        """Base speed at ORNL test current (530.3 A peak): ~4553 rpm,
+        closer to the published ~4800 rpm efficiency-map knee."""
+        _, args, u_max = _envelope_args(self.TOML)
+        I_ornl = self.ORNL_I_RMS * sqrt(2)
+        nb = base_speed(*args, I_ornl, u_max) * _RPM
+        assert nb == pytest.approx(4553, abs=20)
+
+    def test_bounded_cpsr(self):
+        """i_ch > I_peak → finite max speed, but far above the 11400 rpm
+        system limit. The drive never reaches the theoretical voltage
+        cutoff."""
+        m, args, u_max = _envelope_args(self.TOML)
+        ms = max_speed(*args, m.drive.MAX_I_S, u_max)
+        assert ms is not None
+        ms_rpm = ms * _RPM
+        assert ms_rpm > 50000
+        assert ms_rpm == pytest.approx(98180, abs=500)
+
+    def test_peak_power_gte_published(self):
+        """Model peak power must exceed the published 125 kW."""
+        m, _, _ = _envelope_args(self.TOML)
+        cfg = RunConfig(motor=m, model="torque_speed")
+        result = MODEL_REGISTRY["torque_speed"].fn(cfg)
+        assert result["p_max_peak"] / 1000 >= 125.0
+
+    @pytest.mark.parametrize("rpm", [5000, 6000, 7000, 8000, 9000,
+                                     10000, 11000])
+    def test_envelope_above_125kw_at_ornl_current(self, rpm):
+        """At every speed from the FW region to the system max, the
+        model envelope at ORNL test conditions must exceed the 125 kW
+        power hyperbola. ORNL measured efficiency map data up to the
+        125 kW boundary (EETT Roadmap Appendix C, Figure C-3), so the
+        model's voltage-limited envelope must encompass that region."""
+        _, args, u_max = _envelope_args(self.TOML)
+        I_ornl = self.ORNL_I_RMS * sqrt(2)
+        w = rpm / _RPM
+        tau_model, _, _ = envelope_at_speed(*args, I_ornl, u_max, w)
+        tau_125kw = 125_000.0 / w
+        assert tau_model >= tau_125kw, (
+            f"At {rpm} rpm: model {tau_model:.1f} Nm < "
+            f"125 kW requires {tau_125kw:.1f} Nm"
+        )
+
+
+# ---------------------------------------------------------------------------
 # dq energy-balance invariant
 # ---------------------------------------------------------------------------
 
@@ -1050,3 +1272,204 @@ def test_envelope_energy_balance_and_feasibility():
             - 1.5 * R_s * (i_d ** 2 + i_q ** 2))
     resid = np.abs(p_em - tau * w) / np.maximum(np.abs(tau * w), 1.0)
     assert np.max(resid[live]) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Flux-map envelope (Phase 4: map-aware torque_speed)
+# ---------------------------------------------------------------------------
+
+def _make_linear_flux_map(psi_f, L_d, L_q, I_max, n_pts=7):
+    """Build a FluxMap that exactly reproduces constant-L magnetics."""
+    i_d_A = tuple(float(x) for x in np.linspace(-I_max, 0, n_pts))
+    i_q_A = tuple(float(x) for x in np.linspace(0, I_max, n_pts))
+    psi_d = tuple(
+        tuple(psi_f + L_d * id_val for id_val in i_d_A)
+        for _ in i_q_A
+    )
+    psi_q = tuple(
+        tuple(L_q * iq_val for _ in i_d_A)
+        for iq_val in i_q_A
+    )
+    return FluxMap(i_d_A=i_d_A, i_q_A=i_q_A,
+                   psi_d_Wb=psi_d, psi_q_Wb=psi_q)
+
+
+class TestFluxMapEnvelope:
+
+    def test_spm_linear_map_matches_analytic(self):
+        """Cubic interpolation of a linear surface is exact: a FluxMap
+        built from constant L_d = L_q must match the analytic envelope
+        to high precision. The MTPA angle is zero (SPM), so mtpa_numeric
+        reproduces the exact result."""
+        n_p, psi_f, R_s, L_d, L_q = _NP, _PSI, 0.05, _L, _L
+        I_max, U_max = _I, _U
+        fm = _make_linear_flux_map(psi_f, L_d, L_q, I_max)
+
+        w_end = max_speed(n_p, psi_f, R_s, L_d, L_q, I_max, U_max)
+        assert w_end is not None
+        w = np.linspace(0, w_end, ts.N_SPEED_PTS)
+
+        tau_a, id_a, iq_a = envelope_curve(n_p, psi_f, R_s, L_d, L_q,
+                                           I_max, U_max, w)
+        tau_m, id_m, iq_m, src = envelope_curve_map(n_p, psi_f, R_s, L_d,
+                                                    L_q, I_max, U_max, fm, w)
+        assert src == "flux_map"
+        np.testing.assert_allclose(tau_m, tau_a, atol=1e-6)
+
+    def test_salient_linear_map_close_to_analytic(self):
+        """With saliency, mtpa_numeric's 72-point sweep introduces a
+        gamma discretization error (~0.02 rad → ~2.5% MTPA torque gap).
+        The FW region (above base speed) should still be very close;
+        the MTPA region carries the discretization error."""
+        n_p, psi_f, R_s, L_d, L_q = 4, 0.1, 0.05, 2e-3, 4e-3
+        I_max, U_max = 45.0, 100.0
+        fm = _make_linear_flux_map(psi_f, L_d, L_q, I_max)
+
+        w_end = max_speed(n_p, psi_f, R_s, L_d, L_q, I_max, U_max)
+        assert w_end is not None
+        w = np.linspace(0, w_end, ts.N_SPEED_PTS)
+
+        tau_a, _, _ = envelope_curve(n_p, psi_f, R_s, L_d, L_q,
+                                     I_max, U_max, w)
+        tau_m, _, _, src = envelope_curve_map(n_p, psi_f, R_s, L_d, L_q,
+                                             I_max, U_max, fm, w)
+        assert src == "flux_map"
+        scale = max(tau_a)
+        err = np.max(np.abs(tau_m - tau_a)) / scale
+        assert err < 0.03
+
+    def test_coverage_fallback_current_exceeds_grid(self):
+        """When I_max exceeds the map grid, the map path falls back to
+        the analytical envelope."""
+        n_p, psi_f, R_s, L_d, L_q = _NP, _PSI, 0.0, _L, _L
+        I_max, U_max = _I, _U
+        fm = _make_linear_flux_map(psi_f, L_d, L_q, I_max * 0.8)
+        w = np.linspace(0, 100, 10)
+        _, _, _, src = envelope_curve_map(n_p, psi_f, R_s, L_d, L_q,
+                                         I_max, U_max, fm, w)
+        assert src == "analytical"
+
+    def test_coverage_fallback_iq_lower_bound_nonzero(self):
+        """When the map's i_q grid doesn't start at 0, the bisection
+        would evaluate below the grid bound — fall back to analytical."""
+        n_p, psi_f, R_s, L_d, L_q = _NP, _PSI, 0.0, _L, _L
+        I_max, U_max = _I, _U
+        i_d_A = tuple(float(x) for x in np.linspace(-I_max, 0, 7))
+        i_q_A = tuple(float(x) for x in np.linspace(5.0, I_max, 7))
+        psi_d = tuple(
+            tuple(psi_f + L_d * id_val for id_val in i_d_A)
+            for _ in i_q_A
+        )
+        psi_q = tuple(
+            tuple(L_q * iq_val for _ in i_d_A)
+            for iq_val in i_q_A
+        )
+        fm = FluxMap(i_d_A=i_d_A, i_q_A=i_q_A,
+                     psi_d_Wb=psi_d, psi_q_Wb=psi_q)
+        w = np.linspace(0, 100, 10)
+        _, _, _, src = envelope_curve_map(n_p, psi_f, R_s, L_d, L_q,
+                                         I_max, U_max, fm, w)
+        assert src == "analytical"
+
+    def test_envelope_source_key_present(self):
+        rc = RunConfig(motor=make_motor(), model="torque_speed")
+        r = run_torque_speed(rc)
+        assert r["envelope_source"] == "analytical"
+
+    def test_map_feasibility_and_current_limit(self):
+        """Every map-path envelope point must respect the current and
+        voltage limits and produce non-negative torque."""
+        n_p, psi_f, R_s, L_d, L_q = _NP, _PSI, 0.05, _L, 2e-3
+        I_max, U_max = _I, _U
+        fm = _make_linear_flux_map(psi_f, L_d, L_q, I_max)
+
+        w_b = base_speed(n_p, psi_f, R_s, L_d, L_q, I_max, U_max)
+        w = np.linspace(0.0, 3.0 * w_b, 30)
+        tau, i_d, i_q, _ = envelope_curve_map(n_p, psi_f, R_s, L_d, L_q,
+                                              I_max, U_max, fm, w)
+        assert np.all(tau >= 0)
+        assert np.all(np.hypot(i_d, i_q) <= I_max * (1 + 1e-6))
+
+    def test_map_batch_routes_serially(self):
+        """Motors with a flux map are routed through the serial path in
+        run_torque_speed_batch, matching run_torque_speed exactly."""
+        from phasesweep.machines.configs import load_motor
+        from tests.conftest import REPO_ROOT
+        m = load_motor(REPO_ROOT / "motors/bmw_i3.toml")
+        rc = RunConfig(motor=m, model="torque_speed")
+        serial = run_torque_speed(rc)
+        [batch] = run_torque_speed_batch([rc])
+        assert batch == serial
+
+    def test_mixed_batch_map_and_analytic(self):
+        """Batch with both map and non-map motors."""
+        from phasesweep.machines.configs import load_motor
+        from tests.conftest import REPO_ROOT
+        m_map = load_motor(REPO_ROOT / "motors/bmw_i3.toml")
+        m_analytic = make_motor()
+        rcs = [
+            RunConfig(motor=m_map, model="torque_speed"),
+            RunConfig(motor=m_analytic, model="torque_speed"),
+        ]
+        batch = run_torque_speed_batch(rcs)
+        assert batch[0]["envelope_source"] == "flux_map"
+        assert batch[1]["envelope_source"] == "analytical"
+        assert batch[0] == run_torque_speed(rcs[0])
+        assert batch[1] == run_torque_speed(rcs[1])
+
+
+# ---------------------------------------------------------------------------
+# BMW i3 — flux-map envelope pins (Phase 4)
+# ---------------------------------------------------------------------------
+
+class TestBmwI3MapEnvelope:
+    TOML = "motors/bmw_i3.toml"
+
+    def _run(self):
+        from phasesweep.machines.configs import load_motor
+        from tests.conftest import REPO_ROOT
+        m = load_motor(REPO_ROOT / self.TOML)
+        rc = RunConfig(motor=m, model="torque_speed")
+        return m, MODEL_REGISTRY["torque_speed"].fn(rc)
+
+    def test_uses_map_path(self):
+        _, r = self._run()
+        assert r["envelope_source"] == "flux_map"
+
+    def test_mtpa_torque_map(self):
+        """Map MTPA at MAX_I_S: 258 Nm, vs analytic 280 Nm.
+        The ~8% drop confirms the constant-parameter saturation error."""
+        _, r = self._run()
+        assert r["tau_curve_peak"][0] == pytest.approx(258.1, abs=1.0)
+
+    def test_base_speed_closer_to_published(self):
+        """Map base speed should be closer to the published ~4800 rpm
+        than the analytic 4360 rpm. The saturated flux linkages give
+        less back-EMF at the MTPA point than the secant inductances."""
+        _, r = self._run()
+        nb_rpm = r["base_speed_peak"] * _RPM
+        assert nb_rpm == pytest.approx(5475, abs=50)
+        assert 4800 < nb_rpm < 6000
+
+    def test_max_speed_finite_and_similar_to_analytic(self):
+        """At (-566, 0) the map's ψ_d ≈ 0.003 Wb (barely positive),
+        close to the linear psi_f - L_d*I = 0.0033 Wb, so the
+        map max speed (~99.5k rpm) is similar to the analytic (~98k)
+        — the saturation at this extreme point is mild."""
+        _, r = self._run()
+        ms_rpm = r["max_speed_peak"] * _RPM if r["max_speed_peak"] else None
+        assert ms_rpm is not None
+        assert ms_rpm == pytest.approx(99515, abs=500)
+        assert ms_rpm > 50000
+
+    def test_peak_power_gte_published(self):
+        """Map-path peak power must still exceed the published 125 kW."""
+        _, r = self._run()
+        assert r["p_max_peak"] / 1000 >= 125.0
+        assert r["p_max_peak"] / 1000 == pytest.approx(171.4, abs=5.0)
+
+    def test_envelope_monotone(self):
+        _, r = self._run()
+        taus = r["tau_curve_peak"]
+        for a, b in pairwise(taus):
+            assert b <= a * (1 + 1e-6)

@@ -30,7 +30,9 @@ import argparse
 import json
 import logging
 import math
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -38,8 +40,19 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 
 FAST_MODELS = ["analytical", "rated_torque", "stall_torque",
-               "thermal_duty", "torque_speed", "iron_loss"]
+               "thermal_duty", "torque_speed", "iron_loss", "operating_point",
+               "motor_thermal"]
 ALL_MODELS = [*FAST_MODELS, "fem"]
+
+# operating_point demand per motor name: (w_mech rad/s, tau_ref N.m).
+# Motors not listed skip the model (the demand is a deliberate choice).
+OPERATING_POINT_DEMAND: dict[str, tuple[float, float]] = {
+    "BMW i3 2016 IPM": (4800.0 * 2.0 * math.pi / 60.0, 125.0),
+}
+# motor_thermal: the same demand plus the coolant temperature (degC).
+MOTOR_THERMAL_COOLANT: dict[str, float] = {
+    "BMW i3 2016 IPM": 60.0,
+}
 
 
 def _purge_stale(output_dir: Path) -> int:
@@ -76,8 +89,7 @@ def _purge_stale(output_dir: Path) -> int:
 def _rewrite_store(output_dir: Path, kept: list[dict]) -> None:
     """Replace results.jsonl with `kept` (atomic rename) and rebuild the
     index from the survivors."""
-    from phasesweep.result_store import ResultStore, compute_run_id
-    from phasesweep.sweep_types import RunConfig
+    from phasesweep.sweep_types import RunConfig, compute_run_id
 
     tmp = output_dir / "results.jsonl.tmp"
     with open(tmp, "w") as f:
@@ -85,16 +97,24 @@ def _rewrite_store(output_dir: Path, kept: list[dict]) -> None:
             f.write(json.dumps(d, default=str) + "\n")
     tmp.replace(output_dir / "results.jsonl")
 
-    index = {}
+    index: dict[str, str] = {}
     for d in kept:
         try:
             rc = RunConfig.from_dict(d["config"])
             index[compute_run_id(rc)] = d.get("status", "ERROR")
         except (KeyError, ValueError, TypeError):
             pass
-    store = ResultStore(output_dir)
-    store._write_index(index)
-    store._index_cache = None
+    fd, tmp_idx = tempfile.mkstemp(dir=output_dir, suffix=".tmp")
+    try:
+        os.write(fd, json.dumps(index).encode())
+        os.close(fd)
+        fd = -1
+        os.replace(tmp_idx, output_dir / "index.json")
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        os.unlink(tmp_idx)
+        raise
 
 
 def _flatten(v: Any) -> Any:
@@ -126,6 +146,11 @@ def _metric_diff(stored: Any, fresh: Any, rtol: float) -> str | None:
             continue
         if math.isnan(a) and math.isnan(b):
             continue
+        # NaN or inf against anything but itself is a mismatch; the
+        # relative deviation below is NaN there and compares as agreement.
+        if math.isnan(a) or math.isnan(b) or (
+                (math.isinf(a) or math.isinf(b)) and a != b):
+            return f"{a!r} != {b!r}"
         scale = max(abs(a), abs(b))
         rel = 0.0 if scale == 0 else abs(a - b) / scale
         if rel > worst:
@@ -153,7 +178,7 @@ def _verify(output_dir: Path, rtol: float, *,
     """
     from phasesweep.registry import MODEL_REGISTRY
     from phasesweep.result_store import ResultStore, version_current
-    from phasesweep.sweep_types import RunConfig
+    from phasesweep.sweep_types import RunConfig, compute_run_id
 
     log = logging.getLogger("populate")
     models = set(ALL_MODELS if include_fem else FAST_MODELS)
@@ -185,6 +210,11 @@ def _verify(output_dir: Path, rtol: float, *,
 
         stored = d.get("metrics") or {}
         diffs = []
+        # The stored config must still hash to the ID it is filed under;
+        # otherwise lookups by recomputed ID miss it or serve the wrong row.
+        rid = d.get("run_id")
+        if rid is not None and compute_run_id(rc) != rid:
+            diffs.append(f"run_id: stored {rid} != recomputed {compute_run_id(rc)}")
         for key in sorted(set(stored) | set(fresh)):
             if key not in stored or key not in fresh:
                 diffs.append(f"{key}: {'missing in store' if key not in stored else 'no longer produced'}")
@@ -301,8 +331,7 @@ def main() -> None:
     # --- discover motors ---
     from phasesweep.machines.configs import load_motor
     from phasesweep.registry import MODEL_REGISTRY
-    from phasesweep.result_store import compute_run_id
-    from phasesweep.sweep_types import RunConfig
+    from phasesweep.sweep_types import RunConfig, compute_run_id
 
     motor_paths = sorted(args.motors_dir.glob("*.toml"))
     if not motor_paths:
@@ -327,6 +356,15 @@ def main() -> None:
             config_kw: dict[str, Any] = {}
             if model_key == "thermal_duty":
                 config_kw["duty_profile"] = _default_duty_profile(motor)
+            if model_key in ("operating_point", "motor_thermal"):
+                demand = OPERATING_POINT_DEMAND.get(motor.name)
+                if demand is None:
+                    log.info("  skip %-35s %-18s (no demand listed)",
+                             motor.name, model_key)
+                    continue
+                config_kw["w_mech"], config_kw["tau_ref"] = demand
+            if model_key == "motor_thermal":
+                config_kw["T_coolant"] = MOTOR_THERMAL_COOLANT[motor.name]
 
             rc = RunConfig(motor=motor, model=model_key, **config_kw)
             rid = compute_run_id(rc)

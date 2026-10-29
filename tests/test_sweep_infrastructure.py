@@ -132,6 +132,22 @@ class TestRunResult:
         with pytest.raises(KeyError):
             RunResult.from_dict(raw)
 
+    def test_legacy_descriptive_source_normalized(self):
+        d = RunResult(config=_make_rc(), model="fem", status="OK",
+                      metrics={}, elapsed_s=1.0, source="published").to_dict()
+        d["source"] = "published (ANSYS FEM)"
+        assert RunResult.from_dict(d).source == "published"
+
+    @pytest.mark.parametrize("field,value", [
+        ("source", "simulated"), ("status", "ok"), ("status", "FAILED"),
+    ])
+    def test_unknown_literal_rejected(self, field, value):
+        d = RunResult(config=_make_rc(), model="fem", status="OK",
+                      metrics={}, elapsed_s=1.0).to_dict()
+        d[field] = value
+        with pytest.raises(ValueError, match=field):
+            RunResult.from_dict(d)
+
 
 # ---------------------------------------------------------------------------
 # compute_run_id
@@ -153,10 +169,9 @@ class TestComputeRunId:
         rc = _make_rc()
         assert len(compute_run_id(rc)) == 12
 
-    @requires_sim
     def test_model_aware_filtering(self):
         """FEM model ignores sim_plan fields in hash."""
-        from phasesweep.simulation.sim import SimPlan
+        from phasesweep.simulation.params import SimPlan
         plan1 = SimPlan(
             load_torque=3.0, load_time=0.5, t_stop=1.0, speed_step_time=0.05,
             settle_threshold=0.05, ss_window=0.1, droop_window=0.1,
@@ -167,6 +182,32 @@ class TestComputeRunId:
         rc1 = _make_rc(sim_plan=plan1)
         rc2 = _make_rc(sim_plan=plan2)
         assert compute_run_id(rc1) == compute_run_id(rc2)
+
+    def test_sim_plan_rows_load_without_motulator(self):
+        """SimPlan lives beside TwoMassLoad, not in sim.py: a stored
+        drive_sim row must load on a host without the [sim] extra."""
+        import subprocess
+        import sys
+
+        from phasesweep.simulation.params import SimPlan
+        plan = SimPlan(
+            load_torque=3.0, load_time=0.5, t_stop=1.0, speed_step_time=0.05,
+            settle_threshold=0.05, ss_window=0.1, droop_window=0.1,
+            accel_window=(0.05, 0.3), alpha_s=25.0, alpha_c=1257.0,
+            T_s=125e-6, tau_m=0.1,
+        )
+        d = _make_rc(model="drive_sim", sim_plan=plan).to_dict()
+        code = (
+            "import json, sys\n"
+            "sys.modules['motulator'] = None\n"
+            "from phasesweep.sweep_types import RunConfig\n"
+            "rc = RunConfig.from_dict(json.loads(sys.stdin.read()))\n"
+            "assert rc.sim_plan.load_torque == 3.0\n"
+            "assert 'phasesweep.simulation.sim' not in sys.modules\n"
+        )
+        r = subprocess.run([sys.executable, "-c", code], input=json.dumps(d),
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
 
     def test_model_aware_auto_lookup_differs_by_model(self):
         """Different models with same motor produce different run IDs."""
@@ -237,27 +278,7 @@ class TestResultStore:
         assert store.load_all() == []
         assert store.get_known_ids() == set()
 
-    def test_mark_pending_removes_from_index(self, tmp_path):
-        from phasesweep.result_store import ResultStore
-        store = ResultStore(tmp_path)
-        r = self._make_result()
-        store.save(r)
-        cid = compute_run_id(r.config)
-        assert cid in store.get_known_ids()
-        store.mark_pending({cid})
-        assert cid not in store.get_known_ids()
 
-    def test_get_stats(self, tmp_path):
-        from phasesweep.result_store import ResultStore
-        store = ResultStore(tmp_path)
-        store.save(self._make_result(n_p=2))
-        rc = RunConfig(motor=make_motor(n_p=4), model="drive_sim")
-        store.save(RunResult(config=rc, model="drive_sim", status="TIMEOUT",
-                             metrics=None, elapsed_s=60.0, error_msg="t"))
-        stats = store.get_stats()
-        assert stats["total"] == 2
-        assert stats["ok"] == 1
-        assert stats["timeout"] == 1
 
     def test_load_results_returns_run_results(self, tmp_path):
         from phasesweep.result_store import ResultStore
@@ -356,16 +377,6 @@ class TestResultStore:
         assert len(store.load_results(model="drive_sim")) == 1
         assert len(store.load_results(model="fem")) == 1
 
-    def test_mark_pending_atomic_write(self, tmp_path):
-        """mark_pending uses atomic tempfile+os.replace, not bare write_text."""
-        from phasesweep.result_store import ResultStore
-        store = ResultStore(tmp_path)
-        r = self._make_result()
-        store.save(r)
-        cid = compute_run_id(r.config)
-        store.mark_pending({cid})
-        index = json.loads(store.index_file.read_text())
-        assert cid not in index
 
     def test_corrupt_index_recovers_on_save(self, tmp_path):
         from phasesweep.result_store import ResultStore
@@ -377,6 +388,68 @@ class TestResultStore:
         assert store2.get_known_ids() == set()
         store2.save(self._make_result(n_p=4))
         assert len(store2.get_known_ids()) == 1
+
+    def _save_and_edit_row(self, tmp_path, edit):
+        """Save one result, apply `edit` to its JSONL dict, rewrite the file."""
+        from phasesweep.result_store import ResultStore
+        store = ResultStore(tmp_path)
+        r = self._make_result()
+        store.save(r)
+        d = json.loads(store.results_file.read_text())
+        edit(d)
+        store.results_file.write_text(json.dumps(d) + "\n")
+        return store, r
+
+    def test_load_slim_keys_by_stored_run_id(self, tmp_path):
+        store, _ = self._save_and_edit_row(
+            tmp_path, lambda d: d.__setitem__("run_id", "sentinel00001"))
+        assert list(store.load_slim()) == ["sentinel00001"]
+
+    def test_load_slim_recomputes_when_run_id_absent(self, tmp_path):
+        store, r = self._save_and_edit_row(tmp_path, lambda d: d.pop("run_id"))
+        assert list(store.load_slim()) == [compute_run_id(r.config)]
+
+    def test_load_slim_skips_hash_for_current_rows(self, tmp_path, monkeypatch):
+        import phasesweep.result_store as rs
+        store = rs.ResultStore(tmp_path)
+        store.save(self._make_result())
+        calls = []
+        monkeypatch.setattr(rs, "compute_run_id",
+                            lambda *a, **k: calls.append(1) or "x")
+        assert len(store.load_slim()) == 1
+        assert calls == []
+
+    def test_load_slim_stale_row_never_deserialized(self, tmp_path):
+        def edit(d):
+            d["model_version"] = -1
+            d["config"] = "not a config"
+        store, _ = self._save_and_edit_row(tmp_path, edit)
+        assert store.load_slim() == {}
+
+    def test_load_slim_tolerates_sim_plan_without_sim_extra(self, tmp_path, monkeypatch):
+        import sys
+
+        from phasesweep.result_store import ResultStore
+
+        store = ResultStore(tmp_path)
+        store.save(self._make_result(n_p=4))
+        rows = [json.loads(line) for line in store.results_file.read_text().splitlines()]
+        legacy = dict(rows[0])
+        legacy.pop("run_id")
+        legacy["config"] = dict(legacy["config"], sim_plan={"load_torque": 1.0})
+        legacy["config"]["motor"] = dict(legacy["config"]["motor"], name="legacy-sim")
+        with open(store.results_file, "a") as f:
+            f.write(json.dumps(legacy) + "\n")
+        monkeypatch.setitem(sys.modules, "phasesweep.simulation.sim", None)
+        slim = store.load_slim()
+        assert [s.motor_name for s in slim.values()] == ["test"]
+
+    def test_measured_models_do_not_bump(self):
+        from phasesweep.registry import MODEL_REGISTRY
+        measured = {n: m.version for n, m in MODEL_REGISTRY.items()
+                    if m.source == "measured"}
+        assert measured
+        assert set(measured.values()) == {1}, measured
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +507,14 @@ class TestModelVersionStamp:
         store.results_file.write_text(json.dumps(d) + "\n")
         assert store.load_slim() == {}
 
+    def test_load_results_current_only_drops_stale_stamp(self, tmp_path):
+        store, _ = self._save_one(tmp_path)
+        d = json.loads(store.results_file.read_text())
+        d["model_version"] -= 1
+        store.results_file.write_text(json.dumps(d) + "\n")
+        assert len(store.load_results()) == 1
+        assert store.load_results(current_only=True) == []
+
     def test_measured_records_stamp_uniformly(self, tmp_path):
         from phasesweep.result_store import ResultStore
         store = ResultStore(tmp_path)
@@ -480,9 +561,8 @@ class TestModelVersionStamp:
         assert raw["model_version"] is not None
 
     def test_index_updates_survive_second_writer(self, tmp_path):
-        """_update_index rewrites the whole index dict — a stale in-memory
-        cache must not clobber entries another store instance added since
-        our last read."""
+        """save() does a read-modify-write of the index — a second store
+        instance's entries must not be clobbered by a concurrent writer."""
         from phasesweep.result_store import ResultStore
         s1 = ResultStore(tmp_path)
         s2 = ResultStore(tmp_path)
@@ -500,81 +580,21 @@ class TestModelVersionStamp:
 
 
 # ---------------------------------------------------------------------------
-# sim_runner subprocess
-# ---------------------------------------------------------------------------
-
-@requires_sim
-class TestSimRunner:
-
-    @pytest.mark.timeout(30)
-    def test_returns_status_not_hang(self):
-        from phasesweep.simulation.params import prepare_drive_sim
-        from phasesweep.simulation.sim import plan_sim
-        from phasesweep.simulation.sim_runner import run_sim_safe
-        motor = make_motor()
-        plan = plan_sim(prepare_drive_sim(motor))
-        short_plan = dataclasses.replace(plan, t_stop=0.1)
-        rc = RunConfig(motor=motor, model="drive_sim", sim_plan=short_plan)
-        result = run_sim_safe(rc, timeout_s=2)
-        assert result.status in ("OK", "TIMEOUT", "ERROR")
-
-    @pytest.mark.timeout(60)
-    def test_successful_run_returns_metrics(self):
-        from phasesweep.simulation.params import prepare_drive_sim
-        from phasesweep.simulation.sim import plan_sim
-        from phasesweep.simulation.sim_runner import run_sim_safe
-        motor = make_motor()
-        plan = plan_sim(prepare_drive_sim(motor))
-        rc = RunConfig(motor=motor, model="drive_sim", sim_plan=plan)
-        result = run_sim_safe(rc, timeout_s=30)
-        assert result.status == "OK", f"Expected OK, got {result.status}: {result.error_msg}"
-        assert result.metrics is not None
-        assert "t_settle" in result.metrics
-
-    @pytest.mark.timeout(30)
-    def test_missing_sim_plan_raises(self):
-        from phasesweep.simulation.sim_runner import run_sim_safe
-        rc = _make_rc(model="drive_sim")
-        result = run_sim_safe(rc, timeout_s=15)
-        assert result.status == "ERROR"
-        assert result.error_msg is not None
-
-
-# ---------------------------------------------------------------------------
-# fem_runner subprocess
+# fem_runner
 # ---------------------------------------------------------------------------
 
 @requires_fem
 class TestFemRunner:
 
-    @pytest.mark.timeout(60)
-    def test_returns_status_not_hang(self):
-        from phasesweep.solvers.fem_runner import run_fem_safe
-        rc = _make_rc(model="fem", n_theta=60, maxh_fraction=0.08)
-        result = run_fem_safe(rc, timeout_s=30)
-        assert result.status in ("OK", "TIMEOUT", "ERROR")
-        assert result.model == "fem"
-
-    @pytest.mark.timeout(60)
-    def test_ok_result_has_fem_metrics(self):
-        from phasesweep.solvers.fem_runner import run_fem_safe
-        rc = _make_rc(model="fem", n_theta=60, maxh_fraction=0.08)
-        result = run_fem_safe(rc, timeout_s=30)
-        assert result.status == "OK", f"Expected OK, got {result.status}: {result.error_msg}"
-        assert result.metrics is not None
-        assert "peak_Br" in result.metrics
-        assert "thd_pct" in result.metrics
-        assert result.metrics["peak_Br"] > 0
-
     @pytest.mark.timeout(120)
     def test_alpha_p_reduces_fem_fundamental(self):
-        from phasesweep.solvers.fem_runner import _run_fem_impl
+        from phasesweep.solvers.fem_runner import run_fem
         m_full = make_motor(B_rem=1.2, psi_f=None, alpha_p=1.0)
         m_part = make_motor(B_rem=1.2, psi_f=None, alpha_p=0.75)
         rc_full = RunConfig(motor=m_full, model="fem", n_theta=60, maxh_fraction=0.08)
         rc_part = RunConfig(motor=m_part, model="fem", n_theta=60, maxh_fraction=0.08)
-        B1_full = _run_fem_impl(rc_full)["fundamental"]
-        B1_part = _run_fem_impl(rc_part)["fundamental"]
+        B1_full = run_fem(rc_full)["fundamental"]
+        B1_part = run_fem(rc_part)["fundamental"]
         assert B1_part < B1_full
         # Square-wave source: the FEM arc fundamental scales exactly
         # as the analytical pole-arc factor sin(π·α_p/2)
@@ -595,6 +615,25 @@ def test_n_planes_default_does_not_change_archived_run_ids():
     assert "n_planes" not in rc.to_dict()
     # pinned before n_planes existed
     assert compute_run_id(rc) == compute_run_id(RunConfig.from_dict(rc.to_dict()))
+
+
+def test_demand_fields_default_does_not_change_archived_run_ids():
+    """w_mech / tau_ref follow the n_planes pattern: absent from to_dict
+    and the hash string when None, so no archived ID re-keys — including
+    the unregistered-model path that hashes every solver param."""
+    from phasesweep.machines.configs import load_motor
+    from phasesweep.sweep_types import RunConfig, _run_id_key, compute_run_id
+    from tests.conftest import REPO_ROOT
+
+    motor = load_motor(REPO_ROOT / "motors/lrk_outrunner.toml")
+    rc = RunConfig(motor=motor, model="not_a_registered_model")
+    assert "w_mech" not in rc.to_dict() and "tau_ref" not in rc.to_dict()
+    assert "w_mech" not in _run_id_key(rc) and "tau_ref" not in _run_id_key(rc)
+    assert compute_run_id(rc) == compute_run_id(RunConfig.from_dict(rc.to_dict()))
+    with_demand = RunConfig(motor=motor, model="not_a_registered_model",
+                            w_mech=100.0, tau_ref=1.0)
+    assert compute_run_id(with_demand) != compute_run_id(rc)
+    assert RunConfig.from_dict(with_demand.to_dict()) == with_demand
 
 
 def test_nonlinear_solver_default_suppressed_and_hashed():
@@ -621,3 +660,59 @@ def test_nonlinear_solver_default_suppressed_and_hashed():
     # unknown-model fallback path also stays stable at the default
     rc_unknown = RunConfig(motor=motor, model="not_a_registered_model")
     assert "nonlinear_solver" not in rc_unknown.to_dict()
+
+
+_NAN = float("nan")
+
+
+@pytest.mark.parametrize("kw", [
+    {"nonlinear": "false"}, {"nonlinear": 1},
+    {"n_theta": "180"}, {"n_theta": 180.5}, {"n_theta": True}, {"n_theta": 0},
+    {"cogging_points": 2.5}, {"n_planes": "3"},
+    {"nonlinear_solver": "Newton"},
+    {"maxh_fraction": 0.0}, {"maxh_fraction": _NAN},
+    {"j_s": _NAN}, {"rotation": float("inf")}, {"j_s": "0"},
+    {"i_fault": _NAN}, {"slip": _NAN},
+    {"duty_profile": ((1.0, _NAN),)}, {"duty_profile": ((1.0, 0.0),)},
+], ids=repr)
+def test_run_config_rejects_mistyped_inputs(kw):
+    with pytest.raises(ValueError):
+        RunConfig(motor=make_motor(), model="analytical", **kw)
+
+
+def test_run_config_normalizes_integral_counts():
+    import numpy as np
+    a = RunConfig(motor=make_motor(), model="analytical", n_theta=180)
+    b = RunConfig(motor=make_motor(), model="analytical", n_theta=180.0)
+    c = RunConfig(motor=make_motor(), model="analytical", n_theta=np.int64(180))
+    assert type(b.n_theta) is int and type(c.n_theta) is int
+    assert compute_run_id(a) == compute_run_id(b) == compute_run_id(c)
+
+
+def test_model_params_reject_non_finite():
+    from phasesweep.models.rated_torque import RatedTorqueParams, StallTorqueParams
+    from phasesweep.models.thermal_duty import ThermalDutyParams
+    with pytest.raises(ValueError, match="non-finite"):
+        RatedTorqueParams(n_p=4, psi_f=_NAN, I_rated=10.0)
+    with pytest.raises(ValueError, match="non-finite"):
+        StallTorqueParams(n_p=4, psi_f=0.1, I_stall=10.0, L_d=_NAN)
+    with pytest.raises(ValueError, match="non-finite"):
+        ThermalDutyParams(n_p=4, psi_f=0.1, R_s=0.5, p_s1_budget=100.0,
+                          budget_source="rated_current",
+                          duty_profile=((1.0, 1.0),), p_fe=_NAN)
+    with pytest.raises(ValueError, match="finite"):
+        ThermalDutyParams(n_p=4, psi_f=0.1, R_s=0.5, p_s1_budget=100.0,
+                          budget_source="rated_current",
+                          duty_profile=((_NAN, 1.0),))
+
+
+@pytest.mark.parametrize("field", ["ambient_temp", "B_knee", "alpha_B_knee"])
+def test_motor_rejects_non_finite_thermal_and_knee(field):
+    with pytest.raises(ValueError, match=field):
+        dataclasses.replace(make_motor(), **{field: _NAN})
+
+
+def test_bh_curve_rejects_swapped_columns():
+    from phasesweep.solvers.fem_materials import BHCurve
+    with pytest.raises(ValueError, match="columns swapped"):
+        BHCurve.from_rows([(0.5, 100.0), (1.0, 500.0), (1.5, 5000.0)])

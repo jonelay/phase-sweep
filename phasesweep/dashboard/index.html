@@ -5,35 +5,40 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>phase-sweep</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1 8 Q3 2 5 8 T9 8 T13 8 T17 8' stroke='%232a78d6' stroke-width='2' fill='none'/%3E%3C/svg%3E">
-  <!-- theme attribute set before the stylesheet loads: no light flash -->
+  <!-- theme attribute set before the stylesheets load: no light flash.
+       Same storage key app.js passes to view-sweep's initTheme. -->
   <script>document.documentElement.dataset.theme = localStorage.getItem("ps-theme") || "light";</script>
+  <!-- view-sweep chrome + engineering palette (served by the server at
+       /view-sweep/); style.css holds only phase-sweep's domain panels -->
+  <link rel="stylesheet" href="/view-sweep/css/viewsweep.css">
+  <link rel="stylesheet" href="/view-sweep/spec/palettes/engineering.css">
   <link rel="stylesheet" href="/style.css">
   <script src="/vendor/plotly-cartesian-3.6.0.min.js"></script>
 </head>
 <body>
-  <header id="topbar">
-    <span class="brand">phase-sweep</span>
+  <header id="topbar" class="vs-topbar">
+    <span class="vs-brand">phase-sweep</span>
     <div id="compare-chips" class="compare-chips" title="compare set"></div>
-    <label class="topbar-select" title="series color palette">◑<select id="palette-select" aria-label="Series color palette"></select></label>
-    <label class="topbar-select" title="|B| heatmap ramp">▧<select id="seq-select" aria-label="|B| heatmap ramp"></select></label>
-    <button id="theme-toggle" class="theme-toggle"></button>
-    <button id="export-png" class="topbar-btn" title="export visible panels as a composite PNG">⤓ PNG</button>
+    <label class="vs-select" title="series color palette">◑<select id="palette-select" aria-label="Series color palette"></select></label>
+    <label class="vs-select" title="|B| heatmap ramp">▧<select id="seq-select" aria-label="|B| heatmap ramp"></select></label>
+    <button id="theme-toggle" class="vs-btn vs-theme-toggle"></button>
+    <button id="export-png" class="vs-btn" title="export visible panels as a composite PNG">⤓ PNG</button>
   </header>
-  <div id="conn-banner" hidden>connection lost — retrying; job progress may be stale</div>
-  <div id="nameplate"></div>
-  <div id="layout">
-    <aside id="sidebar">
-      <button id="rail-toggle" title="collapse sidebar">«</button>
-      <section class="side-section">
+  <div id="conn-banner" class="vs-banner" hidden>connection lost — retrying; job progress may be stale</div>
+  <div id="nameplate" class="vs-subbar"></div>
+  <div id="layout" class="vs-layout">
+    <aside id="sidebar" class="vs-sidebar">
+      <button id="rail-toggle" class="vs-rail-toggle" title="collapse sidebar">«</button>
+      <section class="vs-side-section">
         <h2>Configs</h2>
         <ul id="config-list" class="config-list"></ul>
         <p class="config-hint">ctrl-click to compare configs — remove via topbar chips</p>
       </section>
       <div id="sidebar-panels"></div>
     </aside>
-    <main id="main-area">
-      <nav id="main-tabs" role="tablist" aria-label="dashboard views"></nav>
-      <div id="tab-panes"></div>
+    <main id="main-area" class="vs-main">
+      <nav id="main-tabs" aria-label="dashboard views"></nav>
+      <div id="tab-panes" class="vs-tab-panes"></div>
     </main>
   </div>
   <footer id="statusbar"></footer>

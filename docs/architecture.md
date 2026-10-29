@@ -1,11 +1,37 @@
 # Architecture
 
-Three figures covering how a motor definition becomes a stored result,
-how that result's identity is computed, and a generated fleet-coverage
-snapshot. Diagram sources live in [`diagrams/`](diagrams/); every element
-that asserts a fact carries a claim-table row in
-[`diagrams/README.md`](diagrams/README.md), with the repo state it was
-grounded against.
+These figures show how a motor definition becomes a stored result, how result
+IDs are computed, and which models have run for the bundled motors. Diagram
+sources live in [`diagrams/`](diagrams/); [`diagrams/README.md`](diagrams/README.md)
+records the source for each factual element and the repository revision checked.
+The validation, simulation, and server subsystems do not yet have diagrams;
+the same README documents the claim-table format used when adding one.
+
+## Package layout
+
+The package lives directly under `phasesweep/`. Its top-level Python modules
+and packages divide configuration, computation, evidence, persistence, and
+interactive consumers as follows; descriptions follow the package and module
+docstrings (or, for asset-only directories, their entry-point source):
+
+| Path | Responsibility |
+| --- | --- |
+| `machines/` | Machine definitions, geometry types, perturbations, and TOML loading. |
+| `models/` | Rated-point and quasi-static performance models. |
+| `solvers/` | Analytical and FEM field computation. |
+| `simulation/` | Time-domain drive-simulation models. |
+| `validation/` | Measurement comparison, cross-validation, and calibration. |
+| `audit/` | Advisory induction-machine design checks against published diagnostic bands. |
+| `server/` | Local FastAPI job manager, result-query API, and WebSocket progress service. |
+| `dashboard/` | Static browser UI for configuration, jobs, results, sweeps, and validation. |
+| `vis/` | Visualization utilities. |
+| `registry.py` | Model metadata and execution-function registry. |
+| `solver_params.py` | Shared solver-parameter derivation and motor-completeness validation. |
+| `sweep_types.py` | Validated run configuration and result types. |
+| `geo_parallel.py` | Geometry sweep generation and parallel execution. |
+| `result_store.py` | Crash-safe incremental JSONL result storage. |
+| `defaults.py` | Access to solver and geometry defaults from `defaults.toml`. |
+| `check_motor.py` | Staged objective checks and evidence-level reporting for one motor TOML. |
 
 ## Data-flow spine
 
@@ -26,6 +52,53 @@ hardcoded, and deltas are computed on request, never stored.
 
 The figure is a full-width landscape (3.2:1); labels are legible at
 docs-page width but not at README inline width.
+
+## Model inventory
+
+`MODEL_REGISTRY` in [`phasesweep/registry.py`](../phasesweep/registry.py) is
+the model inventory and the source of truth for each key's source class, cost,
+outputs, required motor and runtime fields, hash fields, version, validator,
+and runner. Discover the current inventory and metadata programmatically with
+`uv run python -c 'from phasesweep import MODEL_REGISTRY; print(*MODEL_REGISTRY.items(), sep="\n")'`;
+the server and coverage generator consume this mapping directly, so this
+overview does not duplicate its keys.
+
+## Validation subsystem
+
+`phasesweep/validation/` represents measured and published anchors as validated
+`RunResult` records and imports them into the same `ResultStore` used by
+computed models. Three stages form the evidence pipeline:
+
+- **Import** — measured or published data enters as validated `RunResult`
+  records, keyed by motor name so they survive TOML configuration changes.
+- **Cross-validation** — resolves direct quantities, curves, bounds, and
+  explicit key mappings between stored evidence and computed runs.
+- **Calibration** — bounded perturbation of selected motor parameters against
+  cross-validation residuals, with guards for circular, underdetermined, and
+  insensitive fits.
+
+`cli_import.py`, `cli_crossval.py`, and `cli_calibrate.py` expose those stages
+without creating a second compute or persistence path.
+
+## Simulation subsystem
+
+`phasesweep/simulation/` is the registered time-domain branch of the main
+pipeline: a motor supplies electrical, mechanical, and drive parameters, while
+the `RunConfig` supplies a simulation plan and, for the two-mass model, load
+mechanics. `prepare_drive_sim` validates and derives the plant parameters;
+`sim_runner.py` builds and runs the motulator drive, extracts scalar response
+metrics and downsampled waveforms, and returns the metrics dictionary through
+the registry so the ordinary run identity and `ResultStore` path still apply.
+
+## Local server and dashboard
+
+`phasesweep/server/` layers phase-sweep motor loading, a `ResultStore`, and a
+queued parallel job manager onto the local FastAPI/WebSocket service; its REST
+routes submit registry models and sweeps, query current stored records, import
+validation evidence, and manage editable user configurations. The static
+`phasesweep/dashboard/` application consumes those APIs and stored-result
+payloads to present job progress, run history, field and simulation waveforms,
+sweep tables, model comparisons, validation summaries, and the config editor.
 
 ## Provenance and run identity
 

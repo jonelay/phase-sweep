@@ -59,7 +59,7 @@ class TestCreatorCrossValidation:
         """Rated torque physically reasonable for a 70W motor, plus a
         tight regression pin — the 10x sanity window alone would pass a
         2x model error. The pin is the current model value (rated_torque
-        v4; the published continuous rating is 0.10 Nm, Dhakal et al.
+        v4; the published continuous rating is 0.10 Nm, Muetze et al.
         Table 6); re-freeze deliberately on any MTPA physics change."""
         tau = rated_result.metrics["tau_mtpa"]
         k_T = rated_result.metrics["k_T"]

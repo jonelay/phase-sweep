@@ -1,9 +1,9 @@
 """Tests for rated torque model.
 
 Validation sources:
-- CREATOR Case PMSM: Dhakal et al. (2025), COMPEL 44(4), DOI 10.1108/compel-11-2024-0462
+- CREATOR Case PMSM: Muetze et al. (2025), COMPEL 44(4), DOI 10.1108/compel-11-2024-0462
   arXiv:2501.15921, dataset DOI 10.3217/sns1d-77m43. Table 10 circuit params.
-  MTPA angles from paper text (§5.2): 100 deg @ 0.15 A_rms, 110 deg @ 0.30 A_rms.
+  MTPA angles from paper text (§6.2.2): 100 deg @ 0.15 A_rms, 110 deg @ 0.30 A_rms.
 - Awan 2.2-kW IPM: Awan (2019), Aalto doctoral dissertation 187/2019,
   ISBN 978-952-60-8765-8. Table 6.2 motor data. Also: Awan et al. (2018),
   IEEE TIA 54(6), pp. 6110-6120, DOI 10.1109/TIA.2018.2862410.
@@ -305,12 +305,12 @@ def test_du2021_toml_rated_torque():
 
 
 # ---------------------------------------------------------------------------
-# CREATOR MTPA angle validation (Dhakal et al. 2025, COMPEL 44(4))
+# CREATOR MTPA angle validation (Muetze et al. 2025, COMPEL 44(4), §6.2.2)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("I_rms, published_angle_deg", [
-    (0.15, 100.0),  # Table text / Fig. 12, Dhakal et al. 2025
-    (0.30, 110.0),  # Table text / Fig. 12, Dhakal et al. 2025
+    (0.15, 100.0),  # §6.2.2 text, Muetze et al. 2025
+    (0.30, 110.0),  # §6.2.2 text, Muetze et al. 2025
 ])
 def test_creator_mtpa_angle(I_rms, published_angle_deg):
     """CREATOR MTPA angle vs published FEM-derived values.
@@ -349,7 +349,7 @@ def test_creator_rated_torque_vs_published():
     from phasesweep.machines.configs import load_motor
     m = load_motor(REPO_ROOT / "motors/creator_case_pmsm.toml")
     result = MODEL_REGISTRY["rated_torque"].fn(_make_config(m))
-    published_rated = 0.10  # Nm, Dhakal et al. Table 6
+    published_rated = 0.10  # Nm, Muetze et al. Table 6
     assert result["tau_mtpa"] >= published_rated
     assert result["tau_mtpa"] < published_rated * 1.15  # within 15%
 

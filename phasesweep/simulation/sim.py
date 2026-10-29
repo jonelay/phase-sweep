@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+from phasesweep._extras import install_hint
 
 if TYPE_CHECKING:
     from phasesweep.simulation.params import DriveSimParams, TwoMassLoad
@@ -19,6 +20,7 @@ try:
     from motulator.drive.model import (
         Drive,
         MechanicalSystem,
+        SaturatedSynchronousMachinePars,
         Simulation,
         SynchronousMachine,
         SynchronousMachinePars,
@@ -26,84 +28,30 @@ try:
         VoltageSourceConverter,
     )
     from motulator.drive.utils import Step
-except ImportError:
-    raise ImportError(
-        "phasesweep.sim requires the drive-simulation extra: "
-        "pip install phasesweep[sim]"
-    ) from None
+except ImportError as e:
+    raise ImportError(f"phasesweep.sim needs {e.name}; {install_hint('sim')}") from None
 
+from phasesweep.models.flux_map import make_dq_maps
 from phasesweep.models.rated_torque import (
     magnet_torque_constant,
     mtpa_gamma,
     mtpa_torque,
 )
+from phasesweep.simulation.params import SimPlan, uses_flux_map
+
+__all__ = [
+    "SimPlan",
+    "build_sim",
+    "extract_metrics",
+    "extract_waveforms",
+    "plan_sim",
+    "plan_torque_sim",
+    "plan_two_mass_sim",
+]
 
 
 def _clamp(val: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, val))
-
-
-@dataclass(frozen=True)
-class SimPlan:
-    """Self-contained execution plan for a drive simulation.
-
-    Carries load parameters AND metric extraction timing windows.
-    Built by plan_sim(); consumed by build_sim() and extract_metrics().
-    """
-
-    # Execution
-    load_torque: float      # Nm
-    load_time: float        # s — when load step is applied
-    t_stop: float           # s — simulation end
-    speed_step_time: float  # s — when speed ref steps from 0
-
-    # Metric extraction windows
-    settle_threshold: float            # fraction of w_ref (e.g. 0.05)
-    ss_window: float                   # s — averaging window before t_stop
-    droop_window: float                # s — post-load window for speed dip
-    accel_window: tuple[float, float]  # (start, end) for peak torque
-
-    # Controller tuning
-    alpha_s: float          # speed-controller bandwidth (rad/s)
-    alpha_c: float          # current-controller bandwidth (rad/s)
-    T_s: float              # control sampling period (s)
-
-    # Diagnostic
-    tau_m: float            # mechanical time constant (s)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "load_torque": self.load_torque,
-            "load_time": self.load_time,
-            "t_stop": self.t_stop,
-            "speed_step_time": self.speed_step_time,
-            "settle_threshold": self.settle_threshold,
-            "ss_window": self.ss_window,
-            "droop_window": self.droop_window,
-            "accel_window": list(self.accel_window),
-            "alpha_s": self.alpha_s,
-            "alpha_c": self.alpha_c,
-            "T_s": self.T_s,
-            "tau_m": self.tau_m,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> SimPlan:
-        aw = d["accel_window"]
-        return cls(
-            load_torque=d["load_torque"],
-            load_time=d["load_time"],
-            t_stop=d["t_stop"],
-            speed_step_time=d["speed_step_time"],
-            settle_threshold=d["settle_threshold"],
-            ss_window=d["ss_window"],
-            droop_window=d["droop_window"],
-            accel_window=(aw[0], aw[1]),
-            alpha_s=d.get("alpha_s", 2 * np.pi * 4),
-            alpha_c=d.get("alpha_c", 2 * np.pi * 200),
-            T_s=d.get("T_s", 125e-6),
-            tau_m=d["tau_m"],
-        )
 
 
 def _current_loop_timing(params: DriveSimParams) -> tuple[float, float, float]:
@@ -211,12 +159,16 @@ def plan_torque_sim(
     against voltage saturation. For a salient machine the controller exploits
     reluctance, so |i_s| is below the magnet-only tau_ref / (1.5 * n_p * psi_f)
     by the reluctance saving (which that anchor only equals when L_d == L_q);
-    verified to ~1e-4 against motulator for saliency up to 2.06. Pass
-    `load_torque=0` for free acceleration, or any explicit value for other
-    load profiles.
+    verified to ~1e-4 against motulator for saliency up to 2.06.
 
-    SimPlan fields unused in torque mode (alpha_s, settle_threshold,
-    droop_window) are set to neutral defaults.
+    With a flux-map surface the constant-L anchor is only approximate —
+    the surface may need more current at high torque (e.g. +5% at 250 Nm
+    on BMW i3) so a tau_ref feasible on secant-L can saturate the
+    controller on the map, leaving steady state below tau_ref.
+
+    Pass `load_torque=0` for free acceleration, or any explicit value for
+    other load profiles. SimPlan fields unused in torque mode (alpha_s,
+    settle_threshold, droop_window) are set to neutral defaults.
     """
     if tau_ref <= 0:
         raise ValueError(f"tau_ref must be > 0, got {tau_ref}")
@@ -277,19 +229,21 @@ def plan_two_mass_sim(
 
 
 def _fix_mtpv_nan(ref_gen: Any) -> None:
-    """Patch motulator's MTPV lookup for SPMSM with small parameters.
+    """Patch motulator's MTPV lookup for SPMSM and saturated-map machines.
 
     motulator 0.7.3 computes _psi_s_mtpv inside compute_flux_and_torque_refs.
-    When the MTPV locus returns NaN (common for SPMSM), downstream
-    compute_current_ref uses phase(NaN) and produces NaN current references.
-    Fix: after each call, replace NaN with j*psi_f (phase = pi/2, i.e. no
-    MTPV constraint — correct for non-salient machines).
+    When the MTPV locus returns NaN, downstream compute_current_ref uses
+    phase(NaN) and produces NaN current references. Fix: after each call,
+    replace NaN with j*psi_f (phase = pi/2, i.e. no MTPV constraint —
+    correct for non-salient machines).
 
-    Salient IPMs (Lq > Ld) compute a finite MTPV locus, so this patch never
-    fires for them and its non-salient j*psi_f value is not exercised —
-    verified across both in-repo IPM anchors (saliency up to 2.06) over
-    0.1-1.5x rated speed. The patch matters only for the near-SPMSM
-    case it targets.
+    For constant-L salient IPMs the MTPV locus is finite and this patch
+    does not fire (verified across both in-repo anchors, saliency up to
+    2.06, over 0.1–1.5× rated speed). On the flux-map surface the ψ_d = 0
+    crossing can sit above i_s_max (e.g. BMW i3 at ≈−616 A), so
+    compute_mtpv_locus returns NaN and the patch fires even for a salient
+    IPM — the j*psi_f fallback is still correct because the machine is
+    above its voltage limit, not at MTPV.
     """
     _orig = ref_gen.compute_flux_and_torque_refs
 
@@ -307,13 +261,52 @@ def _require_sim_drive_fields(params: DriveSimParams) -> None:
     """DriveSimParams validates the motor constants but not the drive
     fields (prepare_drive_sim does) — a directly constructed instance can
     carry None U_DC/MAX_I_S/W_REF into motulator, which fails obscurely
-    (or not at all). Same message shape as solver_params._require_drive_fields."""
+    (or not at all). Same message shape as solver_params.require_drive_fields."""
     missing = [f for f in ("U_DC", "MAX_I_S", "W_REF")
                if getattr(params.drive, f) is None]
     if missing:
         raise ValueError(
             f"drive_sim needs [drive] {', '.join(missing)}"
         )
+
+
+def _require_map_mtpa_locus(ref_gen: Any, i_s_max: float) -> None:
+    """motulator's MTPA angle search brackets (pi/2, pi) and falls back to
+    the gamma = 0 sentinel — pure magnetizing i_d, zero torque — when the
+    map's MTPA condition has no sign change there: exactly non-salient or
+    reverse-salient surfaces (finite-difference noise decides the sign).
+    The constant-L guards cannot see the map's saliency, so check the
+    built locus: its i_s_max end must not point along +d."""
+    i_end = complex(ref_gen.i_s_mtpa(np.inf))
+    if i_end.real > 1e-6 * i_s_max:
+        raise ValueError(
+            "[flux_map] MTPA locus is degenerate (motulator returned the "
+            f"gamma = 0 sentinel, i_s = {i_end:.3g} A at the current limit): "
+            "the surface is non-salient or reverse-salient at the current "
+            "limit, which motulator 0.7.3's (pi/2, pi) angle search cannot "
+            "handle — drive_sim is blocked for this map"
+        )
+
+
+def _machine_pars(
+    params: DriveSimParams,
+) -> SynchronousMachinePars | SaturatedSynchronousMachinePars:
+    """Constant-L parameters, or motulator's saturated parameter set on
+    the FluxMap surface when `uses_flux_map(params)`. The saturated set
+    carries both directions — ψ(i) for the controller loci and current
+    controller, i(ψ) for the flux-state plant model — and derives psi_f
+    from the inverse map's zero-current root (≈ ψ_d(0,0) to ~1e-4)."""
+    if not uses_flux_map(params):
+        return SynchronousMachinePars(
+            n_p=params.n_p, R_s=params.R_s,
+            L_d=params.L_d, L_q=params.L_q, psi_f=params.psi_f,
+        )
+    assert params.flux_map is not None
+    psi_s_dq_fcn, i_s_dq_fcn = make_dq_maps(params.flux_map)
+    return SaturatedSynchronousMachinePars(
+        n_p=params.n_p, R_s=params.R_s,
+        i_s_dq_fcn=i_s_dq_fcn, psi_s_dq_fcn=psi_s_dq_fcn,
+    )
 
 
 def build_sim(
@@ -332,6 +325,10 @@ def build_sim(
     When `load_mech` is set, the mechanical system becomes a two-mass
     model (TwoMassMechanicalSystem). Controllers see J_M + J_L.
 
+    With a covering FluxMap (`uses_flux_map`) the plant and the controller
+    run on the nonlinear flux-linkage surface (`_machine_pars`); the
+    constant L_d/L_q then only set the timing plan and the guards below.
+
     Reverse-salient PM machines (psi_f > 0, L_d > L_q) are rejected:
     motulator 0.7.3's MTPA locus is silently wrong for them — below
     psi_f/(L_d - L_q) the angle search hits a zero-torque sentinel, above
@@ -345,7 +342,7 @@ def build_sim(
     garbage current LUT).
     """
     _require_sim_drive_fields(params)
-    if params.psi_f == 0.0 and params.L_q > params.L_d:
+    if params.is_reluctance and params.L_q > params.L_d:
         raise ValueError(
             f"SynRM (psi_f = 0) with L_q={params.L_q} > L_d={params.L_d}: "
             "motulator's psi_f = 0 MTPA/MTPV angle search assumes the "
@@ -354,7 +351,7 @@ def build_sim(
             "drive silently produces no torque — swap the axis labels so "
             "L_d > L_q to run drive_sim"
         )
-    if params.psi_f > 0.0 and params.L_d > params.L_q:
+    if not params.is_reluctance and params.L_d > params.L_q:
         raise ValueError(
             f"reverse-salient machine (L_d={params.L_d} > L_q={params.L_q}): "
             "motulator's MTPA current reference is wrong for L_d > L_q "
@@ -367,13 +364,7 @@ def build_sim(
     lt_time = plan.load_time if plan else 1.2
     sst = plan.speed_step_time if plan else 0.2
 
-    par = SynchronousMachinePars(
-        n_p=params.n_p,
-        R_s=params.R_s,
-        L_d=params.L_d,
-        L_q=params.L_q,
-        psi_f=params.psi_f,
-    )
+    par = _machine_pars(params)
 
     drive = params.drive
     machine = SynchronousMachine(par)
@@ -401,6 +392,9 @@ def build_sim(
         i_s_max=drive.MAX_I_S, J=J_ctrl, alpha_c=_alpha_c)
     vector_ctrl = CurrentVectorController(
         par=par, cfg=cfg_ctrl, sensorless=False, T_s=_T_s)
+    if isinstance(par, SaturatedSynchronousMachinePars):
+        assert drive.MAX_I_S is not None
+        _require_map_mtpa_locus(vector_ctrl.reference_gen, drive.MAX_I_S)
 
     if is_torque_mode:
         ctrl_sys = VectorControlSystem(vector_ctrl=vector_ctrl, speed_ctrl=None)
@@ -413,7 +407,7 @@ def build_sim(
 
     # psi_f = 0: the patch's j*psi_f fallback would be 0j (phase 0, not
     # pi/2), and the SynRM (L_d > L_q here) MTPV locus is finite anyway.
-    if params.psi_f > 0.0:
+    if not params.is_reluctance:
         _fix_mtpv_nan(vector_ctrl.reference_gen)
 
     return Simulation(mdl=mdl, ctrl=ctrl_sys, show_progress=False)
@@ -422,8 +416,8 @@ def build_sim(
 def extract_waveforms(
     res: Any, max_points: int = 1200, *, two_mass: bool = False,
 ) -> dict[str, list[float]]:
-    """Downsampled time-domain traces for the dashboard sim-waveforms panel
-   . Additive alongside extract_metrics — scalar metrics are
+    """Downsampled time-domain traces for the dashboard sim-waveforms panel.
+    Additive alongside extract_metrics — scalar metrics are
     unchanged."""
     t = np.asarray(res.mdl.t)
     stride = max(1, -(-len(t) // max_points))

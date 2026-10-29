@@ -17,6 +17,7 @@ and the CLI.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 from dataclasses import replace
@@ -36,7 +37,7 @@ from phasesweep.validation.measured import (
     measured_run_result,
     validate_measured,
 )
-from tests.conftest import REPO_ROOT
+from tests.conftest import NOT_MOTOR_TOMLS, REPO_ROOT
 
 OUTRUNNER_TOML = REPO_ROOT / "motors/outrunner_14mm_steel.toml"
 BACKEMF_JSON = REPO_ROOT / "data/outrunner_14mm_steel/backemf_measured.json"
@@ -554,16 +555,28 @@ class TestGuards:
 
 class TestWriteMotorToml:
 
-    @pytest.mark.parametrize("name", [
-        "outrunner_14mm_steel",
-        "creator_case_pmsm", "belkhadir_outrunner",
-        "deylami_fan", "lrk_outrunner",
-    ])
-    def test_round_trip_config_id(self, name, tmp_path):
-        motor = load_motor(REPO_ROOT / f"motors/{name}.toml")
+    @pytest.mark.parametrize("path", sorted(
+        str(p.relative_to(REPO_ROOT)) for p in
+        [*REPO_ROOT.glob("motors/**/*.toml"), *REPO_ROOT.glob("data/*/*.toml")]
+        if p.name not in NOT_MOTOR_TOMLS))
+    def test_round_trip_every_shipped_motor(self, path, tmp_path):
+        """Field-for-field and config_id: the writer once dropped flux_map,
+        thermal_network, Halbach and skew fields, so the calibrated TOML
+        did not hash to the record's calibrated_config_id."""
+        motor = load_motor(REPO_ROOT / path)
         out = tmp_path / "rt.toml"
         write_motor_toml(motor, out)
-        assert load_motor(out).config_id == motor.config_id
+        back = load_motor(out)
+        for f in dataclasses.fields(motor):
+            assert getattr(back, f.name) == getattr(motor, f.name), f.name
+        assert back.config_id == motor.config_id
+
+    def test_geometry_only_fields_without_geometry_raise(self, tmp_path):
+        motor = replace(load_motor(REPO_ROOT / "data/etel_tmb/etel_tmb0140_030_ra.toml"),
+                        L_stk=0.05)
+        assert motor.geometry is None
+        with pytest.raises(ValueError, match="L_stk"):
+            write_motor_toml(motor, tmp_path / "x.toml")
 
     def test_refuses_overwrite(self, outrunner_motor, tmp_path):
         out = tmp_path / "cal.toml"
@@ -623,7 +636,7 @@ class TestDerivedParamsTag:
             waveforms={}, uncertainty={}, source_file="x",
             derived_params=("not_a_field",),
         )
-        with pytest.raises(ValueError, match="not Motor fields"):
+        with pytest.raises(ValueError, match="not Motor or"):
             validate_measured(data)
 
 
@@ -725,3 +738,102 @@ class TestCliCalibrate:
         a2 = row("d2", 1.0)
         rec = SimpleNamespace(residuals_before=(b1, b2), residuals_after=(a2,))
         assert _residual_pairs(rec) == [(b1, None), (b2, a2)]
+
+
+# ---------------------------------------------------------------------------
+# Induction-circuit parameters
+# ---------------------------------------------------------------------------
+
+IM_TOML = REPO_ROOT / "data/creator_case_im/creator_case_im.toml"
+
+
+@pytest.fixture(scope="module")
+def im_motor():
+    return load_motor(IM_TOML)
+
+
+def _im_nameplate(motor: Motor, tau: float, *, derived=()) -> RunResult:
+    """Published rated torque, mapped onto the im_torque_slip rated point."""
+    from phasesweep.validation.measured import KeyMapping
+    data = MeasuredResult(
+        motor_name=motor.name,
+        test_type="torque_test",
+        conditions=MeasurementConditions(
+            speed_rpm=1430, temperature_C=22.0, load_torque_Nm=tau,
+            date="2026-09-02", instrument="test",
+        ),
+        quantities={"tau_nameplate": tau},
+        waveforms={}, uncertainty={}, source_file="test",
+        tolerances={"tau_nameplate": 0.5},
+        source="published",
+        derived_params=tuple(derived),
+        key_mapping={"tau_nameplate": KeyMapping(
+            "tau_rated", "rated-slip torque of the swept circuit")},
+    )
+    validate_measured(data)
+    return measured_run_result(data, motor, "im_nameplate")
+
+
+class TestInductionParams:
+
+    @pytest.mark.parametrize("param", ["R_2", "L_m", "L_sigma_s", "L_sigma_r"])
+    def test_recovers_perturbed_truth(self, im_motor, param):
+        """Each nested induction scalar is fittable against the rated
+        torque; the matching table scales with it (perturbation transform)."""
+        truth = perturb_motor(im_motor, param, -0.10)
+        assert truth is not None
+        metrics = MODEL_REGISTRY["im_torque_slip"].fn(
+            RunConfig(motor=truth, model="im_torque_slip"))
+        synthetic = _im_nameplate(im_motor, metrics["tau_rated"])
+        result = calibrate(
+            im_motor, [synthetic], params=[param], quantities=["tau_nameplate"],
+        )
+        fitted = result.record.params[0]
+        assert fitted.delta == pytest.approx(-0.10, abs=1e-3)
+        assert fitted.final == pytest.approx(
+            getattr(truth.induction, param), rel=1e-3)
+        assert result.record.models == ("im_torque_slip",)
+        assert result.record.closed
+        cal = result.motor.induction
+        assert cal is not None
+        assert getattr(cal, param) == pytest.approx(fitted.final)
+
+    def test_auto_models_skip_runtime_input_models(self, im_motor):
+        """im_equivalent_circuit needs RunConfig.slip the fit loop never
+        carries: its keys are unreachable, the swept model's are used."""
+        from phasesweep.validation.calibration import _auto_models
+        nameplate = _im_nameplate(im_motor, 24.7)
+        assert _auto_models(im_motor, [nameplate], ("tau_nameplate",)) == (
+            "im_torque_slip",)
+        with pytest.raises(ValueError, match="no fast computed model"):
+            _auto_models(im_motor, [nameplate], ("tau",))
+
+    def test_induction_param_on_pm_motor_refused(self, outrunner_motor, outrunner_backemf):
+        with pytest.raises(ValueError, match="'R_2' is not set"):
+            calibrate(outrunner_motor, [outrunner_backemf],
+                      params=["R_2"], quantities=["backemf_fundamental"])
+
+    def test_identified_param_circular_fit_refused(self, im_motor):
+        """A dataset tagged as the source of R_2 (identify_from_tests
+        provenance) cannot be used to fit R_2 again."""
+        tagged = _im_nameplate(im_motor, 24.7, derived=("R_2",))
+        with pytest.raises(ValueError, match="circular fit refused"):
+            calibrate(im_motor, [tagged], params=["R_2"],
+                      quantities=["tau_nameplate"])
+
+    def test_write_round_trips_induction_block(self, im_motor, tmp_path):
+        out = tmp_path / "im.toml"
+        write_motor_toml(im_motor, out)
+        back = load_motor(out)
+        assert back.config_id == im_motor.config_id
+        assert back.induction == im_motor.induction
+
+    def test_write_round_trips_cage_geometry(self, im_motor, tmp_path):
+        """The CREATOR IM carries a cage geometry; every bar field must
+        survive the writer or the loader rejects the PM-shaped remainder."""
+        assert im_motor.geometry.n_bars > 0
+        out = tmp_path / "im.toml"
+        write_motor_toml(im_motor, out)
+        back = load_motor(out)
+        assert back.geometry == im_motor.geometry
+        assert back.geometry.config_id == im_motor.geometry.config_id

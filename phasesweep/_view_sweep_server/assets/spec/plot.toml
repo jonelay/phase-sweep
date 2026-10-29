@@ -1,0 +1,63 @@
+# Plotly layout conventions.
+#
+# Two parts. [layout] and [config] are literal Plotly values shared by every
+# consumer. [bindings] maps Plotly layout paths to theme tokens, so a
+# resolved `layout.template` can be generated per palette variant
+# (spec/plotly/<palette>-<variant>.json) and a runtime builder can re-read
+# the same tokens from CSS after a theme switch. Both routes yield the
+# same layout; the template is the no-JS path, the builder is the live one.
+
+[meta]
+version = 1
+plotly_min = "2.0"
+
+[layout]
+hovermode = "x unified"
+showlegend = false
+uirevision = "keep"       # user zoom/pan survives data redraws
+
+[layout.margin]
+l = 55
+r = 12
+t = 8
+b = 42
+
+[layout.font]
+size = 12
+
+[config]
+responsive = true
+displaylogo = false
+scrollZoom = true
+
+# Plotly layout path -> theme token (without the --vs- prefix).
+[bindings]
+"paper_bgcolor" = "chart-bg"
+"plot_bgcolor" = "chart-bg"
+"font.family" = "font-ui"
+"font.color" = "chart-text"
+"hoverlabel.bgcolor" = "hoverlabel-bg"
+"hoverlabel.bordercolor" = "chart-grid"
+"hoverlabel.font.color" = "chart-text"
+"modebar.color" = "chart-muted"
+"modebar.activecolor" = "chart-text"
+"legend.bgcolor" = "legend-bg"
+"legend.bordercolor" = "chart-grid"
+"xaxis.gridcolor" = "chart-grid"
+"xaxis.zerolinecolor" = "chart-zeroline"
+"xaxis.linecolor" = "chart-zeroline"
+"xaxis.color" = "chart-muted"
+"yaxis.gridcolor" = "chart-grid"
+"yaxis.zerolinecolor" = "chart-zeroline"
+"yaxis.linecolor" = "chart-zeroline"
+"yaxis.color" = "chart-muted"
+
+# Trace colorway is filled from series-1..8 of the palette variant.
+[colorway]
+from_series = 8
+
+# Responsive breakpoints for tab-pane grids (px). Consumers lay panels out
+# in 3 / 2 / 1 columns below these widths.
+[breakpoints]
+wide = 1400
+mid = 1000

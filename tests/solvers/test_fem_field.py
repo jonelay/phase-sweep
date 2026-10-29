@@ -17,13 +17,13 @@ import numpy as np
 from phasesweep.machines.geometry import default_inrunner, inrunner, outrunner
 from phasesweep.solvers import fem_mesh
 from phasesweep.solvers.analytical import (
-    _derive_B_rem,
     end_effect_factor,
     end_effect_factor_pole_pitch,
-    zhu_howe_Br,
+    end_winding_leakage,
 )
 from phasesweep.solvers.fem_field import solve_field_fem
-from phasesweep.solvers.fem_mesh import _DEFAULT_GEO, clear_mesh_cache
+from phasesweep.solvers.fem_mesh import DEFAULT_GEO, clear_mesh_cache, set_disk_cache_dir
+from phasesweep.solvers.field_solution import derive_B_rem, zhu_howe_Br
 from phasesweep.solvers.harmonics import batch_harmonics, harmonics_1sided
 from tests.conftest import requires_fem
 from tests.solvers.fem_shared import (
@@ -56,7 +56,7 @@ def _spy_build_geometry(monkeypatch):
         return orig(g, **kw)
 
     monkeypatch.setattr(fem_mesh, "_build_motor_geometry", spy)
-    monkeypatch.setattr(fem_mesh, "_disk_cache_dir", None)
+    set_disk_cache_dir(None)
     clear_mesh_cache()
     return captured
 
@@ -105,10 +105,10 @@ def test_smooth_bore_field_nonzero():
 def test_smooth_bore_field_sign_matches_analytical():
     n_p = 2
     theta, B_fem = _solve(n_p=n_p)
-    B_rem = _derive_B_rem(0.1, n_p, 50, 0.966, 0.10,
-                          r_stator=_DEFAULT_GEO.r_stator,
-                          r_magnet=_DEFAULT_GEO.r_magnet,
-                          r_rotor=_DEFAULT_GEO.r_rotor)
+    B_rem = derive_B_rem(0.1, n_p, 50, 0.966, 0.10,
+                          r_stator=DEFAULT_GEO.r_stator,
+                          r_magnet=DEFAULT_GEO.r_magnet,
+                          r_rotor=DEFAULT_GEO.r_rotor)
     B_an = zhu_howe_Br(theta, n_p, B_rem, **_RADII)
     # FEM waveform is flat-topped (square-wave source) vs the analytical
     # pure cosine; correlation ~0.95 proves same sign/phase, not shape
@@ -197,9 +197,9 @@ def test_end_effect_factor_monotonic():
         prev = k
 
 
-def test_end_effect_factor_zero_returns_one():
-    """Edge cases: zero or negative inputs return 1.0."""
-    assert end_effect_factor(L_stk=0, g_eff=0.001) == 1.0
+def test_end_effect_factor_zero_limits():
+    """Edge cases take the documented limits: 0 at L_stk = 0, 1 at g_eff = 0."""
+    assert end_effect_factor(L_stk=0, g_eff=0.001) == 0.0
     assert end_effect_factor(L_stk=0.01, g_eff=0) == 1.0
 
 
@@ -210,9 +210,9 @@ def test_end_effect_factor_outrunner_range():
 
 
 def test_end_effect_factor_pole_pitch_limits():
-    """Pole-pitch form: → 1 for long stacks, 1.0 at degenerate inputs."""
+    """Pole-pitch form: → 1 for long stacks, 0 at L_stk = 0, 1 at tau_p = 0."""
     assert end_effect_factor_pole_pitch(L_stk=1.0, tau_p=0.004) == pytest.approx(1.0, abs=0.01)
-    assert end_effect_factor_pole_pitch(L_stk=0, tau_p=0.004) == 1.0
+    assert end_effect_factor_pole_pitch(L_stk=0, tau_p=0.004) == 0.0
     assert end_effect_factor_pole_pitch(L_stk=0.01, tau_p=0) == 1.0
 
 
@@ -233,6 +233,30 @@ def test_end_effect_factor_pole_pitch_outrunner_bracket():
     k_gap = end_effect_factor(L_stk=0.007, g_eff=0.00175)
     assert 0.60 < k_pp < 0.72
     assert k_pp < k_gap
+
+
+def test_end_winding_leakage_creator():
+    """Boldea L_ew for CREATOR IM (semicircular) matches hand calculation."""
+    L = end_winding_leakage(r_stator=0.0628, n_slots=36, n_p=2,
+                            coil_pitch_slots=7, N=18, coils_series=12)
+    assert L == pytest.approx(1.424e-3, rel=0.01)
+
+
+def test_end_winding_leakage_increases_with_ew_ratio():
+    """Longer end-turns produce more leakage."""
+    kw = dict(r_stator=0.0628, n_slots=36, n_p=2,
+              coil_pitch_slots=7, N=18, coils_series=12)
+    L_semi = end_winding_leakage(**kw)
+    L_long = end_winding_leakage(**kw, ew_ratio=2.0)
+    assert L_long > L_semi > 0
+
+
+def test_end_winding_leakage_raises_when_degenerate():
+    """lambda_ew <= 0 raises ValueError (non-positive permeance is input error)."""
+    with pytest.raises(ValueError, match="non-positive permeance"):
+        end_winding_leakage(r_stator=0.01, n_slots=6, n_p=1,
+                            coil_pitch_slots=1, N=10, coils_series=2,
+                            ew_ratio=0.5)
 
 
 def test_zhu_howe_rejects_np1():
@@ -257,10 +281,10 @@ def test_zhu_howe_is_pure_cosine():
 ])
 def test_fem_matches_zhu_howe(n_p, psi_f, L_d, L_q, N, k_w, L_stk):
     """FEM smooth-bore fundamental should match Zhu & Howe within 2%."""
-    B_rem = _derive_B_rem(psi_f, n_p, N, k_w, L_stk,
-                          r_stator=_DEFAULT_GEO.r_stator,
-                          r_magnet=_DEFAULT_GEO.r_magnet,
-                          r_rotor=_DEFAULT_GEO.r_rotor)
+    B_rem = derive_B_rem(psi_f, n_p, N, k_w, L_stk,
+                          r_stator=DEFAULT_GEO.r_stator,
+                          r_magnet=DEFAULT_GEO.r_magnet,
+                          r_rotor=DEFAULT_GEO.r_rotor)
     n_theta = 180
 
     theta = np.linspace(0, 2 * np.pi, n_theta, endpoint=False)
@@ -333,6 +357,27 @@ def test_double_onesided_does_not_mutate_input():
     original = amps.copy()
     _double_onesided(amps, 8)
     np.testing.assert_array_equal(amps, original)
+
+
+def test_compute_thd_rejects_bad_fund_idx():
+    """fund_idx out of range raises ValueError."""
+    from phasesweep.solvers.harmonics import compute_thd
+    amps = np.array([0.0, 1.0, 0.5])
+    with pytest.raises(ValueError, match="fund_idx.*out of range"):
+        compute_thd(amps, 0)   # DC bin is not a valid fundamental
+    with pytest.raises(ValueError, match="fund_idx.*out of range"):
+        compute_thd(amps, 3)   # past end
+    with pytest.raises(ValueError, match="fund_idx.*out of range"):
+        compute_thd(amps, -1)  # negative
+
+
+def test_compute_thd_rejects_nonfinite():
+    """Non-finite amplitudes raise ValueError."""
+    from phasesweep.solvers.harmonics import compute_thd
+    with pytest.raises(ValueError, match="non-finite"):
+        compute_thd(np.array([0.0, float("nan"), 0.5]), 1)
+    with pytest.raises(ValueError, match="non-finite"):
+        compute_thd(np.array([0.0, 1.0, float("inf")]), 1)
 
 
 def test_compute_thd_nan_on_zero_fundamental():
@@ -477,7 +522,7 @@ def test_newton_falls_back_to_picard(monkeypatch):
     def _stall(*args, **kwargs):
         raise RuntimeError("forced stall")
 
-    monkeypatch.setattr(ff, "_newton_solve", _stall)
+    monkeypatch.setattr(ff, "newton_solve", _stall)
     info: dict[str, float] = {}
     _, B_r = _solve(nonlinear=True, nonlinear_solver="newton", info=info)
     assert info.get("newton_fell_back") == 1.0
@@ -534,7 +579,7 @@ def test_inset_requires_arcs():
     with pytest.raises(ValueError, match="alpha_p=1.0 builds none"):
         _solve_inset(geo, alpha_p=1.0)
     # gap (1-0.99)*pi/2*0.015 = 0.24 mm < 0.5 mm OCC limit
-    with pytest.raises(ValueError, match="silently collapse"):
+    with pytest.raises(ValueError, match="below the 0.5 mm OCC limit"):
         _solve_inset(geo, alpha_p=0.99)
 
 
@@ -721,16 +766,16 @@ def test_paper_outrunner_fem_vs_analytical(paper_geometry_8pole_outrunner):
 
 
 # ---------------------------------------------------------------------------
-# P0: _derive_B_rem roundtrip (Issue audit)
+# P0: derive_B_rem roundtrip (Issue audit)
 # ---------------------------------------------------------------------------
 
 def test_derive_B_rem_scaled_radii():
     psi_f, n_p, N, k_w, L_stk = 0.1, 2, 50, 0.966, 0.10
-    B_rem_default = _derive_B_rem(psi_f, n_p, N, k_w, L_stk,
-                                  r_stator=_DEFAULT_GEO.r_stator,
-                                  r_magnet=_DEFAULT_GEO.r_magnet,
-                                  r_rotor=_DEFAULT_GEO.r_rotor)
-    B_rem_scaled = _derive_B_rem(
+    B_rem_default = derive_B_rem(psi_f, n_p, N, k_w, L_stk,
+                                  r_stator=DEFAULT_GEO.r_stator,
+                                  r_magnet=DEFAULT_GEO.r_magnet,
+                                  r_rotor=DEFAULT_GEO.r_rotor)
+    B_rem_scaled = derive_B_rem(
         psi_f, n_p, N, k_w, L_stk,
         r_stator=0.35, r_magnet=0.32, r_rotor=0.15,
     )
@@ -745,12 +790,12 @@ def test_derive_B_rem_scaled_radii():
 
 def test_derive_B_rem_roundtrip():
     psi_f, n_p, N, k_w, L_stk = 0.1, 2, 50, 0.966, 0.10
-    B_rem = _derive_B_rem(psi_f, n_p, N, k_w, L_stk,
-                          r_stator=_DEFAULT_GEO.r_stator,
-                          r_magnet=_DEFAULT_GEO.r_magnet,
-                          r_rotor=_DEFAULT_GEO.r_rotor)
+    B_rem = derive_B_rem(psi_f, n_p, N, k_w, L_stk,
+                          r_stator=DEFAULT_GEO.r_stator,
+                          r_magnet=DEFAULT_GEO.r_magnet,
+                          r_rotor=DEFAULT_GEO.r_rotor)
     assert 0.01 < B_rem < 1.0, f"B_rem={B_rem} outside physically reasonable range"
-    r_si = _DEFAULT_GEO.r_stator
+    r_si = DEFAULT_GEO.r_stator
     B_peak = zhu_howe_Br(np.array([0.0]), n_p, B_rem, r_eval=r_si,
                          **_RADII)[0]
     psi_f_recovered = B_peak * 2 * N * k_w * r_si * L_stk / n_p
@@ -1118,46 +1163,27 @@ class TestDiscreteArcs:
         assert np.max(np.abs(B_r)) > 0
 
     @pytest.mark.timeout(120)
-    def test_sub_threshold_gap_collapses_with_warning(self, caplog):
-        """Interpole gap < 0.5 mm: arcs collapse to alpha_p=1.0, loudly.
-
-        The collapse itself is an OCC limitation and stays; this pins
-        the warning, the info
-        flag, and that the solve equals the alpha_p=1.0 solve.
-        """
-        import logging as _logging
-
+    def test_sub_threshold_gap_raises(self):
+        """Interpole gap < 0.5 mm: OCC cannot cut the arcs, and solving the
+        collapsed full ring would answer alpha_p=1.0 to an alpha_p=0.93
+        request, so the solve refuses."""
         # gap at inner radius (fem v7) = (1-0.93)·π/7·0.010 = 0.314 mm
         # < 0.5 mm threshold (was 0.471 mm at the outer radius r_magnet)
         geo = inrunner(r_outer=0.030, r_stator=0.017, r_magnet=0.015,
                        r_rotor=0.010)
-        info: dict[str, float] = {}
-        with caplog.at_level(_logging.WARNING):
-            _, B_r_sub = solve_field_fem(
+        with pytest.raises(ValueError, match="0.314 mm is below the 0.5 mm OCC limit"):
+            solve_field_fem(
                 geo, n_p=7, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=5000,
-                alpha_p=0.93, info=info, **FAST)
-        assert info.get("arcs_collapsed") == 1.0
-        assert any("arcs" in r.message and "alpha_p=1.0" in r.message
-                   for r in caplog.records)
-        _, B_r_full = solve_field_fem(
-            geo, n_p=7, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=5000,
-            alpha_p=1.0, **FAST)
-        np.testing.assert_allclose(B_r_sub, B_r_full, atol=1e-10)
+                alpha_p=0.93, **FAST)
 
     @pytest.mark.timeout(120)
-    def test_supra_threshold_gap_no_collapse_flag(self, caplog):
-        """A comfortably wide gap must not warn or set the flag."""
-        import logging as _logging
-
+    def test_supra_threshold_gap_solves(self):
+        """A comfortably wide gap builds the arcs and solves."""
         geo = default_inrunner()
-        info: dict[str, float] = {}
-        with caplog.at_level(_logging.WARNING):
-            solve_field_fem(
-                geo, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=5000,
-                alpha_p=0.75, info=info, **FAST)
-        assert "arcs_collapsed" not in info
-        assert not any("arcs" in r.message and "collapsed" in r.message
-                       for r in caplog.records)
+        _, B_r = solve_field_fem(
+            geo, n_p=4, B_rem=1.2, mu_r_pm=1.05, mu_r_fe=5000,
+            alpha_p=0.75, **FAST)
+        assert np.max(np.abs(B_r)) > 0
 
     @pytest.mark.timeout(120)
     def test_gap_band_honors_per_face_refinement(self):

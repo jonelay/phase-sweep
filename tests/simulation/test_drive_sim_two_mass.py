@@ -278,7 +278,8 @@ class TestRunIdSeparation:
     def test_no_load_mech_matches_pinned_hash(self):
         plan = plan_sim(PARAMS)
         rc = RunConfig(motor=MOTOR, model="drive_sim", sim_plan=plan)
-        assert compute_run_id(rc) == "7d6c4420911d"
+        # drive_sim v4 (shared temperature derating); was 7d6c4420911d at v3.
+        assert compute_run_id(rc) == "e51e6bddfdee"
 
 
 # ---------------------------------------------------------------------------
@@ -288,20 +289,20 @@ class TestRunIdSeparation:
 class TestSimRunnerGuards:
 
     def test_rejects_load_mech_on_drive_sim(self):
-        from phasesweep.simulation.sim_runner import _run_sim_impl
+        from phasesweep.simulation.sim_runner import run_drive_sim
         plan = plan_sim(PARAMS)
         load = TwoMassLoad(J_L=0.005, K_S=700.0, C_S=0.01)
         rc = RunConfig(motor=MOTOR, model="drive_sim",
                        sim_plan=plan, load_mech=load)
         with pytest.raises(ValueError, match="drive_sim_two_mass"):
-            _run_sim_impl(rc)
+            run_drive_sim(rc)
 
     def test_rejects_two_mass_without_load_mech(self):
-        from phasesweep.simulation.sim_runner import _run_sim_impl
+        from phasesweep.simulation.sim_runner import run_drive_sim
         plan = plan_sim(PARAMS)
         rc = RunConfig(motor=MOTOR, model="drive_sim_two_mass", sim_plan=plan)
         with pytest.raises(ValueError, match="load_mech"):
-            _run_sim_impl(rc)
+            run_drive_sim(rc)
 
 
 class TestRunConfigRoundTrip:

@@ -153,6 +153,28 @@ class TestAxialFluxValidation:
                 n_slots=-1,
             )
 
+    @pytest.mark.parametrize("field, val", [
+        ("r_out", float("nan")),
+        ("r_out", float("inf")),
+        ("r_in", float("nan")),
+        ("r_in", float("inf")),
+        ("airgap", float("nan")),
+        ("airgap", float("inf")),
+        ("magnet_thickness", float("nan")),
+        ("magnet_thickness", float("inf")),
+        ("rotor_yoke", float("nan")),
+        ("rotor_yoke", float("inf")),
+        ("stator_yoke", float("nan")),
+        ("stator_yoke", float("inf")),
+    ])
+    def test_nan_inf_fields_rejected(self, field, val):
+        kw = dict(variant="DSSR", r_out=0.12, r_in=0.07,
+                  airgap=0.001, magnet_thickness=0.012,
+                  rotor_yoke=0.0, stator_yoke=0.020)
+        kw[field] = val
+        with pytest.raises(ValueError, match="finite"):
+            axial_flux(**kw)
+
     def test_valid_variants_not_in_init(self):
         """_VALID_VARIANTS must be ClassVar, not a dataclass field."""
         import dataclasses
@@ -262,6 +284,16 @@ class TestAxialFluxSlots:
         pitch = 2 * math.pi * geo.r_mean / 36
         with pytest.raises(ValueError, match="slot pitch"):
             self._slotted(slot_opening_width=pitch * 1.1)
+
+    @pytest.mark.parametrize("field, val", [
+        ("slot_depth", float("nan")),
+        ("slot_depth", float("inf")),
+        ("slot_opening_width", float("nan")),
+        ("slot_opening_width", float("inf")),
+    ])
+    def test_nan_inf_slot_fields_rejected(self, field, val):
+        with pytest.raises(ValueError, match="finite"):
+            self._slotted(**{field: val})
 
     def test_slot_opening_ratio_derived(self):
         geo = self._slotted(slot_opening_width=0.005)

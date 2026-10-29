@@ -1,0 +1,186 @@
+{
+  "meta": {
+    "prefix": "--vs-",
+    "version": 1
+  },
+  "core": {
+    "bg": {
+      "role": "page background behind all surfaces",
+      "kind": "color"
+    },
+    "surface": {
+      "role": "panel, sidebar, and top bar surface",
+      "kind": "color"
+    },
+    "text": {
+      "role": "primary foreground text",
+      "kind": "color"
+    },
+    "text-2": {
+      "role": "secondary text: labels, headings, captions",
+      "kind": "color"
+    },
+    "text-muted": {
+      "role": "de-emphasised text; must clear 4.5:1 on bg and surface (WCAG AA)",
+      "kind": "color"
+    },
+    "hairline": {
+      "role": "1px rules, borders, and pane seams",
+      "kind": "color"
+    },
+    "accent": {
+      "role": "UI accent for data/state fills (progress, tab underline, badges); theme-invariant",
+      "kind": "color"
+    },
+    "accent-ink": {
+      "role": "accent used as foreground text or indicator; may lighten in dark variants for contrast",
+      "kind": "color"
+    },
+    "status-good": {
+      "role": "success / connected / pass",
+      "kind": "color"
+    },
+    "status-warning": {
+      "role": "warning / connecting / marginal",
+      "kind": "color"
+    },
+    "status-critical": {
+      "role": "error / disconnected / fail",
+      "kind": "color"
+    },
+    "series-1": {
+      "role": "categorical series slot 1 (default single-series colour; leads with a blue/teal)",
+      "kind": "color"
+    },
+    "series-2": {
+      "role": "categorical series slot 2",
+      "kind": "color"
+    },
+    "series-3": {
+      "role": "categorical series slot 3",
+      "kind": "color"
+    },
+    "series-4": {
+      "role": "categorical series slot 4",
+      "kind": "color"
+    },
+    "series-5": {
+      "role": "categorical series slot 5",
+      "kind": "color"
+    },
+    "series-6": {
+      "role": "categorical series slot 6",
+      "kind": "color"
+    },
+    "series-7": {
+      "role": "categorical series slot 7",
+      "kind": "color"
+    },
+    "series-8": {
+      "role": "categorical series slot 8 (weakest hue; last to be assigned)",
+      "kind": "color"
+    }
+  },
+  "extended": {
+    "warn-ink": {
+      "role": "warning as foreground text (darker than status-warning for legibility)",
+      "kind": "color",
+      "fallback": "status-warning"
+    },
+    "banner-text": {
+      "role": "text on a warning-tinted banner",
+      "kind": "color",
+      "fallback": "warn-ink"
+    },
+    "shadow": {
+      "role": "translucent ink for drop shadows, scroll fades, and modal scrims",
+      "kind": "color",
+      "fallback": "rgba(0, 0, 0, 0.3)"
+    },
+    "hoverlabel-bg": {
+      "role": "Plotly hover-box background; must be opaque even when chart-bg is transparent",
+      "kind": "color",
+      "fallback": "surface"
+    },
+    "legend-bg": {
+      "role": "Plotly legend background; must be opaque even when chart-bg is transparent",
+      "kind": "color",
+      "fallback": "surface"
+    },
+    "chart-bg": {
+      "role": "plot paper and plot area background",
+      "kind": "color",
+      "fallback": "surface"
+    },
+    "chart-text": {
+      "role": "plot font colour",
+      "kind": "color",
+      "fallback": "text-2"
+    },
+    "chart-muted": {
+      "role": "axis tick and modebar colour",
+      "kind": "color",
+      "fallback": "text-muted"
+    },
+    "chart-grid": {
+      "role": "gridline colour",
+      "kind": "color",
+      "fallback": "hairline"
+    },
+    "chart-zeroline": {
+      "role": "zero-line colour; a step stronger than chart-grid",
+      "kind": "color",
+      "fallback": "hairline"
+    },
+    "chart-ink": {
+      "role": "translucent overlay strokes on plots (boundary circles, guides)",
+      "kind": "color",
+      "fallback": "shadow"
+    },
+    "seq-lo": {
+      "role": "single-hue sequential ramp: low end (fades into chart-bg)",
+      "kind": "color",
+      "fallback": "chart-bg"
+    },
+    "seq-mid": {
+      "role": "single-hue sequential ramp: midpoint",
+      "kind": "color",
+      "fallback": "accent"
+    },
+    "seq-hi": {
+      "role": "single-hue sequential ramp: high end",
+      "kind": "color",
+      "fallback": "text"
+    },
+    "accent-warm": {
+      "role": "secondary warm accent (cinematic palettes)",
+      "kind": "color",
+      "fallback": "accent"
+    },
+    "accent-cool": {
+      "role": "secondary cool accent (cinematic palettes)",
+      "kind": "color",
+      "fallback": "accent"
+    },
+    "font-ui": {
+      "role": "body and chrome font stack",
+      "kind": "font-family",
+      "fallback": "system-ui, -apple-system, \"Segoe UI\", sans-serif"
+    },
+    "font-mono": {
+      "role": "monospace stack for code, config keys, and numeric inputs",
+      "kind": "font-family",
+      "fallback": "ui-monospace, monospace"
+    },
+    "font-size": {
+      "role": "base font size for chrome",
+      "kind": "length",
+      "fallback": "13px"
+    },
+    "radius": {
+      "role": "corner radius for controls",
+      "kind": "length",
+      "fallback": "4px"
+    }
+  }
+}

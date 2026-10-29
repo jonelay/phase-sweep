@@ -21,3 +21,21 @@ export function relTime(ts) {
 
 // "2026-07-16 18:20" — the stored ISO string, trimmed to the minute.
 export const absTs = (ts) => (ts ? ts.slice(0, 16).replace("T", " ") : "—");
+
+// -- trace identity ------------------------------------------------------------
+
+// Model identity within a config's color: fixed map, not an arrival-order
+// counter, so the same model always gets the same dash across configs.
+// Same-model sweep points within a config render alike — hover's r_o
+// distinguishes them.
+export const MODEL_DASH = { analytical: "solid", fem: "dash" };
+
+// Overlay legend identity: motor + model, plus r_outer so sweep points
+// (same motor name, same model) stay distinguishable.
+export function traceName(result) {
+  const motor = result.config?.motor ?? {};
+  const base = `${motor.name ?? "?"} · ${result.model}`;
+  const rOuter = motor.geometry?.r_outer;
+  return typeof rOuter === "number"
+    ? `${base} · r_o ${(rOuter * 1000).toFixed(2)}` : base;
+}

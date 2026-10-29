@@ -1,0 +1,243 @@
+# BMW i3 (2016) — 125 kW IPM traction motor
+# 12-pole, 72-slot, V-shape NdFeB interior magnets, distributed winding
+#
+# PRIMARY GEOMETRY/CIRCUIT SOURCE:
+#   Gierczynski & Grzesiak, Energies 2021, 14(9), 2343.
+#   DOI: 10.3390/en14092343 (open access, CC BY 4.0).
+#   Warsaw University of Technology. Ansys Maxwell 2D FEM model
+#   reconstructed from ORNL public-domain data, Hendershot teardown
+#   video, and BMW/Merwerth presentation. Validated against ORNL
+#   locked-rotor torque measurements.
+#
+# ORNL TEARDOWN SOURCE:
+#   Burress, DOE VTO Annual Merit Review EDT006, June 2016 (slides 21-23)
+#   Burress, DOE VTO Annual Merit Review EDT087, June 2017 (slides 8-9, 16)
+#   See data/bmw_i3/README.md for full citations and URLs.
+#
+# SUPPLEMENTARY GEOMETRY SOURCE:
+#   Tikadar et al., IEEE ITherm 2020 (OSTI 1843426) — Motor-CAD FEM
+#   thermal model. Cited for cross-reference; small discrepancies noted.
+#
+# DECLARED ASSUMPTIONS:
+#   B_rem: NdFeB 38/23, B_r = 1.24 T at 20 C (Gierczynski Table A3,
+#     citing Eclipse Magnetics datasheet).
+#   r_rotor: From the Gierczynski AutoCAD .dxf supplementary file
+#     (energies-14-02343-s001.zip). Inner magnet pocket inner-tip radius
+#     = 72.993 mm. The annular model approximates the V-shape as an
+#     equivalent magnet ring — valid for circuit-tier models only.
+#   Steel: M-19 29 Ga (ORNL-identified via Hendershot teardown [20]).
+#     Tikadar et al. used M250-35A in their thermal model. The ORNL identification
+#     is preferred. Loss coefficients are catalog-typical (see [iron]).
+#   B_core: geometric no-load estimate, uncalibrated (see [iron]).
+#   Air gap: 0.7 mm (Gierczynski, from rotor OD = stator bore - 2*gap).
+#     Tikadar et al. list 0.5 mm in a CFD domain description; 0.7 mm is more
+#     consistent with the measured stator bore and rotor OD and more
+#     typical for a 125 kW traction motor at this diameter.
+#   Circuit parameters: FEA-extracted from the Gierczynski model; L_d and
+#     L_q are SECANT (not incremental) values at the peak-torque operating
+#     point (i_d = -401 A, i_q = 399 A). Heavily saturated.
+
+[motor]
+name = "BMW i3 2016 IPM"
+type = "IPMSM"
+topology = "inrunner"
+
+[geometry]
+r_outer = 0.12105      # m, stator lam OD/2 = 242.1 mm / 2 (Gierczynski Table A1)
+r_stator = 0.09000     # m, stator bore/2 = 180.0 mm / 2 (Gierczynski Table A1)
+r_magnet = 0.08930     # m, rotor OD/2 = 178.6 mm / 2 (Gierczynski Table A1)
+r_rotor = 0.07299      # m, inner tip of V-shape pocket (DXF supplementary, 72.993 mm)
+r_inner = 0.06515      # m, rotor lam bore/2 = 130.3 mm / 2 (Gierczynski Table A1)
+                       # non-magnetic hub below this radius (Table A3)
+L_stk = 0.1323         # m, axial lamination length (Gierczynski Table A1)
+magnet_mount = "inset"
+alpha_p = 0.75            # ESTIMATED — V-shape effective arc fraction from Figure 1
+slot_depth = 0.022      # m, 22.0 mm (Gierczynski Table A1)
+slot_opening_width = 0.0017  # m, 1.7 mm (Gierczynski Table A1)
+
+[winding]
+n_slots = 72           # Burress 2016 slide 22
+N = 9                  # turns per coil (Gierczynski Table A2)
+coils_series = 2       # q=2 slots/pole/phase, single layer → 2 coils in series per branch
+k_w = 0.966            # 72-slot 12-pole full-pitch distributed winding
+
+[circuit]
+n_p = 6                # 12 poles (Burress 2016 slide 22)
+R_s = 0.0053           # Ohm, phase resistance (Gierczynski Table 1)
+L_d = 71.2e-6          # H, d-axis inductance, secant at peak torque (Gierczynski Table 2)
+L_q = 141.3e-6         # H, q-axis inductance, secant at peak torque (Gierczynski Table 2)
+psi_f = 0.0436         # Wb, PM flux linkage at (i_d=0, i_q=0) (Gierczynski Table A4)
+
+[materials]
+steel_grade = "M-19 29 Ga"    # ORNL-identified (Hendershot teardown [20])
+mu_r_fe = 2500                # typical M-19 at operating B
+magnet_type = "NdFeB"
+B_rem = 1.24                  # T at 20 C (NdFeB 38/23, Gierczynski Table A3)
+mu_r_pm = 1.05
+alpha_Br = -0.0012            # /K (typical NdFeB UH grade)
+
+[iron]
+# M-19 29 Ga Bertotti coefficients: global two-term fit over the catalog
+# typical core-loss table (AK Steel via EMERF "Lamination Steels", MIT
+# OCW 6.685 excerpt; data/bmw_i3/m19_29ga_core_loss.csv), 50-2000 Hz,
+# B <= 1.5 T (90 rows, 4.9% median residual, 20% worst at 1000 Hz /
+# 0.7 T). Same fit_bertotti procedure and B cut as the CREATOR M250-35A
+# fit. Catalog steel, not an i3 measurement; the as-built core (segmented
+# stator, cut edges, stress) runs above catalog.
+k_h = 0.02127         # W/(kg Hz T^alpha)
+k_e = 6.149e-5        # W/(kg Hz^2 T^2)
+alpha_fe = 1.78
+# Stator core mass as received (ORNL, EETT Roadmap App. C Table C-3).
+# Gross geometric yoke + 72 teeth from Table A1 at 7650 kg/m^3 gives
+# 14.7 kg, so 13.7 kg implies a ~0.93 stacking factor -- consistent.
+m_core = 13.7         # kg
+# ESTIMATED, not calibrated. No-load flux from psi_f (2.51 mWb per pole
+# through k_w * 18 series turns): B_yoke 1.05 T over the 9.05 mm yoke,
+# B_tooth 0.99 T at the 7.85 mm slot pitch / 5.0 mm tooth, mass-weighted
+# 1.0 T. Load, field weakening and PWM harmonics move it; CREATOR showed
+# the lump running 2.7x light at the geometric B. Calibrate against the
+# ORNL motor efficiency map (EDT087, low-torque contours) before
+# trusting p_fe.
+B_core = 1.0          # T (peak, effective, no-load geometric)
+
+[drive]
+# W_REF is deliberately absent: it is an operating point, not a machine
+# property, and several registry models branch on its presence. A sweep
+# or test supplies it per point through DriveParams.
+U_DC = 355.0           # V nominal battery (Burress 2016 slide 19)
+MAX_I_S = 565.7        # A peak (Gierczynski Table 1)
+
+# Nonlinear d-q flux-linkage surface (Gierczynski FEMResults_1000rpm.xlsx,
+# angle-averaged; data/bmw_i3/flux_maps_7x7.json holds the same grid in
+# mWb with the torque sheet). Wb and A peak, layout [i_q_idx][i_d_idx].
+# rated_torque / stall_torque switch to the numeric MTPA on this surface.
+# Extraction magnet temperature not published (magnet_temp_ref_C unset):
+# every circuit model assumes the 20 degC alpha_Br reference when a
+# magnet_temp is set (rated_torque, stall_torque, torque_speed,
+# operating_point, drive_sim all shift the map through one rule).
+# That assumption brackets the hot peak torque: with magnets at 100 degC
+# the envelope at MAX_I_S is 243 N.m if the map is a 20 degC map, and the
+# 250 N.m nameplate holds if it was extracted at 100 degC (the map peaks
+# at 258 N.m at its own temperature, 3 % over nameplate). The map
+# reproduces Gierczynski's peak point at its own temperature, whatever
+# that was (tests/crossval/test_bmw_i3_rated_torque.py,
+# tests/models/test_operating_point.py::TestI3EnvelopeBracket).
+[flux_map]
+i_d_A = [-600, -500, -400, -300, -200, -100, 0]
+i_q_A = [0, 100, 200, 300, 400, 500, 600]
+psi_d_Wb = [
+    [0.0010218, 0.0076612, 0.0144783, 0.0214557, 0.0285953, 0.0359145, 0.0435964],
+    [0.0013343, 0.0079851, 0.0148077, 0.0218019, 0.0289990, 0.0364885, 0.0443812],
+    [0.0019804, 0.0085530, 0.0153238, 0.0223210, 0.0295379, 0.0369563, 0.0439535],
+    [0.0026644, 0.0089904, 0.0154411, 0.0221675, 0.0290021, 0.0356273, 0.0414912],
+    [0.0031529, 0.0091178, 0.0151318, 0.0212774, 0.0275595, 0.0336089, 0.0390065],
+    [0.0034100, 0.0090128, 0.0146421, 0.0203229, 0.0260257, 0.0315452, 0.0366149],
+    [0.0035505, 0.0087863, 0.0140559, 0.0193649, 0.0246518, 0.0297585, 0.0345145],
+]
+psi_q_Wb = [
+    [-0.0002424, -0.0002314, -0.0002163, -0.0001880, -0.0001480, -0.0001013, -0.0000518],
+    [0.0188342, 0.0198098, 0.0207967, 0.0217814, 0.0227827, 0.0238880, 0.0248878],
+    [0.0352450, 0.0368345, 0.0381858, 0.0393890, 0.0403085, 0.0408374, 0.0400903],
+    [0.0473874, 0.0488867, 0.0499061, 0.0502070, 0.0499273, 0.0487675, 0.0466984],
+    [0.0553626, 0.0562638, 0.0565729, 0.0562571, 0.0551608, 0.0534210, 0.0512694],
+    [0.0599484, 0.0602900, 0.0601684, 0.0595502, 0.0584684, 0.0568790, 0.0548343],
+    [0.0626875, 0.0628228, 0.0625225, 0.0618313, 0.0607704, 0.0593472, 0.0575737],
+]
+
+# Three-node lumped network (winding W, iron Fe, magnet/rotor M) for the
+# motor_thermal model; sink = RunConfig.T_coolant. G_FeS FITTED to the
+# Burress 2017 slide 9 continuous test at 7000 rpm (three winding
+# plateaus, data/bmw_i3/burress_2017_slide9_continuous_test_7000rpm.csv)
+# through the coupled solve at an assumed coolant of 60 degC
+# (unpublished; the opening no-load segment, 63.2 degC at 0.4 kW, bounds
+# it from above if the motor is at equilibrium there; assumed bracket
+# 55-63 degC gives G_FeS 33.2-43.6 W/K).
+# Residuals (predicted - measured): 25 kW -3.3 K, 50 kW -3.8 K, 75 kW +4.1 K
+# (rms 3.7 K); at the no-load segment, not fitted, the model
+# predicts 73.9 degC (+10.7 K): its no-load iron loss at 7000 rpm
+# holds the winding above the sink where the trace sits near it. The
+# fit absorbs every loss the model does not carry (AC copper, PWM,
+# mechanical, the uncalibrated [iron] B_core): a pin, not a validation.
+# scripts/fit_i3_thermal_network.py regenerates this block;
+# scripts/check_i3_thermal_transient.py marches it through the trace.
+[thermal_network]
+G_WFe = 42.55   # W/K, 1/R_WFe, R_WFe = 0.0235 K/W from Tikadar et al. 2020 (Motor-CAD hot spot
+                # two-point back-solve at 4500 rpm, h = 5000 W/m2K); dG_FeS/dR_WFe =
+                # 584 W/K per K/W from re-fits at R_WFe +/- 20 %
+G_FeS = 39.00   # W/K, fitted (R_FeS = 0.0256 K/W; the Tikadar et al. model implies 0.0029)
+G_FeM = 8.2     # W/K, air gap, Becker-Kaye correlation at 7000 rpm; invisible at steady state
+C_W = 2733.5    # J/K, 385 J/kgK x 7.1 kg copper (EETT Table C-3)
+C_Fe = 6302.0   # J/K, 460 J/kgK x 13.7 kg stator core (EETT Table C-3)
+C_M = 6532.0    # J/K, 460 J/kgK x 14.2 kg rotor incl. 2.0 kg magnets (Burress 2016 slide 23)
+winding_basis = "ETD"   # assumed: coil-mounted stator sensors (BMW i3 manual, Burress 2016
+                        # slide 21); nothing shows the Burress 2017 trace came from them
+
+[rated]
+power_kW = 125.0       # Burress 2016 slide 21
+speed_rpm = 4800       # approximate base speed (from efficiency map knee)
+max_speed_rpm = 11400  # Burress 2017 slide 9 (efficiency map extent; axis ~11000, 11400 from power boundary)
+torque_Nm = 250.0      # Burress 2016 slide 21
+
+[mass]
+stator_kg = 20.8       # Burress 2016 slide 22
+rotor_kg = 14.2        # Burress 2016 slide 23
+assembly_kg = 42.0     # Burress 2016 slide 21 (stator assembly, as received)
+
+[provenance]
+motor_model = "2016 BMW i3 (I01) traction motor, type EMP242"
+references = [
+    "Gierczynski & Grzesiak, Energies 2021 14(9) 2343 (FEM model, circuit params, flux maps)",
+    "Gierczynski supplementary: energies-14-02343-s001.zip (AutoCAD DXF, FEM results xlsx)",
+    "Burress, DOE VTO AMR EDT006, June 2016 (teardown, slides 19-23)",
+    "Burress, DOE VTO AMR EDT087, June 2017 (benchmarking, slides 8-9, 16, 20)",
+    "U.S. DRIVE EETT Roadmap, Oct 2017, Appendix C (efficiency maps at 355 Vdc)",
+    "Tikadar et al., IEEE ITherm 2020, OSTI 1843426 (FEM geometry, materials)",
+]
+notes = """
+First non-Toyota/Honda EV traction motor in the ORNL benchmarking program.
+Highly-saturated IPM: saliency ratio ~2.0, rotor yoke saturated even at
+no-load. Extreme example of a machine where the linearized constant-
+parameter model shows significant error vs the full nonlinear flux-linkage
+surface model (Gierczynski Section 4).
+
+Notable design features: segmented stator (6 pieces, staggered axially),
+skewed rotor (6 axial segments, 1 mechanical degree each), spiral-groove
+jacket cooling, two magnets per pole (1 large + 1 small) in V-shape.
+
+Winding: 6 parallel circuits per phase, each one Y-connected with its own
+neutral (6 independent neutrals). Full-pitch concentrically wound,
+12 strands of AWG 21 per turn, 54.4% slot fill.
+
+GEOMETRY CAVEAT: r_rotor is from the Gierczynski supplementary DXF, which
+gives the inner magnet pocket inner-tip radius (72.993 mm). The V-shape
+IPM rotor has two magnets per pole at different radii — inner pocket
+r=[73.0, 78.9] mm, outer pocket r=[84.3, 87.5] mm. The annular model
+approximates this as a single ring; valid for circuit-tier models
+(drive_sim, torque_speed) that use L_d/L_q/psi_f directly, but the
+analytical B-field solver (Zhu & Howe) rejects inset magnets, and the
+FEM solver would need the actual V-shape pocket geometry.
+
+CIRCUIT PARAMETER CAVEAT: L_d and L_q are secant inductances at the
+peak-torque operating point (i_d = -401 A, i_q = 399 A), not small-signal
+incremental values. The machine is heavily saturated at this point.
+Full nonlinear flux linkage maps psi_d(i_d, i_q) and psi_q(i_d, i_q)
+are extracted in data/bmw_i3/flux_maps_7x7.json (7x7 grid, peak phase mWb).
+
+DIMENSION DISCREPANCIES between Gierczynski and Tikadar et al.:
+  Stator OD: 242.1 vs 240.90 mm (+1.2 mm)
+  Stator bore: 180.0 vs 179.76 mm (+0.24 mm)
+  Air gap: 0.7 vs 0.5 mm (+0.2 mm)
+  Stack length: 132.3 vs 130 mm (+2.3 mm)
+  Slot depth: 22.0 vs 21.5 mm (+0.5 mm)
+  Steel: M-19 29 Ga vs M250-35A (different identification)
+Both sources reconstructed from ORNL measurements; neither is the primary
+measurement itself. Gierczynski's set is preferred because it is self-
+consistent, cites more sources, and gives a 0.7 mm air gap that matches
+the rotor OD/stator bore math and is more typical for this motor size.
+
+Eligible for: drive_sim, torque_speed, rated_torque, stall_torque,
+  thermal_duty (with circuit parameters), iron_loss (given a W_REF),
+  operating_point and motor_thermal (demand + T_coolant per run)
+Not eligible for: analytical B-field (inset magnets), FEM (needs V-shape
+  pocket geometry, not the annular approximation)
+"""

@@ -2,14 +2,16 @@
 // Color = config (compare-set slot from app.js), dash = model
 // (MODEL_DASH); identity lives in chips + hover, no legend.
 
-import { MODEL_DASH, SERIES, axisStyle, baseLayout, makeOverlay, redrawOverlay, traceName } from "./plot_theme.js";
-import { provenanceText } from "./widgets.js";
+import { makeOverlay } from "/view-sweep/js/plot.js";
+import { provenanceText } from "/view-sweep/js/widgets.js";
+import { MODEL_DASH, traceName } from "./format.js";
 import { makeCursors, cursorToggleButton } from "./cursors.js";
 
-// built per redraw so a theme switch picks up the current --chart-* colors
-const layout = () => baseLayout({
-  xaxis: axisStyle("θ [deg]"),
-  yaxis: axisStyle("B_r [T]"),
+// built per redraw so a theme switch picks up the current chart tokens
+const layout = () => ({
+  xaxis: appCtx.plot.axisStyle("θ [deg]"),
+  yaxis: appCtx.plot.axisStyle("B_r [T]"),
+  shapes: cursors?.shapes() ?? [], // [] when off, so Plotly clears them
 });
 
 let plotEl = null;
@@ -22,12 +24,10 @@ let cursors = null;
 const overlay = makeOverlay();
 
 function redraw() {
-  // re-read the slot's hue so a palette switch (SERIES mutated in place,
-  // plot_theme.js) re-hues traces that were colored at route time
-  for (const t of overlay.traces) t.line.color = SERIES[t._slot];
-  const l = layout();
-  l.shapes = cursors?.shapes() ?? []; // [] when off, so Plotly clears them
-  const p = redrawOverlay(plotEl, hintEl, overlay.traces, l);
+  // re-read the slot's hue so a palette switch (theme.series mutated in
+  // place) re-hues traces that were colored at route time
+  for (const t of overlay.traces) t.line.color = appCtx.theme.series[t._slot];
+  const p = appCtx.plot.redraw(plotEl, overlay.traces, layout(), hintEl);
   cursors?.refresh(); // rebuilds when on (tracks current traces), clears when off
   return p;
 }
@@ -73,7 +73,7 @@ export default {
     appCtx = app;
 
     hintEl = document.createElement("div");
-    hintEl.className = "empty-hint";
+    hintEl.className = "vs-empty-hint";
     hintEl.textContent = "No waveform yet — select a config or submit an analytical/fem job.";
 
     plotEl = document.createElement("div");
@@ -83,7 +83,7 @@ export default {
     statsEl.className = "cursor-stats-host";
 
     provEl = document.createElement("div");
-    provEl.className = "provenance";
+    provEl.className = "vs-provenance";
 
     // A/B cursors: θ is the shared axis, so peak-to-peak
     // and mean over a window read across all overlaid traces
@@ -97,6 +97,7 @@ export default {
       sourceLabel: "B_r samples (full resolution)",
     });
     const clearBtn = document.createElement("button");
+    clearBtn.className = "vs-btn";
     clearBtn.textContent = "Clear overlay";
     // drops compare-set overlays app-wide (chips + all panels together)
     clearBtn.addEventListener("click", () => app.compare.clearOverlays());
@@ -132,7 +133,7 @@ export default {
       x: m.theta_list.map((t) => (t * 180) / Math.PI),
       y: m.B_r_list,
       mode: "lines",
-      line: { color: SERIES[slot], width: 2, dash: MODEL_DASH[result.model] ?? "solid" },
+      line: { color: appCtx.theme.series[slot], width: 2, dash: MODEL_DASH[result.model] ?? "solid" },
       name: traceName(result),
       hovertemplate: "%{y:.4f} T<extra>%{fullData.name}</extra>",
     });

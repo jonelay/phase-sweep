@@ -4,10 +4,10 @@ The per-model Params dataclasses and prepare_* factories live next to
 their run functions (solvers/, models/, simulation/params.py); this
 module keeps what they share: winding arithmetic (n_eff,
 winding_transfer, the j_s ↔ phase-current mapping), the Carter-consistent
-B_rem ↔ psi_f derivation and resolution (_resolve_b_rem, _resolve_psi_f,
-psi_f_carter), and the common validation gates (_reject_induction,
-_require_geometry, _require_axial_geometry, _require_drive_fields,
-_salient_pair).
+B_rem ↔ psi_f derivation and resolution (resolve_b_rem, resolve_psi_f,
+psi_f_carter), and the common validation gates (reject_induction,
+require_geometry, require_axial_geometry, require_drive_fields,
+salient_pair).
 """
 
 from __future__ import annotations
@@ -16,10 +16,150 @@ import warnings
 from math import pi
 from typing import TYPE_CHECKING
 
+from phasesweep.defaults import COPPER_TEMP_COEFF
 from phasesweep.machines.geometry import AxialFluxGeometry, Geometry
+from phasesweep.solvers.field_solution import (
+    carter_adjusted_radii,
+    derive_B_rem,
+    zhu_howe_Br,
+)
 
 if TYPE_CHECKING:
     from phasesweep.machines.motor import Motor
+
+__all__ = [
+    "MAGNET_REF_TEMP_C",
+    "R_S_REF_TEMP_C",
+    "backemf_from_flux",
+    "backemf_source",
+    "check_nyquist",
+    "derate",
+    "derate_motor",
+    "derive_B_rem_from_psi_f",
+    "derive_psi_f_smooth",
+    "j_s_from_phase_current",
+    "n_eff",
+    "phase_current_from_j_s",
+    "psi_f_at_magnet_temp",
+    "psi_f_carter",
+    "r_s_at_operating_temp",
+    "reject_induction",
+    "require_axial_geometry",
+    "require_drive_fields",
+    "require_geometry",
+    "resolve_b_rem",
+    "resolve_psi_f",
+    "salient_pair",
+    "winding_transfer",
+]
+
+
+# ---------------------------------------------------------------------------
+# Temperature derating (shared by every circuit model)
+# ---------------------------------------------------------------------------
+
+# Reference temperature of a datasheet R_s. 20 °C matches the back-EMF
+# derating reference; a 25 °C datasheet differs by ~2%,
+# negligible beside the ~50% rise to a class-F winding limit.
+R_S_REF_TEMP_C: float = 20.0
+
+# Reference temperature of a datasheet B_rem / psi_f (magnet derating).
+# Same 20 °C convention as R_S_REF_TEMP_C; unlike copper's
+# universal alpha, the magnet coefficient is grade-specific and lives on
+# Motor.alpha_Br.
+MAGNET_REF_TEMP_C: float = 20.0
+
+
+def psi_f_at_magnet_temp(
+    psi_f_ref: float, magnet_temp: float | None, alpha_Br: float | None,
+) -> float:
+    """psi_f (Wb, peak) derated to the magnet operating temperature.
+
+    psi_f(T) = psi_f_ref · [1 + alpha_Br·(T_magnet − T_ref)] — B_rem and
+    psi_f share the linear coefficient since psi_f is linear in B_rem.
+    With no magnet_temp there is nothing to derate to (cold reference
+    returned); alpha_Br alone is inert material data. The magnet runs
+    cooler than the winding hot-spot, so magnet_temp is its own field,
+    not winding_temp_limit. The (-0.01, 0) range check on alpha_Br lives
+    in Motor.__post_init__ and in `derate`.
+    """
+    if magnet_temp is None or alpha_Br is None:
+        return psi_f_ref
+    return psi_f_ref * (1.0 + alpha_Br * (magnet_temp - MAGNET_REF_TEMP_C))
+
+
+def r_s_at_operating_temp(
+    R_s_ref: float, winding_temp: float | None,
+) -> float:
+    """R_s (Ω) at the winding temperature winding_temp (°C).
+
+    Every circuit model passes Motor.winding_temp_limit (worst-case S1);
+    motor_thermal passes its solved winding node.
+
+    R_s(T) = R_s_ref · [1 + α_cu·(T − T_ref)]. At the S1 thermal
+    steady state the winding sits at winding_temp_limit, so passing the
+    limit gives the conservative operating resistance with no fixed-point
+    solve. With no winding_temp there is nothing to derate to, so R_s_ref
+    is returned unchanged (cold). winding_temp_limit is an insulation hot-spot, marginally
+    above the mean winding temperature that sets bulk R_s, so this slightly
+    over-estimates R_s (conservative). Where derating affects the verdict vs.
+    merely rescaling watts is documented at thermal_duty._resolve_thermal_budget.
+    """
+    if winding_temp is None:
+        return R_s_ref
+    return R_s_ref * (1.0 + COPPER_TEMP_COEFF * (winding_temp - R_S_REF_TEMP_C))
+
+
+def derate(R_s: float | None, psi_f: float, winding_temp: float | None,
+           magnet_temp: float | None, alpha_Br: float | None) -> tuple[float | None, float]:
+    """(R_s_op, psi_f_op) with the inputs and results range-checked.
+
+    The one derating rule every circuit model applies, so a motor with
+    magnet_temp / winding_temp_limit set gives the same psi_f and R_s to
+    rated_torque, stall_torque, torque_speed, operating_point, thermal_duty,
+    demag_screen and drive_sim. R_s may be None for models that do not
+    read it (rated_torque).
+
+    NaN passes every inequality downstream and would persist as a result;
+    a derated psi_f <= 0 is outside the linear alpha_Br model and flips
+    the sign of the no-load voltage.
+    """
+    from math import isfinite
+
+    for name, v in (("winding_temp", winding_temp),
+                    ("magnet_temp", magnet_temp), ("alpha_Br", alpha_Br)):
+        if v is not None and not isfinite(v):
+            raise ValueError(f"{name} must be finite, got {v}")
+    if magnet_temp is not None and alpha_Br is None:
+        raise ValueError(
+            "magnet_temp is set but alpha_Br is not — the B_rem temperature "
+            "coefficient is grade-specific (per K, e.g. NdFeB N42 -0.0012, "
+            "SmCo -0.0003); set alpha_Br or drop magnet_temp"
+        )
+    if alpha_Br is not None and not (-0.01 < alpha_Br < 0):
+        raise ValueError(f"alpha_Br must be in (-0.01, 0) per K, got {alpha_Br}")
+    psi_f_op = psi_f_at_magnet_temp(psi_f, magnet_temp, alpha_Br)
+    if psi_f > 0.0 and psi_f_op <= 0.0:
+        raise ValueError(
+            f"psi_f derated to magnet_temp {magnet_temp} degC is {psi_f_op:.4g} "
+            f"Wb, not > 0: outside the linear alpha_Br range")
+    if R_s is None:
+        return None, psi_f_op
+    R_s_op = r_s_at_operating_temp(R_s, winding_temp)
+    if R_s_op < 0.0:
+        raise ValueError(
+            f"R_s derated to winding_temp {winding_temp} degC is "
+            f"{R_s_op:.4g} ohm, below zero")
+    return R_s_op, psi_f_op
+
+
+def derate_motor(motor: Motor, R_s: float | None, psi_f: float) -> tuple[float | None, float]:
+    """`derate` against the motor's own thermal fields, error-prefixed."""
+    try:
+        return derate(R_s, psi_f, motor.winding_temp_limit, motor.magnet_temp,
+                      motor.alpha_Br)
+    except ValueError as e:
+        raise ValueError(f"Motor '{motor.name}': {e}") from None
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +247,7 @@ def j_s_from_phase_current(
 
     from phasesweep.solvers.fem_mesh import slot_source_moment
 
-    geo = _require_geometry(motor, "j_s_from_phase_current")
+    geo = require_geometry(motor, "j_s_from_phase_current")
     S = slot_source_moment(geo, slot_width_ratio=slot_width_ratio,
                            n_p=motor.n_p)
     return 3 * n_eff(motor) * i_peak / (pi * S)
@@ -121,13 +261,29 @@ def phase_current_from_j_s(
 
     from phasesweep.solvers.fem_mesh import slot_source_moment
 
-    geo = _require_geometry(motor, "phase_current_from_j_s")
+    geo = require_geometry(motor, "phase_current_from_j_s")
     S = slot_source_moment(geo, slot_width_ratio=slot_width_ratio,
                            n_p=motor.n_p)
     return j_s * pi * S / (3 * n_eff(motor))
 
 
-def _derive_B_rem_from_psi_f(motor: Motor) -> float | None:
+def _derivation_gaps(motor: Motor, source: str) -> list[str]:
+    """Inputs blocking the psi_f <-> B_rem derivation, for error messages.
+
+    Mirrors the None returns of derive_B_rem_from_psi_f / _derive_psi_f,
+    including the geometry ones, so the error names the real blocker.
+    """
+    gaps = [source] if getattr(motor, source) is None else []
+    gaps += [f for f in ("N", "k_w", "L_stk") if getattr(motor, f) is None]
+    if motor.geometry is None:
+        gaps.append("[geometry] (none on this motor)")
+    elif isinstance(motor.geometry, AxialFluxGeometry):
+        gaps.append("radial geometry (the transfer is radial-only; set "
+                    "the value explicitly for an axial-flux motor)")
+    return gaps
+
+
+def derive_B_rem_from_psi_f(motor: Motor) -> float | None:
     """Derive B_rem from psi_f via Zhu & Howe transfer ratio.
 
     Carter-consistent: inverts the same model psi_f_carter evaluates —
@@ -136,8 +292,6 @@ def _derive_B_rem_from_psi_f(motor: Motor) -> float | None:
     Returns derived B_rem, or None if derivation inputs are missing.
     N_eff = N (turns per coil) × coils_series = total series turns per phase.
     """
-    from phasesweep.solvers.analytical import _derive_B_rem, carter_adjusted_radii
-
     if motor.psi_f is None:
         return None
     if motor.N is None or motor.k_w is None or motor.L_stk is None:
@@ -145,7 +299,7 @@ def _derive_B_rem_from_psi_f(motor: Motor) -> float | None:
     if motor.geometry is None or isinstance(motor.geometry, AxialFluxGeometry):
         return None
     r_s_c, r_m_c, _k_c = carter_adjusted_radii(motor.geometry, motor.mu_r_pm)
-    return _derive_B_rem(
+    return derive_B_rem(
         motor.psi_f, motor.n_p, n_eff(motor), motor.k_w, motor.L_stk,
         r_stator=motor.geometry.r_stator,
         r_magnet=motor.geometry.r_magnet,
@@ -167,8 +321,6 @@ def derive_psi_f_smooth(motor: Motor) -> float | None:
     """
     import numpy as np
 
-    from phasesweep.solvers.analytical import zhu_howe_Br
-
     if motor.B_rem is None:
         return None
     if motor.N is None or motor.k_w is None or motor.L_stk is None:
@@ -187,7 +339,7 @@ def derive_psi_f_smooth(motor: Motor) -> float | None:
 def _derive_psi_f(motor: Motor) -> float | None:
     """Derive psi_f from B_rem, Carter-consistently.
 
-    Exact inverse of _derive_B_rem_from_psi_f and identical to the registry's
+    Exact inverse of derive_B_rem_from_psi_f and identical to the registry's
     flux_linkage_peak: Carter-adjusted radii for the field, original bore
     for the evaluation point and winding formula. B_rem → psi_f → B_rem
     round-trips exactly.
@@ -199,8 +351,6 @@ def _derive_psi_f(motor: Motor) -> float | None:
     the circuit tier is a separate, larger change (documented limitation).
     Returns derived psi_f, or None if derivation inputs are missing.
     """
-    from phasesweep.solvers.analytical import carter_adjusted_radii
-
     if motor.B_rem is None:
         return None
     if motor.N is None or motor.k_w is None or motor.L_stk is None:
@@ -223,8 +373,6 @@ def psi_f_carter(
     """
     import numpy as np
 
-    from phasesweep.solvers.analytical import zhu_howe_Br
-
     if motor.N is None or motor.k_w is None or motor.L_stk is None:
         return None
     if motor.geometry is None or isinstance(motor.geometry, AxialFluxGeometry):
@@ -238,14 +386,14 @@ def psi_f_carter(
     return B_peak * winding_transfer(motor)
 
 
-def _resolve_b_rem(motor: Motor) -> float:
+def resolve_b_rem(motor: Motor) -> float:
     """Get or derive B_rem from motor. Raises ValueError if impossible."""
     if motor.B_rem is not None:
         if motor.magnetization == "radial":
             _check_consistency(motor)
         return motor.B_rem
 
-    if motor.psi_f == 0.0:
+    if motor.is_reluctance:
         raise ValueError(
             f"Motor '{motor.name}': psi_f = 0 (reluctance machine, no PM "
             f"rotor) — field-solver models need a PM field; there is no "
@@ -271,25 +419,18 @@ def _resolve_b_rem(motor: Motor) -> float:
             f"which does not model the bridge ring flux shunt"
         )
 
-    derived = _derive_B_rem_from_psi_f(motor)
+    derived = derive_B_rem_from_psi_f(motor)
     if derived is not None:
         return derived
 
-    missing = []
-    if motor.B_rem is None:
-        missing.append("B_rem")
-    if motor.psi_f is None:
-        missing.append("psi_f (for derivation)")
-    for f in ("N", "k_w", "L_stk"):
-        if getattr(motor, f) is None:
-            missing.append(f"{f} (for derivation)")
     raise ValueError(
-        f"Motor '{motor.name}': cannot determine B_rem — "
-        f"missing {', '.join(missing)}"
+        f"Motor '{motor.name}': cannot determine B_rem — set it, or "
+        f"derive it from psi_f; missing for derivation: "
+        f"{', '.join(_derivation_gaps(motor, 'psi_f'))}"
     )
 
 
-def _resolve_psi_f(motor: Motor) -> float:
+def resolve_psi_f(motor: Motor) -> float:
     """Get or derive psi_f from motor. Raises ValueError if impossible."""
     if motor.psi_f is not None:
         if motor.magnetization == "radial":
@@ -319,17 +460,10 @@ def _resolve_psi_f(motor: Motor) -> float:
     if derived is not None:
         return derived
 
-    missing = []
-    if motor.psi_f is None:
-        missing.append("psi_f")
-    if motor.B_rem is None:
-        missing.append("B_rem (for derivation)")
-    for f in ("N", "k_w", "L_stk"):
-        if getattr(motor, f) is None:
-            missing.append(f"{f} (for derivation)")
     raise ValueError(
-        f"Motor '{motor.name}': cannot determine psi_f — "
-        f"missing {', '.join(missing)}"
+        f"Motor '{motor.name}': cannot determine psi_f — set it, or "
+        f"derive it from B_rem; missing for derivation: "
+        f"{', '.join(_derivation_gaps(motor, 'B_rem'))}"
     )
 
 
@@ -342,10 +476,7 @@ def _check_consistency(motor: Motor) -> None:
     """
     if motor.B_rem is None or motor.psi_f is None:
         return
-    if motor.psi_f == 0.0:
-        # unreachable through Motor validation (psi_f = 0 with B_rem set is
-        # rejected there) — defensive for direct callers; a 0-derived B_rem
-        # would always "disagree by 100%"
+    if motor.is_reluctance:
         return
     if motor.geometry is not None and (
         getattr(motor.geometry, "magnet_mount", None) == "inset"
@@ -354,7 +485,7 @@ def _check_consistency(motor: Motor) -> None:
         return
     if motor.N is None or motor.k_w is None or motor.L_stk is None:
         return
-    derived = _derive_B_rem_from_psi_f(motor)
+    derived = derive_B_rem_from_psi_f(motor)
     if derived is None:
         return
     rel_err = abs(derived - motor.B_rem) / max(abs(motor.B_rem), 1e-12)
@@ -371,8 +502,9 @@ def _check_consistency(motor: Motor) -> None:
 # Shared validation gates (used by the per-model prepare_* factories)
 # ---------------------------------------------------------------------------
 
-def _reject_induction(motor: Motor, model: str) -> None:
-    """Loud gate: synchronous-machine models refuse induction motors."""
+def reject_induction(motor: Motor, model: str) -> None:
+    """Loud gate: synchronous-machine models refuse induction motors
+    (topology rule)."""
     if motor.induction is not None:
         raise ValueError(
             f"Motor '{motor.name}': {model} models a synchronous machine "
@@ -382,7 +514,7 @@ def _reject_induction(motor: Motor, model: str) -> None:
         )
 
 
-def _require_geometry(motor: Motor, model: str) -> Geometry:
+def require_geometry(motor: Motor, model: str) -> Geometry:
     if motor.geometry is None:
         raise ValueError(f"Motor '{motor.name}': {model} needs geometry")
     if isinstance(motor.geometry, AxialFluxGeometry):
@@ -393,14 +525,22 @@ def _require_geometry(motor: Motor, model: str) -> Geometry:
     return motor.geometry
 
 
-def _salient_pair(motor: Motor) -> tuple[float | None, float | None]:
-    """(L_d, L_q) for the salient torque form, or (None, None) unless both set."""
-    if motor.L_d is not None and motor.L_q is not None:
-        return motor.L_d, motor.L_q
-    return None, None
+def salient_pair(motor: Motor) -> tuple[float | None, float | None]:
+    """(L_d, L_q) for the salient torque form, or (None, None) when neither is set.
+
+    One-sided saliency is an input error, not a non-salient machine.
+    """
+    if motor.L_d is None and motor.L_q is None:
+        return None, None
+    if motor.L_d is None or motor.L_q is None:
+        raise ValueError(
+            f"Motor '{motor.name}': L_d and L_q must be set together "
+            f"(got L_d={motor.L_d}, L_q={motor.L_q})"
+        )
+    return motor.L_d, motor.L_q
 
 
-def _require_axial_geometry(motor: Motor, model: str) -> AxialFluxGeometry:
+def require_axial_geometry(motor: Motor, model: str) -> AxialFluxGeometry:
     if motor.geometry is None:
         raise ValueError(f"Motor '{motor.name}': {model} needs geometry")
     if not isinstance(motor.geometry, AxialFluxGeometry):
@@ -411,7 +551,7 @@ def _require_axial_geometry(motor: Motor, model: str) -> AxialFluxGeometry:
     return motor.geometry
 
 
-def _require_drive_fields(
+def require_drive_fields(
     motor: Motor, model: str, fields: tuple[str, ...],
 ) -> None:
     """Raise ValueError if any named DriveParams fields are None."""
@@ -421,4 +561,51 @@ def _require_drive_fields(
             f"Motor '{motor.name}': {model} needs [drive] "
             f"{', '.join(missing)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Shared runner helpers
+# ---------------------------------------------------------------------------
+
+def check_nyquist(n_theta: int, n_p: int, *, series: bool = False) -> None:
+    """Reject n_theta too small to resolve the fundamental.
+
+    *series* = True uses the analytical-series bound (n_theta >= 2·n_p + 2,
+    because max_order = n_theta // 2 would equal n_p and silently drop the
+    k=1 term). *series* = False uses the FFT Nyquist bound (n_theta > 2·n_p).
+    """
+    if series:
+        if n_theta <= 2 * n_p + 1:
+            raise ValueError(
+                f"n_theta={n_theta} cannot resolve the fundamental at "
+                f"n_p={n_p}; need n_theta >= 2*n_p + 2"
+            )
+    else:
+        if n_theta <= 2 * n_p:
+            raise ValueError(
+                f"n_theta={n_theta} cannot resolve the fundamental at "
+                f"n_p={n_p}; need n_theta > 2*n_p"
+            )
+
+
+def backemf_from_flux(motor: Motor, flux_linkage_peak: float | None) -> float | None:
+    """Derive back-EMF fundamental from motor speed and flux linkage."""
+    if motor.drive.W_REF is None:
+        return None
+    w_e = motor.drive.W_REF * motor.n_p
+    if motor.psi_f is not None:
+        return float(w_e * motor.psi_f)
+    if flux_linkage_peak is not None:
+        return float(w_e * flux_linkage_peak)
+    return None
+
+
+def backemf_source(motor: Motor, backemf_fundamental: float | None) -> str | None:
+    """Which input backemf_from_flux used: "psi_f" when the motor's stated
+    flux linkage overrides the model's, "computed" when the
+    model's own flux_linkage_peak was used, None when there is no back-EMF."""
+    if backemf_fundamental is None:
+        return None
+    return "psi_f" if motor.psi_f is not None else "computed"
+
 

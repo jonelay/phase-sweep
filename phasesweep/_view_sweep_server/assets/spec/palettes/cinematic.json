@@ -1,0 +1,119 @@
+{
+  "meta": {
+    "name": "cinematic",
+    "variants": [
+      "dark"
+    ],
+    "default_variant": "dark",
+    "default_categorical": "cinematic",
+    "default_sequential": "accent"
+  },
+  "dark": {
+    "bg": "#0a0d12",
+    "surface": "#131820",
+    "text": "#d8dde6",
+    "text-2": "#b0b8c6",
+    "text-muted": "#8a93a3",
+    "hairline": "#1f2630",
+    "accent": "#6dd3c8",
+    "accent-ink": "#6dd3c8",
+    "accent-warm": "#f2a35e",
+    "accent-cool": "#6ea4f2",
+    "warn-ink": "#f2c96e",
+    "banner-text": "#f2c96e",
+    "shadow": "rgba(0, 0, 0, 0.5)",
+    "status-good": "#5fd99c",
+    "status-warning": "#f2c96e",
+    "status-critical": "#e07b6b",
+    "hoverlabel-bg": "#131820",
+    "legend-bg": "#131820",
+    "chart-bg": "rgba(0, 0, 0, 0)",
+    "chart-text": "#d8dde6",
+    "chart-muted": "#8a93a3",
+    "chart-grid": "#1f2630",
+    "chart-zeroline": "#2a3140",
+    "chart-ink": "rgba(216, 221, 230, 0.35)",
+    "seq-lo": "#131820",
+    "seq-mid": "#6dd3c8",
+    "seq-hi": "#e6fffb",
+    "font-ui": "'Iowan Old Style', 'Source Serif Pro', Georgia, serif",
+    "font-mono": "'JetBrains Mono', 'SF Mono', Menlo, monospace",
+    "font-size": "17px",
+    "radius": "3px",
+    "series-1": "#6dd3c8",
+    "series-2": "#f2a35e",
+    "series-3": "#6ea4f2",
+    "series-4": "#5fd99c",
+    "series-5": "#f2c96e",
+    "series-6": "#e07b6b",
+    "series-7": "#b0b8c6",
+    "series-8": "#8a93a3"
+  },
+  "categorical": {
+    "cinematic": {
+      "label": "Cinematic",
+      "colors": [
+        "#6dd3c8",
+        "#f2a35e",
+        "#6ea4f2",
+        "#5fd99c",
+        "#f2c96e",
+        "#e07b6b",
+        "#b0b8c6",
+        "#8a93a3"
+      ]
+    },
+    "okabe_ito": {
+      "label": "Okabe-Ito",
+      "colors": [
+        "#0072b2",
+        "#009e73",
+        "#d55e00",
+        "#cc79a7",
+        "#56b4e9",
+        "#e69f00",
+        "#999999",
+        "#f0e442"
+      ]
+    }
+  },
+  "sequential": {
+    "accent": {
+      "label": "Accent",
+      "from_vars": [
+        "seq-lo",
+        "seq-mid",
+        "seq-hi"
+      ]
+    },
+    "viridis": {
+      "label": "Viridis",
+      "dark": [
+        [
+          0.0,
+          "#2c728e"
+        ],
+        [
+          0.25,
+          "#21918c"
+        ],
+        [
+          0.5,
+          "#28ae80"
+        ],
+        [
+          0.7,
+          "#5ec962"
+        ],
+        [
+          0.85,
+          "#addc30"
+        ],
+        [
+          1.0,
+          "#fde725"
+        ]
+      ]
+    }
+  }
+}

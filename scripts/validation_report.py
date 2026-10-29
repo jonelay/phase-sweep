@@ -55,6 +55,7 @@ MOTOR_DATA_MAP: dict[str, tuple[str | None, str | None]] = {
     "Belkhadir 22p/24s ER-PMSM": ("motors/belkhadir_outrunner.toml", "data/belkhadir_outrunner"),
     "Deylami 8p/12s Cooling Fan": ("motors/deylami_fan.toml", "data/deylami_fan"),
     "FEMM LRK 14p/12s": ("motors/lrk_outrunner.toml", None),
+    "CREATOR Case IM": ("data/creator_case_im/creator_case_im.toml", "data/creator_case_im"),
 }
 
 
@@ -140,6 +141,12 @@ def load_measured_data(motor_name: str, motor: Motor) -> list[RunResult]:
 # Model eligibility
 # ---------------------------------------------------------------------------
 
+def _topology(motor: Motor) -> str:
+    if motor.geometry is None:
+        return "induction" if motor.induction is not None else "circuit-only"
+    return motor.geometry.topology
+
+
 def check_model_eligibility(motor: Motor) -> dict[str, str]:
     """Return {model_key: status} for each computed model."""
     results: dict[str, str] = {}
@@ -203,6 +210,7 @@ _SENSITIVITY_METRIC: dict[str, str] = {
     "analytical": "fundamental",
     "fem": "fundamental",
     "drive_sim": "tau_peak",
+    "im_torque_slip": "tau_rated",
 }
 
 
@@ -213,6 +221,7 @@ _SENSITIVITY_LABEL: dict[str, str] = {
     "analytical": "B₁_analytical",
     "fem": "B₁_fem",
     "drive_sim": "τ_sim",
+    "im_torque_slip": "τ_rated_im",
 }
 
 # Pseudo-track riding in the sensitivity grids: peak iron |B| (Tesla, raw)
@@ -250,6 +259,14 @@ SENSITIVITY_PARAMS = {
     # decomposed — a documented model limitation). Back-EMF/torque
     # sensitivity is correct; current-loop dynamics sensitivity is not.
     "k_w": {"label": "Winding factor (k_w)", "deltas": [-0.05, -0.025, 0.0, 0.025, 0.05]},
+    # Induction-circuit scalars (nested Motor.induction; the matching
+    # deep-bar/saturation table scales with each). PM motors skip these,
+    # IM motors skip the geometry/magnet params above — perturb_motor
+    # returns None and the grid stays empty for that param.
+    "R_2": {"label": "Rotor resistance (R_2)", "deltas": [-0.10, -0.05, 0.0, 0.05, 0.10]},
+    "L_m": {"label": "Magnetizing inductance (L_m)", "deltas": [-0.10, -0.05, 0.0, 0.05, 0.10]},
+    "L_sigma_s": {"label": "Stator leakage (L_sigma_s)", "deltas": [-0.10, -0.05, 0.0, 0.05, 0.10]},
+    "L_sigma_r": {"label": "Rotor leakage (L_sigma_r)", "deltas": [-0.10, -0.05, 0.0, 0.05, 0.10]},
 }
 
 
@@ -899,6 +916,8 @@ def _compute_all(
                     kw["sim_plan"] = plan_sim(prepare_drive_sim(m))
                 except ValueError:
                     continue
+            if MODEL_REGISTRY[mk].needs_runtime - set(kw):
+                continue  # duty_profile / slip / i_fault: no report-level input
             result = run_model(m, mk, **kw)
             if result is not None:
                 motor_results.append(result)
@@ -991,14 +1010,17 @@ def _render_motor_section(
     # --- Header ---
     w(f"### {name}")
     w("")
-    w(f"- **Topology:** {geo.topology}")
-    w(f"- **Poles/slots:** {2*motor.n_p}p / {geo.n_slots or 'smooth bore'}s")
-    w(f"- **Radii (mm):** r_outer={geo.r_outer*1e3:.1f}, r_stator={geo.r_stator*1e3:.1f}, "
-      f"r_magnet={geo.r_magnet*1e3:.1f}, r_rotor={geo.r_rotor*1e3:.1f}")
+    w(f"- **Topology:** {_topology(motor)}")
+    if geo is None:
+        w(f"- **Poles:** {2*motor.n_p}p (circuit-only motor, no geometry)")
+    else:
+        w(f"- **Poles/slots:** {2*motor.n_p}p / {geo.n_slots or 'smooth bore'}s")
+        w(f"- **Radii (mm):** r_outer={geo.r_outer*1e3:.1f}, r_stator={geo.r_stator*1e3:.1f}, "
+          f"r_magnet={geo.r_magnet*1e3:.1f}, r_rotor={geo.r_rotor*1e3:.1f}")
     w("")
 
     # Geometry figure
-    if fig_dir:
+    if fig_dir and geo is not None:
         geo_fn = f"geometry_{_sanitize(name)}.png"
         slots_label = f"{geo.n_slots}s" if geo.n_slots else "smooth"
         plot_geometry(
@@ -1237,16 +1259,24 @@ def _render_sensitivity(
     w("#### Sensitivity Analysis")
     w("")
 
+    # Params the perturbation transform skipped for this motor (geometry
+    # params on a circuit-only motor, induction params on a PM) leave
+    # nothing but the δ=0 slot — drop them from the tables.
+    all_params = list(sens)
+    sens = {
+        param: curves for param, curves in sens.items()
+        if any(v is not None and abs(v) > 1e-9 for c in curves.values() for v in c)
+    }
     geo = motor.geometry
-    bore_od = geo.r_stator / geo.r_outer
-    if bore_od < 0.55:
+    bore_od = geo.r_stator / geo.r_outer if geo is not None else 1.0
+    if "OD" in sens and bore_od < 0.55:
         max_delta = max(SENSITIVITY_PARAMS["OD"]["deltas"])
         bore_pct = max_delta * geo.r_outer / geo.r_stator * 100
         w(f"> **Note:** Bore/OD ratio = {bore_od:.2f}. "
           f"A +{max_delta*100:.0f}% OD change produces a "
           f"+{bore_pct:.0f}% bore change (fixed gap + magnet thickness).")
         w("")
-    if geo.n_slots > 0:
+    if "OD" in sens and geo is not None and geo.n_slots > 0:
         w("> **Note:** B₁_fem may oppose torque direction under OD perturbation: "
           "slot openings grow with bore circumference (fixed slot geometry) "
           "worsening the Carter factor, while torque still rises because "
@@ -1259,7 +1289,17 @@ def _render_sensitivity(
           f"noise.")
         w("")
 
-    if not any(any(v is not None for v in c) for curves in sens.values() for c in curves.values()):
+    # Geometry/magnet levers perturb_motor skipped (field unset, or psi_f
+    # not derivable); circuit and induction params missing on a PM are
+    # not news.
+    skipped = [p for p in all_params if p not in sens
+               and p in ("OD", "gap", "L_stk", "B_rem", "k_w")]
+    if sens and skipped:
+        w(f"> **Note:** n/a for this motor (field unset or ψ_f not "
+          f"derivable): "
+          f"{', '.join(skipped)}.")
+        w("")
+    if not sens:
         w("*No sensitivity data (insufficient baseline results).*")
         w("")
         return
@@ -1504,11 +1544,11 @@ def generate_report(fig_dir: Path | None = None, workers: int = 1, skip_sensitiv
     w("| Motor | Topology | Poles | B_rem (T) | psi_f (Wb) | Slots | R_s (Ω) |")
     w("|-------|----------|-------|-----------|------------|-------|---------|")
     for name, m in motors.items():
-        topo = m.geometry.topology
+        topo = _topology(m)
         poles = 2 * m.n_p
         b_rem = fmt_val(m.B_rem)
         psi = fmt_val(m.psi_f)
-        slots = m.geometry.n_slots or "smooth"
+        slots = (m.geometry.n_slots or "smooth") if m.geometry is not None else "—"
         rs = fmt_val(m.R_s)
         w(f"| {name} | {topo} | {poles} | {b_rem} | {psi} | {slots} | {rs} |")
     w("")
@@ -1563,8 +1603,8 @@ def generate_report(fig_dir: Path | None = None, workers: int = 1, skip_sensitiv
     w("| B_rem ↔ psi_f derivation | bidirectional, consistency-checked |")
     w("")
 
-    inrunner_count = sum(1 for m in motors.values() if m.geometry.topology == "inrunner")
-    outrunner_count = sum(1 for m in motors.values() if m.geometry.topology == "outrunner")
+    inrunner_count = sum(1 for m in motors.values() if _topology(m) == "inrunner")
+    outrunner_count = sum(1 for m in motors.values() if _topology(m) == "outrunner")
     w(f"- **Inrunner:** {inrunner_count} motors tested")
     w(f"- **Outrunner:** {outrunner_count} motors tested")
     w("")

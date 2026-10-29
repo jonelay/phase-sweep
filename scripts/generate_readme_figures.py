@@ -101,7 +101,7 @@ def fig_fem_hero() -> Path:
 def fig_backemf_waveform() -> Path:
     """CREATOR back-EMF at 2000 RPM: measured oscilloscope data vs analytical fundamental."""
     from phasesweep.machines.configs import load_motor
-    from phasesweep.registry import _run_analytical_impl
+    from phasesweep.solvers.analytical import run_analytical
     from phasesweep.sweep_types import RunConfig
 
     print("Figure 2: loading CREATOR back-EMF measurement data…")
@@ -125,7 +125,7 @@ def fig_backemf_waveform() -> Path:
     # Analytical fundamental from the model
     motor = load_motor(ROOT / "motors" / "creator_case_pmsm.toml")
     cfg = RunConfig(motor=motor, model="analytical", n_theta=720)
-    ana = _run_analytical_impl(cfg)
+    ana = run_analytical(cfg)
     ana_fund_amp = float(ana["backemf_fundamental"])
 
     # Convert to electrical angle; show two electrical periods
@@ -175,8 +175,8 @@ def fig_validation_chart() -> Path:
     model validation (CREATOR measured back-EMF)."""
     from phasesweep.machines.configs import load_motor
     from phasesweep.machines.geometry import default_inrunner
-    from phasesweep.registry import _run_analytical_impl
-    from phasesweep.solvers.analytical import zhu_howe_Br
+    from phasesweep.solvers.analytical import run_analytical
+    from phasesweep.solvers.field_solution import zhu_howe_Br
     from phasesweep.solvers.harmonics import harmonics_1sided
     from phasesweep.sweep_types import RunConfig
 
@@ -209,7 +209,7 @@ def fig_validation_chart() -> Path:
     print("  running CREATOR analytical…")
     motor = load_motor(ROOT / "motors" / "creator_case_pmsm.toml")
     cfg = RunConfig(motor=motor, model="analytical", n_theta=720)
-    ana = _run_analytical_impl(cfg)
+    ana = run_analytical(cfg)
     ana_backemf = float(ana["backemf_fundamental"])
     ana_vs_meas_pct = (ana_backemf - 47.37) / 47.37 * 100
 

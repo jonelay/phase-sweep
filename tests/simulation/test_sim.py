@@ -644,3 +644,190 @@ class TestTorqueAnchor:
         # reluctance is genuinely exploited: MTPA current sits below magnet-only
         assert i_mtpa < i_magnet
         assert (i_magnet - i_mtpa) / i_magnet > 0.02
+
+
+class TestFluxMapMachine:
+    """Saturated machine model on the FluxMap surface: plant and controller
+    both run motulator's SaturatedSynchronousMachinePars built from the
+    map, so the torque-mode steady state lands on the map's own MTPA
+    (mtpa_numeric) rather than the secant-L Morimoto point."""
+
+    ROOT = Path(__file__).resolve().parent.parent.parent
+
+    @classmethod
+    def _bmw_params(cls, **drive):
+        m = load_motor(cls.ROOT / "motors" / "bmw_i3.toml")
+        kw = dict(U_DC=355.0, MAX_I_S=565.7, W_REF=2 * np.pi * 4800 / 60)
+        kw.update(drive)
+        m = dataclasses.replace(m, J=0.05, drive=DriveParams(**kw))
+        return m, prepare_drive_sim(m)
+
+    @staticmethod
+    def _torque_sim(params, tau_ref):
+        plan = plan_torque_sim(params, tau_ref=tau_ref)
+        step = Step(step_time=plan.load_time, step_value=tau_ref, initial_value=0)
+        res = build_sim(params, plan, torque_ref=step).simulate(t_stop=plan.t_stop)
+        ss = res.mdl.t >= (plan.t_stop - plan.ss_window)
+        i_dq = complex(np.mean(res.mdl.machine.i_s_dq[ss]))
+        return i_dq, float(np.mean(res.mdl.machine.tau_M[ss]))
+
+    @staticmethod
+    def _linear_map_motor(L_q=6e-3, I_max=25.0, n=5):
+        """MOTOR with a FluxMap that exactly reproduces constant L_d/L_q
+        (salient by default — see test_non_salient_map_is_rejected)."""
+        from phasesweep.machines.motor import FluxMap
+        i_d = tuple(float(x) for x in np.linspace(-I_max, 0, n))
+        i_q = tuple(float(x) for x in np.linspace(0, I_max, n))
+        fm = FluxMap(
+            i_d_A=i_d, i_q_A=i_q,
+            psi_d_Wb=tuple(tuple(MOTOR.psi_f + MOTOR.L_d * d for d in i_d) for _ in i_q),
+            psi_q_Wb=tuple(tuple(L_q * q for _ in i_d) for q in i_q),
+        )
+        return dataclasses.replace(MOTOR, L_q=L_q, flux_map=fm)
+
+    def test_prepare_carries_map(self):
+        from phasesweep.simulation.params import uses_flux_map
+        m, params = self._bmw_params()
+        assert params.flux_map is m.flux_map
+        assert uses_flux_map(params)
+
+    def test_build_uses_saturated_pars_with_map_psi_f(self):
+        from motulator.drive.model import SaturatedSynchronousMachinePars
+
+        from phasesweep.models.flux_map import flux_map_psi_f
+        m, params = self._bmw_params()
+        plan = plan_torque_sim(params, tau_ref=100.0)
+        step = Step(step_time=plan.load_time, step_value=100.0, initial_value=0)
+        par = build_sim(params, plan, torque_ref=step).mdl.machine.par
+        assert isinstance(par, SaturatedSynchronousMachinePars)
+        assert par.psi_f == pytest.approx(flux_map_psi_f(m.flux_map), rel=1e-3)
+
+    def test_map_not_covering_current_limit_falls_back(self):
+        from motulator.drive.model import SynchronousMachinePars
+
+        from phasesweep.simulation.params import uses_flux_map
+        _, params = self._bmw_params(MAX_I_S=700.0)
+        assert not uses_flux_map(params)
+        par = build_sim(params, plan_sim(params)).mdl.machine.par
+        assert isinstance(par, SynchronousMachinePars)
+        assert (par.L_d, par.L_q, par.psi_f) == (params.L_d, params.L_q, params.psi_f)
+
+    def test_map_without_origin_falls_back(self):
+        from phasesweep.simulation.params import uses_flux_map
+        m = self._linear_map_motor()
+        fm = dataclasses.replace(
+            m.flux_map, i_q_A=tuple(q + 1.0 for q in m.flux_map.i_q_A))
+        params = prepare_drive_sim(dataclasses.replace(m, flux_map=fm))
+        assert not uses_flux_map(params)
+
+    def test_torque_mode_steady_state_on_map_mtpa(self):
+        from phasesweep.models.rated_torque import mtpa_numeric
+        m, params = self._bmw_params()
+        tau_ref = 150.0
+        i_dq, tau_ss = self._torque_sim(params, tau_ref)
+
+        lo, hi = 1.0, params.drive.MAX_I_S
+        for _ in range(40):
+            mid = 0.5 * (lo + hi)
+            if mtpa_numeric(params.n_p, m.flux_map, mid)[0] < tau_ref:
+                lo = mid
+            else:
+                hi = mid
+        _, i_d_map, i_q_map = mtpa_numeric(params.n_p, m.flux_map, hi)
+
+        assert abs(tau_ss - tau_ref) / tau_ref < 2e-3
+        assert abs(abs(i_dq) - hi) / hi < 5e-3
+        assert abs(np.arctan2(-i_dq.real, i_dq.imag)
+                   - np.arctan2(-i_d_map, i_q_map)) < np.radians(1.0)
+
+    def test_torque_mode_departs_from_secant_l_both_ways(self):
+        """BMW i3's L_d/L_q are secant values at the peak-torque point, so
+        the constant-L closed form is optimistic near that point (Phase 3:
+        ~8% too much torque at 566 A -> the surface needs MORE current at
+        250 Nm) and pessimistic at part load, where the unsaturated
+        saliency is larger (the surface needs LESS current at 100 Nm).
+        Crossover ~200 Nm (measured, not pinned)."""
+        from phasesweep.models.thermal_duty import current_for_torque
+        _, params = self._bmw_params()
+
+        def i_const(tau):
+            return current_for_torque(
+                params.n_p, params.psi_f, params.L_d, params.L_q, tau)
+
+        i_low, _ = self._torque_sim(params, 100.0)
+        i_high, _ = self._torque_sim(params, 250.0)
+        assert abs(i_low) < 0.95 * i_const(100.0)
+        assert abs(i_high) > 1.03 * i_const(250.0)
+
+    def test_linear_map_reproduces_constant_l(self):
+        """A map that IS the constant-L surface must land on the same
+        salient MTPA steady state as the constant-L machine."""
+        from phasesweep.simulation.params import uses_flux_map
+        motor = self._linear_map_motor()
+        params_map = prepare_drive_sim(motor)
+        assert uses_flux_map(params_map)
+        params_ref = dataclasses.replace(params_map, flux_map=None)
+        i_map, tau_map = self._torque_sim(params_map, 0.3)
+        i_ref, tau_ref = self._torque_sim(params_ref, 0.3)
+        assert i_ref.real < -0.02 * abs(i_ref)
+        assert i_map == pytest.approx(i_ref, rel=5e-3, abs=1e-3)
+        assert tau_map == pytest.approx(tau_ref, rel=5e-3)
+
+    def test_non_salient_map_is_rejected(self):
+        """L_d == L_q on the surface: motulator's MTPA bracket (pi/2, pi)
+        has no sign change and returns the gamma = 0 sentinel (pure +i_d,
+        zero torque) — build_sim must refuse rather than simulate that."""
+        params = prepare_drive_sim(self._linear_map_motor(L_q=MOTOR.L_d))
+        with pytest.raises(ValueError, match="MTPA locus is degenerate"):
+            build_sim(params, plan_sim(params))
+
+    def test_run_drive_sim_reports_machine_model(self):
+        from phasesweep.simulation.sim_runner import run_drive_sim
+        from phasesweep.sweep_types import RunConfig
+        motor = self._linear_map_motor()
+        params = prepare_drive_sim(motor)
+        plan = plan_sim(params)
+        metrics = run_drive_sim(RunConfig(motor=motor, model="drive_sim", sim_plan=plan))
+        assert metrics["machine_model"] == "flux_map"
+        assert metrics["i_ss"] > 0
+        metrics = run_drive_sim(RunConfig(motor=MOTOR, model="drive_sim", sim_plan=PLAN))
+        assert metrics["machine_model"] == "constant_L"
+
+    def test_run_id_differs_with_and_without_flux_map(self):
+        from phasesweep.sweep_types import RunConfig, compute_run_id
+        motor_map = self._linear_map_motor()
+        motor_no_map = dataclasses.replace(motor_map, flux_map=None)
+        params_map = prepare_drive_sim(motor_map)
+        params_no = prepare_drive_sim(motor_no_map)
+        plan_map = plan_sim(params_map)
+        plan_no = plan_sim(params_no)
+        rc_map = RunConfig(motor=motor_map, model="drive_sim", sim_plan=plan_map)
+        rc_no = RunConfig(motor=motor_no_map, model="drive_sim", sim_plan=plan_no)
+        assert compute_run_id(rc_map) != compute_run_id(rc_no)
+
+    def test_two_mass_with_map_reports_machine_model(self):
+        from phasesweep.simulation.params import TwoMassLoad
+        from phasesweep.simulation.sim_runner import run_drive_sim
+        from phasesweep.sweep_types import RunConfig
+        motor = self._linear_map_motor()
+        params = prepare_drive_sim(motor)
+        load = TwoMassLoad(J_L=0.01, K_S=1000.0, C_S=0.5)
+        from phasesweep.simulation.sim import plan_two_mass_sim
+        plan = plan_two_mass_sim(params, load)
+        rc = RunConfig(motor=motor, model="drive_sim_two_mass",
+                       sim_plan=plan, load_mech=load)
+        metrics = run_drive_sim(rc)
+        assert metrics["machine_model"] == "flux_map"
+
+    def test_speed_mode_bmw_field_weakening(self):
+        """Speed-mode BMW run above base speed exercises field weakening
+        and the _fix_mtpv_nan patch on the flux-map surface."""
+        m, params = self._bmw_params()
+        plan = plan_sim(params)
+        res = build_sim(params, plan).simulate(t_stop=plan.t_stop)
+        metrics = extract_metrics(
+            res, plan=plan, w_ref=params.drive.W_REF)
+        assert np.isfinite(metrics["i_ss"])
+        assert metrics["i_ss"] > 0
+        assert np.isfinite(metrics["tau_peak"])
+        assert metrics["tau_peak"] > 0

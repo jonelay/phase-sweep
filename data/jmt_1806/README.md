@@ -9,6 +9,8 @@ stator with e.g. the KDE 1806XF-2350).
 
 - `reference.toml` — distilled motor definition + measured electricals.
 - `backemf_speed_sweep.json` — per-speed distilled results (the table below).
+  Raw record, not the measured import format: its `test_type` is not a
+  registered model.
 - `captures/` — 8 raw oscilloscope CSVs (3-channel phase voltages), the
   back-EMF speed sweep. ~6.9 MB each.
 - Analysis: [`scripts/analyze_jmt_1806.py`](../../scripts/analyze_jmt_1806.py) —

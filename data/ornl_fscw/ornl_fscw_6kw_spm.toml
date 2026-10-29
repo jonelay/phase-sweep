@@ -8,9 +8,10 @@
 # IEEE TIA 2005/2006 verification data as its Tables 2-7):
 #   J. M. Bailey, J. W. McKeever, "Fractional-Slot Surface Mounted PM
 #   Motors with Concentrated Windings for HEV Traction Drives",
-#   ORNL/TM-2005/183, Oct 2005. https://www.osti.gov/servlets/purl/885979
-#   Peer-reviewed companions: El-Refaie & Jahns, IEEE Trans. Ind. Appl.
-#   41(3):790-800 (2005); El-Refaie et al., IEEE TIA 42(2) (2006).
+#   ORNL/TM-2005/183, Oct 2005. DOI 10.2172/885979
+#   Peer-reviewed companions:
+#   El-Refaie & Jahns, IEEE TIA 41(3):790-800, 2005, DOI 10.1109/TIA.2005.847304
+#   El-Refaie et al., IEEE TIA 42(2), 2006, DOI 10.1109/TIA.2005.863903
 #
 # Machine (report Tables 2-5): 36 slots / 30 poles (n_p = 15),
 # surface-mounted BONDED NdFeB (Br 0.55 T @ 100 C, mu_r 1.22 — low-Br,

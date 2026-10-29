@@ -1,0 +1,53 @@
+{
+  "meta": {
+    "version": 1,
+    "plotly_min": "2.0"
+  },
+  "layout": {
+    "hovermode": "x unified",
+    "showlegend": false,
+    "uirevision": "keep",
+    "margin": {
+      "l": 55,
+      "r": 12,
+      "t": 8,
+      "b": 42
+    },
+    "font": {
+      "size": 12
+    }
+  },
+  "config": {
+    "responsive": true,
+    "displaylogo": false,
+    "scrollZoom": true
+  },
+  "bindings": {
+    "paper_bgcolor": "chart-bg",
+    "plot_bgcolor": "chart-bg",
+    "font.family": "font-ui",
+    "font.color": "chart-text",
+    "hoverlabel.bgcolor": "hoverlabel-bg",
+    "hoverlabel.bordercolor": "chart-grid",
+    "hoverlabel.font.color": "chart-text",
+    "modebar.color": "chart-muted",
+    "modebar.activecolor": "chart-text",
+    "legend.bgcolor": "legend-bg",
+    "legend.bordercolor": "chart-grid",
+    "xaxis.gridcolor": "chart-grid",
+    "xaxis.zerolinecolor": "chart-zeroline",
+    "xaxis.linecolor": "chart-zeroline",
+    "xaxis.color": "chart-muted",
+    "yaxis.gridcolor": "chart-grid",
+    "yaxis.zerolinecolor": "chart-zeroline",
+    "yaxis.linecolor": "chart-zeroline",
+    "yaxis.color": "chart-muted"
+  },
+  "colorway": {
+    "from_series": 8
+  },
+  "breakpoints": {
+    "wide": 1400,
+    "mid": 1000
+  }
+}

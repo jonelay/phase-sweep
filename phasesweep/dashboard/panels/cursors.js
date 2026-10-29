@@ -7,7 +7,7 @@
 // min/max/peak-to-peak/mean/σ over the [A,B] window. Transient hover-grade
 // state — never persisted. Donor: toggleCursors/onCursorDrag/refreshStats.
 
-import { chartVar } from "./plot_theme.js";
+import { token } from "/view-sweep/js/theme.js";
 
 const COLS = ["A", "B", "Δ", "min", "max", "p-p", "mean", "σ"];
 
@@ -35,7 +35,7 @@ export function makeCursors({ statsHost, seriesFn, fmtX, fmtY, unit = "", source
     if (!on || a === null) return [];
     return [a, b].map((x) => ({
       type: "line", x0: x, x1: x, yref: "paper", y0: 0, y1: 1,
-      editable: true, line: { color: chartVar("zeroline"), width: 1.6, dash: "dot" },
+      editable: true, line: { color: token("chart-zeroline"), width: 1.6, dash: "dot" },
     }));
   }
 
@@ -186,6 +186,7 @@ export function makeCursors({ statsHost, seriesFn, fmtX, fmtY, unit = "", source
 // react). Returns the button for the caller to append.
 export function cursorToggleButton(cursors, onToggle) {
   const btn = document.createElement("button");
+  btn.className = "vs-btn";
   btn.textContent = "Cursors";
   btn.title = "toggle A/B measurement cursors";
   btn.addEventListener("click", () => {

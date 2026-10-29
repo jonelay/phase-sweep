@@ -157,6 +157,7 @@ export default {
     appRef = app;
 
     const refreshBtn = document.createElement("button");
+    refreshBtn.className = "vs-btn";
     refreshBtn.textContent = "Refresh";
     refreshBtn.addEventListener("click", refresh);
     headerSlot.append(refreshBtn);
@@ -165,18 +166,18 @@ export default {
     diagEl.className = "val-diagnosis";
 
     modelsEl = document.createElement("div");
-    modelsEl.className = "panel-caption";
+    modelsEl.className = "vs-caption";
 
     echoEl = document.createElement("div");
     echoEl.className = "val-echo";
     echoEl.style.display = "none";
 
     hintEl = document.createElement("div");
-    hintEl.className = "empty-hint";
+    hintEl.className = "vs-empty-hint";
     hintEl.textContent = "No comparisons yet — run 2+ models (or a validate job) for this config.";
 
     matrixOuter = document.createElement("div");
-    matrixOuter.className = "scroll-shadow";
+    matrixOuter.className = "vs-scroll-shadow";
     matrixWrap = document.createElement("div");
     matrixWrap.className = "val-matrix-wrap";
     matrixWrap.addEventListener("scroll", updateScrollHint);
@@ -194,7 +195,7 @@ export default {
     }
 
     detailEl = document.createElement("div");
-    detailEl.className = "panel-caption";
+    detailEl.className = "vs-caption";
 
     container.append(diagEl, modelsEl, echoEl, hintEl,
                      matrixOuter, legendEl, detailEl);

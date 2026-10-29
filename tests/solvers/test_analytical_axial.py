@@ -171,6 +171,14 @@ class TestPmLeakage:
         k2 = pm_leakage_factor(geo, 1.05, 0.575, 0.0015, tau_p, k_add=0.95)
         assert k2 == pytest.approx(0.95 * k1)
 
+    def test_nonpositive_zigzag_factor_raises(self):
+        """Slot pitch far above the magnet width drives Eq. (2.16) below
+        zero; that is outside the model, not a negative flux linkage."""
+        geo = slotted_1r2s()
+        tau_slot = 2 * pi * geo.r_mean / geo.n_slots
+        with pytest.raises(ValueError, match=r"k_zz=.* <= 0.*n_slots="):
+            pm_leakage_factor(geo, 1.05, 0.1, 0.0015, tau_slot / 2)
+
 
 class TestWindingTransfer:
 

@@ -4,22 +4,22 @@ build-backend = "hatchling.build"
 
 [project]
 name = "phasesweep"
-version = "0.5.0"
-description = "PMSM simulation for stator/rotor design exploration"
+version = "0.6.0"
+description = "PMSM and induction-machine simulation for stator/rotor design exploration"
 requires-python = ">=3.12"
 authors = [{name = "Jone Lay", email = "jlay.dev@pm.me"}]
-license = {text = "LGPL-2.1-only"}
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
-keywords = ["motor", "pmsm", "bldc", "fem", "simulation"]
+keywords = ["motor", "pmsm", "bldc", "induction-motor", "fem", "simulation"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU Lesser General Public License v2 (LGPLv2)",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
-    "numpy",
+    "numpy>=2.0",
     "scipy",
 ]
 
@@ -29,11 +29,19 @@ sim = ["motulator==0.7.3"]  # _fix_mtpv_nan patches 0.7.x privates (_psi_s_mtpv)
                             # 0.7.4+ moved sensorless/T_s into the Cfg dataclass,
                             # which breaks build_sim's ctor kwargs
 viz = ["matplotlib"]
-server = ["fastapi", "uvicorn[standard]", "structlog", "tomli-w"]
+# The result store ships in the core (vendored sweepstore); the empty extra
+# keeps `phasesweep[store]` requirements resolving.
+store = []
+server = [
+    "fastapi",
+    "uvicorn[standard]",
+    "structlog",
+    "tomli-w",
+]
 all = ["phasesweep[fem,sim,viz,server]"]
 gpu = ["cupy-cuda12x"]
 mkl = ["mkl"]  # ngsolve PARDISO/BLAS backend — never imported directly
-test = ["pytest", "pytest-timeout", "httpx"]
+test = ["pytest", "pytest-timeout", "pytest-cov", "httpx"]
 dev = ["ruff", "mypy"]
 
 [project.urls]
@@ -45,6 +53,7 @@ Changelog = "https://github.com/jonelay/phase-sweep/blob/main/CHANGELOG.md"
 phasesweep-import = "phasesweep.validation.cli_import:main"
 phasesweep-crossval = "phasesweep.validation.cli_crossval:main"
 phasesweep-calibrate = "phasesweep.validation.cli_calibrate:main"
+phasesweep-check-motor = "phasesweep.check_motor:main"
 phasesweep-server = "phasesweep.server.__main__:main"
 
 [tool.hatch.build.targets.sdist]
@@ -57,6 +66,7 @@ exclude = [
     "results/",
     "docs/internal/",
     "docs/refs/",
+    "docs/references/",
     "docs/datasheets/",
     "data/*/captures/",
     # Third-party DOI dataset (10.3217/sns1d-77m43) — gitignored, but
@@ -91,6 +101,8 @@ exclude = [
 [tool.ruff]
 target-version = "py312"
 line-length = 120
+# Vendored upstream code is linted in its own repository; kept byte-for-byte.
+extend-exclude = ["phasesweep/_view_sweep_server"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
@@ -127,6 +139,11 @@ warn_redundant_casts = true
 [[tool.mypy.overrides]]
 module = ["ngsolve.*", "netgen.*", "motulator.*", "cupy", "scipy.*"]
 ignore_missing_imports = true
+
+# Vendored upstream code is type-checked in its own repository.
+[[tool.mypy.overrides]]
+module = ["phasesweep._view_sweep_server.*"]
+ignore_errors = true
 
 # Mutation testing — mutmut is not a declared dependency:
 #   uv pip install mutmut && mutmut run "phasesweep.solvers.analytical.*"

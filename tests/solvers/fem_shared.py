@@ -7,8 +7,8 @@ here never runs without ngsolve present.
 """
 
 from phasesweep.machines.geometry import default_inrunner, inrunner, outrunner
-from phasesweep.solvers.analytical import _derive_B_rem
 from phasesweep.solvers.fem_field import solve_field_fem
+from phasesweep.solvers.field_solution import derive_B_rem
 
 FAST = dict(n_theta=60, maxh_fraction=0.08)
 _GEO = default_inrunner()
@@ -21,7 +21,7 @@ def _solve(n_p=2, psi_f=0.1, N=50, k_w=0.966, L_stk=0.10,
            n_slots=0, j_s=0.0, nonlinear=False, geo=None, **kw):
     """Helper: legacy-style call via new Geometry-based solve_field_fem."""
     _geo = geo or _GEO
-    B_rem = _derive_B_rem(psi_f, n_p, N, k_w, L_stk,
+    B_rem = derive_B_rem(psi_f, n_p, N, k_w, L_stk,
                           r_stator=_geo.r_stator, r_magnet=_geo.r_magnet,
                           r_rotor=_geo.r_rotor)
     merged = {**FAST, **kw}

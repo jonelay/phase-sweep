@@ -2,11 +2,11 @@
 # 8-pole, 48-slot, V-shape NdFeB interior magnets, distributed winding
 #
 # Primary source (physical teardown + electrical measurements):
-#   Hsu et al., ORNL/TM-2004/137, OSTI 885676 (teardown, geometry)
-#   Hsu et al., ORNL/TM-2004/185 rev. 2007, OSTI 921782 (back-EMF)
-#   Staunton et al., ORNL/TM-2004/247, OSTI 890029 (dynamometer)
+#   Hsu et al., ORNL/TM-2004/137, DOI 10.2172/885676 (teardown, geometry)
+#   Hsu et al., ORNL/TM-2004/185 rev. 2007, DOI 10.2172/921782 (back-EMF)
+#   Staunton et al., ORNL/TM-2004/247, DOI 10.2172/890029 (dynamometer)
 # Circuit parameters consistent with:
-#   Kuptsov et al., Machines 7(4):75, 2019 (FEM-vs-ORNL validation)
+#   Kuptsov et al., Machines 7(4):75, 2019, DOI 10.3390/machines7040075
 #
 # CIRCUIT-ONLY motor — no [geometry]. The V-shape IPM rotor needs IPM
 # geometry support (not yet implemented); all validation is through the

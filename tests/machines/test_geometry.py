@@ -182,6 +182,19 @@ class TestConfigId:
     def test_is_12_chars(self):
         assert len(default_inrunner().config_id) == 12
 
+    def test_integral_float_counts_hash_as_int(self):
+        # 12.0 from a JSON editor must not split one machine into two ids
+        kw = dict(r_outer=1.0, r_stator=0.70, r_magnet=0.64, r_rotor=0.30)
+        g_int = inrunner(**kw, n_slots=12)
+        g_flt = inrunner(**kw, n_slots=12.0)
+        assert g_flt.n_slots == 12 and isinstance(g_flt.n_slots, int)
+        assert g_flt.config_id == g_int.config_id
+
+    def test_non_integral_count_rejected(self):
+        with pytest.raises(ValueError, match=r"n_slots must be an integer, got 12\.5"):
+            inrunner(r_outer=1.0, r_stator=0.70, r_magnet=0.64, r_rotor=0.30,
+                     n_slots=12.5)
+
 
 class TestInsetMagnets:
 
@@ -273,15 +286,15 @@ class TestInsetMagnets:
         ]
 
     def test_pm_radii(self):
-        from phasesweep.solvers.fem_mesh import _pm_radii
-        assert _pm_radii(self._base()) == (0.64, 0.30)
-        assert _pm_radii(
+        from phasesweep.solvers.fem_mesh import pm_radii
+        assert pm_radii(self._base()) == (0.64, 0.30)
+        assert pm_radii(
             self._base(magnet_mount="inset", bridge_thickness=0.01)
         ) == (pytest.approx(0.63), 0.30)
-        assert _pm_radii(self._base(bridge_thickness=0.01)
+        assert pm_radii(self._base(bridge_thickness=0.01)
         ) == (pytest.approx(0.63), 0.30)
-        assert _pm_radii(self._base_out()) == (0.70, 0.64)
-        assert _pm_radii(
+        assert pm_radii(self._base_out()) == (0.70, 0.64)
+        assert pm_radii(
             self._base_out(magnet_mount="inset", bridge_thickness=0.01)
         ) == (0.70, pytest.approx(0.65))
 
@@ -431,3 +444,185 @@ class TestSlotInvariants:
     def test_smooth_bore_ignores_slot_fields(self):
         geo = inrunner(**self._base(n_slots=0, slot_depth=-1.0, slot_width_ratio=5.0))
         assert geo.n_slots == 0
+
+    @pytest.mark.parametrize("field, val", [
+        ("slot_depth", float("nan")),
+        ("slot_depth", float("inf")),
+        ("slot_opening_width", float("nan")),
+        ("slot_opening_width", float("inf")),
+    ])
+    def test_nan_inf_slot_fields_rejected(self, field, val):
+        kw = self._base(n_slots=9, slot_depth=0.1)
+        kw[field] = val
+        with pytest.raises(ValueError, match="finite"):
+            inrunner(**kw)
+
+
+class TestMagnetOverhangFiniteness:
+
+    @pytest.mark.parametrize("val", [float("nan"), float("inf")])
+    def test_nan_inf_magnet_overhang_rejected(self, val):
+        with pytest.raises(ValueError, match="finite"):
+            inrunner(r_outer=0.1, r_stator=0.07, r_magnet=0.064,
+                     r_rotor=0.05, magnet_overhang=val)
+
+
+class TestCageRotor:
+    """Squirrel-cage rotor spec on Geometry."""
+
+    KW = dict(r_outer=0.1, r_stator=0.0628, r_magnet=0.0624, r_rotor=0.0624,
+              r_inner=0.022, n_bars=28, bar_width=0.0034, bar_height=0.021)
+
+    def test_pm_config_ids_unchanged(self):
+        """Append-only: PM geometries hash exactly as before the cage fields."""
+        assert default_inrunner().config_id == "9e9c111fa7c7"
+        g = inrunner(r_outer=0.1, r_stator=0.0628, r_magnet=0.0624, r_rotor=0.05,
+                     n_slots=36, slot_depth=0.017, slot_width_ratio=0.5,
+                     slot_opening_width=0.0025)
+        assert g.config_id == "9c37727b0e66"
+        g = outrunner(r_outer=0.02, r_rotor=0.018, r_magnet=0.016, r_stator=0.0155,
+                      r_inner=0.005, back_iron_thickness=0.001, magnet_mount="inset",
+                      bridge_thickness=0.0005, magnet_overhang=0.001)
+        assert g.config_id == "226d26f5fe11"
+
+    def test_rectangular_bar_derived(self):
+        g = inrunner(**self.KW, bar_bridge_thickness=0.001, bar_opening_width=0.001)
+        assert g.bar_area == pytest.approx(0.0034 * 0.021)
+        r_top, r_bot = g.bar_radii
+        assert r_top == pytest.approx(0.0614)
+        assert r_bot == pytest.approx(0.0404)
+        assert g.bar_arc_width == pytest.approx(0.0034 / 0.0509)
+
+    def test_round_bar_derived(self):
+        g = inrunner(**{**self.KW, "bar_height": 0.0}, bar_shape="round")
+        assert g.bar_depth == 0.0034
+        assert g.bar_area == pytest.approx(math.pi * 0.0034**2 / 4)
+
+    def test_config_id_tracks_every_bar_field(self):
+        base = inrunner(**self.KW)
+        seen = {base.config_id}
+        for kw in (dict(n_bars=26), dict(bar_width=0.003), dict(bar_height=0.02),
+                   dict(bar_bridge_thickness=0.001),
+                   dict(bar_bridge_thickness=0.001, bar_opening_width=0.0005),
+                   dict(end_ring_axial_length=0.014),
+                   dict(end_ring_radial_height=0.0216)):
+            cid = inrunner(**{**self.KW, **kw}).config_id
+            assert cid not in seen
+            seen.add(cid)
+        rnd = inrunner(**{**self.KW, "bar_height": 0.0}, bar_shape="round")
+        assert rnd.config_id not in seen
+
+    def test_toml_defaults_r_magnet_to_rotor_surface(self):
+        geo = geometry_from_toml({
+            "r_outer": 0.1, "r_stator": 0.0628, "r_rotor": 0.0624, "r_inner": 0.022,
+            "n_bars": 28, "bar_width": 0.0034, "bar_height": 0.021,
+        })
+        assert geo.r_magnet == geo.r_rotor == 0.0624
+        assert geo.n_bars == 28
+
+    def test_toml_pm_still_requires_r_magnet(self):
+        with pytest.raises(KeyError):
+            geometry_from_toml({"r_outer": 0.1, "r_stator": 0.0628, "r_rotor": 0.05})
+
+    def test_toml_outrunner_rejects_cage(self):
+        with pytest.raises(ValueError, match="inrunner-only"):
+            geometry_from_toml({
+                "r_outer": 0.02, "r_rotor": 0.018, "r_magnet": 0.016,
+                "r_stator": 0.0155, "r_inner": 0.005, "n_bars": 8,
+                "bar_width": 0.001, "bar_height": 0.001,
+            }, topology="outrunner")
+
+    @pytest.mark.parametrize("kw, msg", [
+        (dict(r_magnet=0.0626), "no PM annulus"),
+        (dict(n_bars=1), "n_bars=1"),
+        (dict(bar_width=0.0), "bar_width"),
+        (dict(bar_height=0.0), "bar_height"),
+        (dict(bar_shape="round"), "leave bar_height at 0"),
+        (dict(bar_shape="oval", bar_height=0.0), "bar_shape"),
+        (dict(bar_height=0.041), "rotor iron floor"),
+        (dict(bar_width=0.012), "bar pitch"),
+        (dict(bar_bridge_thickness=-0.001), "bar_bridge_thickness"),
+        (dict(bar_opening_width=0.001), "needs bar_bridge_thickness"),
+        (dict(bar_bridge_thickness=0.001, bar_opening_width=0.0034), "narrower"),
+        (dict(magnet_mount="inset"), "PM-only"),
+        (dict(bridge_thickness=0.0001), "PM annulus"),
+        (dict(magnet_overhang=0.001), "PM-only"),
+        (dict(end_ring_axial_length=0.0), "end_ring_axial_length"),
+        (dict(bar_width=float("nan")), "finite"),
+        (dict(bar_width=float("inf")), "finite"),
+        (dict(bar_height=float("nan")), "finite"),
+        (dict(bar_bridge_thickness=float("nan")), "finite"),
+        (dict(bar_bridge_thickness=0.001, bar_opening_width=float("nan")), "finite"),
+        (dict(end_ring_axial_length=float("nan")), "finite"),
+        (dict(end_ring_axial_length=float("inf")), "finite"),
+        (dict(end_ring_radial_height=float("nan")), "finite"),
+        (dict(end_ring_radial_height=float("inf")), "finite"),
+        (dict(bar_height=float("inf")), "finite"),
+        (dict(bar_bridge_thickness=float("inf")), "finite"),
+        (dict(bar_bridge_thickness=0.001, bar_opening_width=float("inf")), "finite"),
+    ])
+    def test_invalid_cage_raises(self, kw, msg):
+        with pytest.raises(ValueError, match=msg):
+            inrunner(**{**self.KW, **kw})
+
+    def test_bar_fields_without_bars_raise(self):
+        with pytest.raises(ValueError, match="require n_bars > 0"):
+            inrunner(r_outer=0.1, r_stator=0.0628, r_magnet=0.0624, r_rotor=0.05,
+                     bar_width=0.003)
+
+    def test_pm_ordering_still_strict(self):
+        with pytest.raises(ValueError, match="ordering"):
+            inrunner(r_outer=0.1, r_stator=0.0628, r_magnet=0.0624, r_rotor=0.0624)
+
+
+class TestSkewAngle:
+    """Bar skew on Geometry: mechanical radians
+    over the stack, cage-only, append-only in config_id."""
+
+    KW = TestCageRotor.KW
+
+    def test_accepted_and_hashes_apart(self):
+        plain = inrunner(**self.KW)
+        skewed = inrunner(**self.KW, skew_angle=2 * math.pi / 36)
+        assert skewed.skew_angle == pytest.approx(2 * math.pi / 36)
+        assert plain.skew_angle is None
+        assert plain.config_id != skewed.config_id
+        # append-only: an unskewed cage hashes exactly as before skew existed
+        assert plain.config_id == inrunner(**self.KW).config_id
+
+    @pytest.mark.parametrize("val, msg", [
+        (0.0, "> 0"),
+        (-0.1, "> 0"),
+        (float("nan"), "finite"),
+        (float("inf"), "finite"),
+        (10.0, "RADIANS"),          # 10 degrees entered as radians
+    ])
+    def test_invalid_skew_raises(self, val, msg):
+        with pytest.raises(ValueError, match=msg):
+            inrunner(**self.KW, skew_angle=val)
+
+    def test_pm_rotor_rejects_skew(self):
+        with pytest.raises(ValueError, match="n_bars > 0"):
+            inrunner(r_outer=0.1, r_stator=0.0628, r_magnet=0.0624,
+                     r_rotor=0.05, skew_angle=0.1)
+
+    def test_toml_skew_angle_and_skew_slots(self):
+        base = dict(r_outer=0.1, r_stator=0.0628, r_rotor=0.0624,
+                    r_inner=0.022, n_bars=28, bar_width=0.0034,
+                    bar_height=0.021, n_slots=36, slot_depth=0.017)
+        direct = geometry_from_toml({**base, "skew_angle": 2 * math.pi / 36})
+        slots = geometry_from_toml({**base, "skew_slots": 1.0})
+        assert direct.skew_angle == pytest.approx(2 * math.pi / 36)
+        assert slots.skew_angle == pytest.approx(direct.skew_angle)
+        assert slots.config_id == direct.config_id
+
+    def test_toml_skew_slots_rejections(self):
+        base = dict(r_outer=0.1, r_stator=0.0628, r_rotor=0.0624,
+                    r_inner=0.022, n_bars=28, bar_width=0.0034,
+                    bar_height=0.021, n_slots=36, slot_depth=0.017)
+        with pytest.raises(ValueError, match="exclusive"):
+            geometry_from_toml({**base, "skew_slots": 1.0, "skew_angle": 0.1})
+        with pytest.raises(ValueError, match="n_slots > 0"):
+            geometry_from_toml({**{k: v for k, v in base.items()
+                                   if k not in ("n_slots", "slot_depth")},
+                                "skew_slots": 1.0})

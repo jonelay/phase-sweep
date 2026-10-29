@@ -1,223 +1,52 @@
-"""Analytical air-gap field model and slotting/end-effect corrections.
+"""Analytical air-gap field solver and end-effect corrections.
 
-Primary reference: Zhu, Howe & Chan (2002) improved analytical model
-(see docs/references.md). Carter factor per Zhu & Howe (1993) Part III.
+Pure-math field functions (Zhu & Howe, Carter factor) live in
+field_solution; this module owns the solver params/prepare/run and
+end-effect corrections.
 """
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass
-from math import atan, exp, log, pi, sin, sqrt, tanh
+from math import exp, pi, tanh
 from typing import TYPE_CHECKING
 
 import numpy as np
-from numpy.typing import NDArray
 
 from phasesweep.machines.geometry import Geometry
 from phasesweep.solver_params import (
-    _reject_induction,
-    _require_geometry,
-    _resolve_b_rem,
+    reject_induction,
+    require_geometry,
+    resolve_b_rem,
+)
+from phasesweep.solvers.field_solution import (
+    carter_adjusted_radii,
+    zhu_howe_Br,
+    zhu_howe_Br_series,
 )
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from phasesweep.machines.motor import Motor
+    from phasesweep.sweep_types import RunConfig
 
-
-def zhu_howe_Br(
-    theta: NDArray[np.floating],
-    n_p: int,
-    B_rem: float,
-    r_eval: float | None = None,
-    *,
-    r_stator: float,
-    r_magnet: float,
-    r_rotor: float,
-    mu_r_pm: float = 1.05,
-    alpha_p: float = 1.0,
-) -> NDArray[np.floating]:
-    """Zhu, Howe & Chan (2002) improved-model air-gap radial flux density.
-
-    Convention: B_rem is physical remanence; the source is the fundamental
-    of square-wave radial magnetization, M_1 = (4/π)(B_rem/μ0)·sin(πα_p/2)
-    (paper Eq 7a M_rn at n=1). Matches the FEM solver's uniform-magnitude
-    per-pole-alternating arc source exactly at the fundamental.
-
-    The radii are required keywords: silent physical defaults (a 0.70 m
-    machine) were a footgun for partial-kwargs callers.
-    """
-    if n_p < 2:
-        raise ValueError(f"n_p={n_p} not supported (singularity at n²-1=0)")
-
-    if r_eval is None:
-        r_eval = (r_stator + r_magnet) / 2
-
-    n = n_p
-
-    # Square-wave magnetization fundamental: (4/π)·sin(πα_p/2) is the
-    # Fourier coefficient of a ±1 square wave with pole-arc ratio α_p
-    # (paper Eq 7a). k_mp = 1.0 when α_p = 1 (full-pitch magnets).
-    k_mp = sin(pi * alpha_p / 2)
-    bp = n * (4 / pi) * B_rem * k_mp / (n**2 - 1)
-
-    K = _zhu_howe_order_amplitude(
-        n, bp, r_eval,
-        r_stator=r_stator, r_magnet=r_magnet, r_rotor=r_rotor,
-        mu_r_pm=mu_r_pm,
-    )
-    return K * np.cos(n * theta)
-
-
-def _zhu_howe_order_amplitude(
-    n: int | float, bp: float, r: float, *,
-    r_stator: float, r_magnet: float, r_rotor: float, mu_r_pm: float,
-) -> float:
-    """Radial-field amplitude at r for one spatial order n (paper Eq 17).
-
-    bp is the order's magnetization source term n·μ0·M_rn/(n²−1); the
-    two-boundary solve is identical for every order.
-    """
-    p, q, s = r_rotor, r_magnet, r_stator
-    mu = mu_r_pm
-
-    a11 = q**n + p**(2*n) * q**(-n)
-    a12 = -(q**n + s**(2*n) * q**(-n))
-    b1 = -bp * (p**(n+1) * q**(-n) / n + q)
-
-    a21 = (1/mu) * (q**(n-1) - p**(2*n) * q**(-(n+1)))
-    a22 = -(q**(n-1) - s**(2*n) * q**(-(n+1)))
-    b2 = -(bp/n) * (1/mu) * (1 - p**(n+1) * q**(-(n+1)))
-
-    det = a11 * a22 - a12 * a21
-    C2 = (a11 * b2 - a21 * b1) / det
-
-    return C2 * n * (r**(n-1) + s**(2*n) * r**(-(n+1)))
-
-
-def zhu_howe_Br_series(
-    theta: NDArray[np.floating],
-    n_p: int,
-    B_rem: float,
-    r_eval: float | None = None,
-    *,
-    r_stator: float,
-    r_magnet: float,
-    r_rotor: float,
-    mu_r_pm: float = 1.05,
-    alpha_p: float = 1.0,
-    max_harmonic: int = 29,
-    max_order: int | None = None,
-) -> NDArray[np.floating]:
-    """Odd-harmonic series of the square-wave magnetization.
-
-    Sums each odd harmonic k of the ±1 square wave — spatial order
-    m = k·n_p, Fourier coefficient (4/(kπ))·sin(kπα_p/2) (paper Eq 7a
-    M_rn) — through the per-order Zhu/Howe/Chan transfer function. The
-    k = 1 term is exactly zhu_howe_Br; the fundamental bin is unchanged.
-
-    max_harmonic bounds k (1/k² coefficient decay plus geometric radial
-    attenuation make the tail negligible); max_order additionally drops
-    orders m ≥ max_order so a sampled waveform cannot alias (pass
-    n_theta // 2 when the result feeds an FFT).
-    """
-    if n_p < 2:
-        raise ValueError(f"n_p={n_p} not supported (singularity at n²-1=0)")
-    if r_eval is None:
-        r_eval = (r_stator + r_magnet) / 2
-
-    # The per-order amplitude is scale-invariant in the radii; normalizing
-    # by r_magnet keeps high-order powers O(ratio^m) instead of
-    # O(meters^m), which under/overflows by m ~ a few hundred. The k = 1
-    # fundamental is unaffected beyond float round-off (zhu_howe_Br keeps
-    # the raw-radii path so psi_f/B_rem derivations stay bit-identical).
-    q0 = r_magnet
-    B = np.zeros_like(np.asarray(theta, dtype=float))
-    K_fund: float | None = None
-    for k in range(1, max_harmonic + 1, 2):
-        m = k * n_p
-        if max_order is not None and m >= max_order:
-            break
-        coeff = sin(k * pi * alpha_p / 2)
-        if abs(coeff) < 1e-12:
-            continue  # eliminated harmonic (e.g. k=3 at alpha_p=2/3)
-        bp = m * (4 / (k * pi)) * B_rem * coeff / (m**2 - 1)
-        try:
-            K = _zhu_howe_order_amplitude(
-                m, bp, r_eval / q0,
-                r_stator=r_stator / q0, r_magnet=1.0, r_rotor=r_rotor / q0,
-                mu_r_pm=mu_r_pm,
-            )
-        except (OverflowError, ZeroDivisionError):
-            break  # past the numerically representable order range
-        if not np.isfinite(K):
-            break
-        if K_fund is None:
-            K_fund = K
-        elif abs(K) < 1e-12 * abs(K_fund):
-            continue  # negligible term; k cap bounds the loop, not this
-        B += K * np.cos(m * theta)
-    return B
-
-
-def carter_factor(
-    r_stator: float,
-    n_slots: int,
-    slot_opening_ratio: float,
-    g_prime: float,
-) -> float:
-    """Carter coefficient for PM machine per Zhu & Howe 1993 III Eq 16.
-
-    slot_opening_ratio is the slot OPENING over the slot pitch at the bore —
-    not the slot body width ratio, which over-corrects.
-    g_prime is the effective airgap: g + h_m / mu_r_pm.
-    Returns 1.0 when n_slots == 0.
-    """
-    if n_slots == 0:
-        return 1.0
-    tau_s = 2 * pi * r_stator / n_slots
-    b_o = slot_opening_ratio * tau_s
-    u = b_o / (2 * g_prime)
-    gamma = (4 / pi) * (u * atan(u) - log(sqrt(1 + u**2)))
-    return tau_s / (tau_s - gamma * g_prime)
-
-
-def carter_adjusted_radii(geo: Geometry, mu_r_pm: float) -> tuple[float, float, float]:
-    """Carter modified-geometry correction: (r_stator, r_magnet, k_c).
-
-    Widens the air gap by delta_g = (k_c - 1)·g' by moving the stator bore
-    away from the magnets; r_magnet is deliberately unchanged. Returns the
-    original radii with k_c = 1.0 for smooth bores. Uses the slot opening
-    ratio at the bore, falling back to slot_width_ratio when unset.
-    """
-    r_stator = geo.r_stator
-    r_magnet = geo.r_magnet
-    sor = geo.slot_opening_ratio if geo.slot_opening_ratio > 0 else geo.slot_width_ratio
-    if not (geo.n_slots > 0 and sor > 0 and geo.slot_depth > 0):
-        return r_stator, r_magnet, 1.0
-    if geo.slot_opening_ratio <= 0:
-        warnings.warn(
-            "slot_opening_ratio unset; Carter factor falling back to "
-            f"slot_width_ratio={geo.slot_width_ratio:.3g} (slot body width), "
-            "which over-corrects — set slot_opening_ratio to the bore "
-            "opening fraction",
-            stacklevel=2,
-        )
-    g = abs(r_stator - r_magnet)
-    h_m = abs(r_magnet - geo.r_rotor)
-    g_prime = g + h_m / mu_r_pm
-    k_c = carter_factor(r_stator, geo.n_slots, sor, g_prime)
-    delta_g = (k_c - 1) * g_prime
-    if geo.topology == "inrunner":
-        return r_stator + delta_g, r_magnet, k_c
-    return r_stator - delta_g, r_magnet, k_c
+__all__ = [
+    "AnalyticalParams",
+    "end_effect_factor",
+    "end_effect_factor_pole_pitch",
+    "end_winding_leakage",
+    "prepare_analytical",
+    "run_analytical",
+]
 
 
 def end_effect_factor(L_stk: float, g_eff: float) -> float:
     """Heuristic end-effect correction for short-stack machines.
 
-    Returns k_end in (0, 1] — multiply B_g1 by k_end to account for axial
-    flux leakage at stack ends.  k_end → 1 for L_stk >> g_eff.
+    Returns k_end in (0, 1] for L_stk > 0 and the limit 0 at L_stk = 0 —
+    multiply B_g1 by k_end to account for axial flux leakage at stack
+    ends.  k_end → 1 for L_stk >> g_eff.
 
     In-house exponential form on the effective-airgap scale — NOT a
     published formula. Informational-only metric; limits are sane
@@ -228,10 +57,21 @@ def end_effect_factor(L_stk: float, g_eff: float) -> float:
 
     g_eff is the effective airgap: g + h_m / mu_r_pm.
     """
-    if L_stk <= 0 or g_eff <= 0:
+    if L_stk < 0:
+        raise ValueError(f"L_stk must be non-negative, got {L_stk}")
+    if g_eff < 0:
+        raise ValueError(f"g_eff must be non-negative, got {g_eff}")
+    if L_stk == 0:
+        return 0.0
+    if g_eff == 0:
         return 1.0
     ratio = pi * L_stk / (2 * g_eff)
-    return 1.0 - (2 * g_eff) / (pi * L_stk) * (1.0 - exp(-ratio))
+    k = 1.0 - (2 * g_eff) / (pi * L_stk) * (1.0 - exp(-ratio))
+    if not (0 < k <= 1):
+        raise RuntimeError(
+            f"end_effect_factor={k:.6f} outside (0, 1]"
+        )
+    return k
 
 
 def end_effect_factor_pole_pitch(L_stk: float, tau_p: float) -> float:
@@ -249,38 +89,54 @@ def end_effect_factor_pole_pitch(L_stk: float, tau_p: float) -> float:
     as physical. Use end_effect_factor (gap-scale) for the magnitude. Same
     limits (→1 for L_stk >> τ_p, →0 as L_stk → 0).
     """
-    if L_stk <= 0 or tau_p <= 0:
+    if L_stk < 0:
+        raise ValueError(f"L_stk must be non-negative, got {L_stk}")
+    if tau_p < 0:
+        raise ValueError(f"tau_p must be non-negative, got {tau_p}")
+    if L_stk == 0:
+        return 0.0
+    if tau_p == 0:
         return 1.0
     x = pi * L_stk / (2 * tau_p)
-    return 1.0 - tanh(x) / x
+    k = 1.0 - tanh(x) / x
+    if not (0 < k <= 1):
+        raise RuntimeError(
+            f"end_effect_factor_pole_pitch={k:.6f} outside (0, 1]"
+        )
+    return k
 
 
-def _derive_B_rem(
-    psi_f: float, n_p: int, N: int, k_w: float, L_stk: float,
-    *,
+def end_winding_leakage(
     r_stator: float,
-    r_magnet: float,
-    r_rotor: float,
-    mu_r_pm: float = 1.05,
-    alpha_p: float = 1.0,
-    r_stator_c: float | None = None,
-    r_magnet_c: float | None = None,
+    n_slots: int,
+    n_p: int,
+    coil_pitch_slots: int,
+    N: int,
+    coils_series: int,
+    ew_ratio: float = pi / 2,
 ) -> float:
-    """Invert psi_f to magnet remanence B_rem via Zhu & Howe transfer ratio.
+    """Stator end-winding leakage inductance (H) from Boldea & Nasar.
 
-    Mirrors psi_f_carter: Carter-adjusted radii (r_stator_c, r_magnet_c)
-    for the field solution when given, original bore for the evaluation
-    point and the winding formula.
+    Boldea, The Induction Machine Handbook, Ch. 6: per-phase, both end
+    regions.  L_ew = 4 μ₀ q_total N_c² λ_ew with
+    λ_ew = 0.34 q (l_ew − 0.64 y), q = slots/pole/phase, y = coil span (m),
+    l_ew = end-turn length per side.  ``ew_ratio`` = l_ew / y; the default
+    π/2 is the ideal semicircular end-turn (conservative lower bound).
     """
-    tr = zhu_howe_Br(
-        np.array([0.0]), n_p, B_rem=1.0, r_eval=r_stator,
-        r_stator=r_stator_c if r_stator_c is not None else r_stator,
-        r_magnet=r_magnet_c if r_magnet_c is not None else r_magnet,
-        r_rotor=r_rotor, mu_r_pm=mu_r_pm,
-        alpha_p=alpha_p,
-    )[0]
-    B_ag_peak = psi_f * n_p / (2 * N * k_w * r_stator * L_stk)
-    return B_ag_peak / tr
+    m = 3
+    q = n_slots / (2 * n_p * m)
+    tau_s = 2 * pi * r_stator / n_slots
+    y = coil_pitch_slots * tau_s
+    l_ew = ew_ratio * y
+    lam_ew = 0.34 * q * (l_ew - 0.64 * y)
+    if lam_ew <= 0:
+        raise ValueError(
+            f"end_winding_leakage: non-positive permeance lambda_ew={lam_ew:.4e} "
+            f"(ew_ratio={ew_ratio:.3f} < 0.64 threshold); this is an input error"
+        )
+    q_total = coils_series
+    MU0 = 4 * pi * 1e-7
+    return 4 * MU0 * q_total * N**2 * lam_ew
 
 
 @dataclass(frozen=True)
@@ -318,14 +174,14 @@ class AnalyticalParams:
 
 def prepare_analytical(motor: Motor) -> AnalyticalParams:
     """Derive, validate, and extract analytical solver params from a Motor."""
-    _reject_induction(motor, "analytical")
+    reject_induction(motor, "analytical")
     if motor.magnetization == "halbach":
         raise ValueError(
             f"Motor '{motor.name}': the analytical solver (Zhu & Howe) assumes "
             f"radial magnetization only — Halbach arrays are not supported. "
             f"Use the FEM solver instead."
         )
-    geo = _require_geometry(motor, "analytical")
+    geo = require_geometry(motor, "analytical")
     if geo.magnet_mount == "inset":
         raise ValueError(
             f"Motor '{motor.name}': the analytical solver (Zhu & Howe) assumes "
@@ -337,7 +193,7 @@ def prepare_analytical(motor: Motor) -> AnalyticalParams:
             f"Motor '{motor.name}': the analytical solver (Zhu & Howe) does "
             f"not model a bridge ring — use the FEM solver instead."
         )
-    b_rem = _resolve_b_rem(motor)
+    b_rem = resolve_b_rem(motor)
     return AnalyticalParams(
         geometry=geo,
         n_p=motor.n_p,
@@ -346,3 +202,84 @@ def prepare_analytical(motor: Motor) -> AnalyticalParams:
         mu_r_fe=motor.mu_r_fe,
         alpha_p=motor.alpha_p,
     )
+
+
+def run_analytical(config: RunConfig) -> dict[str, Any]:
+    from phasesweep.solver_params import backemf_from_flux, backemf_source, check_nyquist, psi_f_carter
+    from phasesweep.solvers.harmonics import (
+        assert_waveform_symmetry,
+        compute_thd,
+        harmonics_1sided,
+    )
+
+    params = prepare_analytical(config.motor)
+    geo = params.geometry
+    n_p = params.n_p
+
+    r_stator, r_magnet, _k_c = carter_adjusted_radii(geo, params.mu_r_pm)
+    check_nyquist(config.n_theta, n_p, series=True)
+    theta = np.linspace(0, 2 * np.pi, config.n_theta, endpoint=False)
+    B_r = zhu_howe_Br_series(
+        theta, n_p, params.B_rem, r_eval=geo.r_ag,
+        r_stator=r_stator, r_magnet=r_magnet, r_rotor=geo.r_rotor,
+        mu_r_pm=params.mu_r_pm, alpha_p=params.alpha_p,
+        max_order=config.n_theta // 2,
+    )
+
+    amps = harmonics_1sided(B_r)
+    assert_waveform_symmetry(amps, n_p, label="analytical B_r")
+    fundamental = float(amps[n_p])
+    thd_pct = compute_thd(amps, n_p)
+
+    B_r1_iron = float(zhu_howe_Br(
+        np.array([0.0]), n_p, params.B_rem, r_eval=r_stator,
+        r_stator=r_stator, r_magnet=r_magnet, r_rotor=geo.r_rotor,
+        mu_r_pm=params.mu_r_pm, alpha_p=params.alpha_p,
+    )[0])
+    rB_ag = abs(geo.r_ag * fundamental)
+    rB_iron = abs(r_stator * B_r1_iron)
+    if rB_ag < rB_iron * (1 - 1e-10):
+        raise RuntimeError(
+            f"|r·B_r1| at midgap ({rB_ag:.6e}) < at iron ({rB_iron:.6e}); "
+            "Zhu-Howe 2c invariant violated"
+        )
+
+    m = config.motor
+    flux_linkage_peak = psi_f_carter(m, r_stator, r_magnet, params.B_rem)
+    if flux_linkage_peak is not None:
+        flux_linkage_peak = float(flux_linkage_peak)
+
+    if (m.k_end is not None and m.B_rem is not None
+            and flux_linkage_peak is not None):
+        k_end_applied = True
+        flux_linkage_peak = float(flux_linkage_peak * m.k_end)
+    else:
+        k_end_applied = False
+
+    backemf_fundamental = backemf_from_flux(m, flux_linkage_peak)
+
+    if m.k_end is not None:
+        k_end = m.k_end
+        k_end_source = "computed"
+    elif m.L_stk is not None:
+        g = abs(geo.r_stator - geo.r_magnet)
+        h_m = abs(geo.r_magnet - geo.r_rotor)
+        k_end = float(end_effect_factor(m.L_stk, g + h_m / params.mu_r_pm))
+        k_end_source = "heuristic"
+    else:
+        k_end = None
+        k_end_source = None
+
+    return {
+        "theta_list": theta.tolist(),
+        "B_r_list": B_r.tolist(),
+        "fundamental": fundamental,
+        "peak_Br": float(np.max(np.abs(B_r))),
+        "thd_pct": thd_pct,
+        "backemf_fundamental": backemf_fundamental,
+        "backemf_source": backemf_source(m, backemf_fundamental),
+        "flux_linkage_peak": flux_linkage_peak,
+        "k_end": k_end,
+        "k_end_source": k_end_source,
+        "k_end_applied": k_end_applied,
+    }

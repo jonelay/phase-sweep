@@ -1,5 +1,9 @@
 """3D wedge end-effect (k_end) FEM — scalar magnetic potential formulation.
 
+Research code: an offline validation study, not a registry model. It is
+exercised by scripts and its (slow-marked) tests only; its API is not part
+of the package's public contract and may change without a version bump.
+
 k_end is intrinsically no-load: J_free = 0 ⟹ ∇×H = 0 ⟹ H = −∇φ valid in air,
 iron, AND magnet (bound current ∇×M is in the constitutive law, not J_free). So
 the scalar potential φ (H1, no gauge, no edge elements, no Simkin–Trowbridge
@@ -17,7 +21,7 @@ Staged build:
   Stage 2: short stack + end-air box, convergence (solve_wedge_endeffect).
   Stage 3: magnet/yoke overhang + one-shot k_end calculator (compute_k_end).
 
-Uses NGSolve (LGPL). Analytical gate: phasesweep.analytical.zhu_howe_Br.
+Uses NGSolve (LGPL). Analytical gate: phasesweep.solvers.field_solution.zhu_howe_Br.
 """
 
 from __future__ import annotations
@@ -28,8 +32,9 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from phasesweep.solvers.analytical import zhu_howe_Br
-from phasesweep.solvers.fem_materials import _MU0
+from phasesweep.solvers.fem_materials import MU0
+from phasesweep.solvers.field_solution import zhu_howe_Br
+from phasesweep.sweep_types import BoundaryCondition, NonlinearSolver
 
 # Relaxation for the wedge Newton's Picard start-up steps — mirrors
 # _picard_solve_wedge's shipping relax default.
@@ -40,6 +45,18 @@ if TYPE_CHECKING:
     from ngsolve.comp import FESpace, LinearForm
 
     from phasesweep.machines.geometry import Geometry
+
+
+__all__ = [
+    "EndEffectResult",
+    "SlabResult",
+    "WedgeResult",
+    "compute_k_end",
+    "slab_analytic",
+    "solve_slab",
+    "solve_wedge_2d_equiv",
+    "solve_wedge_endeffect",
+]
 
 
 def slab_analytic(B_rem: float, mu_r_pm: float, h_m: float, g: float) -> float:
@@ -101,7 +118,7 @@ def solve_slab(
 
     mesh = Mesh(OCCGeometry(shape).GenerateMesh(maxh=maxh))
 
-    mu = mesh.MaterialCF({"magnet": _MU0 * mu_r_pm, "gap": _MU0})
+    mu = mesh.MaterialCF({"magnet": MU0 * mu_r_pm, "gap": MU0})
     Brem_x = mesh.MaterialCF({"magnet": B_rem, "gap": 0.0})
 
     fes = H1(mesh, order=order, dirichlet="left|right")
@@ -116,7 +133,7 @@ def solve_slab(
     gfu.vec.data = a.mat.Inverse(fes.FreeDofs(), inverse="sparsecholesky") * lf.vec
 
     # Physical B_x = −μ ∂φ/∂x + B_rem,x; B_rem,x = 0 in the gap.
-    B_x = -_MU0 * grad(gfu)[0]
+    B_x = -MU0 * grad(gfu)[0]
     B_gap_fem = B_x(mesh(h_m + g / 2, width / 2, width / 2))
 
     B_gap_analytic = slab_analytic(B_rem, mu_r_pm, h_m, g)
@@ -150,7 +167,7 @@ def _radial_bands(geo: Geometry) -> list[tuple[float, float, str, str]]:
     ]
 
 
-def _sector_ring(alpha: float, r_in: float, r_out: float, r_big: float):
+def sector_ring(alpha: float, r_in: float, r_out: float, r_big: float):
     """2D half-pole annular-sector face θ∈[0, alpha], radius [r_in, r_out]."""
     from netgen.occ import WorkPlane
 
@@ -177,7 +194,7 @@ def _build_wedge(geo: Geometry, alpha: float, Lz: float):
 
     solids = []
     for r_in, r_out, mat, _role in _radial_bands(geo):
-        sol = _sector_ring(alpha, r_in, r_out, r_big).Extrude(Lz)
+        sol = sector_ring(alpha, r_in, r_out, r_big).Extrude(Lz)
         sol.mat(mat)
         r_mid = 0.5 * (r_in + r_out)
         pole_pt = Pnt(r_mid * cos(alpha), r_mid * sin(alpha), Lz / 2)
@@ -238,7 +255,7 @@ def _picard_solve_wedge(
 
     from phasesweep.defaults import PICARD_MAX_ITERATIONS
     from phasesweep.solvers.fem_field import _MIN_PICARD_RELAX
-    from phasesweep.solvers.fem_materials import _bh_nu
+    from phasesweep.solvers.fem_materials import bh_nu
 
     if n_iter is None:
         n_iter = PICARD_MAX_ITERATIONS  # same budget as the 2D solver (200)
@@ -265,7 +282,7 @@ def _picard_solve_wedge(
         gradmag.Set(sqrt(grad(gfu)[0] ** 2 + grad(gfu)[1] ** 2 + grad(gfu)[2] ** 2))
         mu_old = gfu_mu.vec.FV().NumPy().copy()
         B_iron = mu_old[iron] * gradmag.vec.FV().NumPy()[iron]
-        mu_new = 1.0 / _bh_nu(B_iron)
+        mu_new = 1.0 / bh_nu(B_iron)
         step = np.max(np.abs(mu_new - mu_old[iron])) / np.max(np.abs(mu_old[iron]))
         if step < tol:
             break
@@ -297,7 +314,7 @@ def _newton_solve_wedge(
     Same discrete fixed point as ``_picard_solve_wedge``: element-wise L2⁰
     iron μ with the element-averaged |∇φ|. Picard's per-element implicit
     relation μ = 1/ν(μ·|∇φ|) resolves to the explicit secant
-    μ = ``_bh_mu_h``(|∇φ|) — the exact H-space inverse of the BH spline —
+    μ = ``bh_mu_h``(|∇φ|) — the exact H-space inverse of the BH spline —
     so both iterations share one solution; only the update differs.
     Ported from the 2D ``_newton_solve`` pattern, including its
     relaxed-Picard start-up steps before the Newton loop.
@@ -334,7 +351,7 @@ def _newton_solve_wedge(
         _NEWTON_RTOL,
         _NEWTON_STARTUP_PICARD,
     )
-    from phasesweep.solvers.fem_materials import _bh_dB_dH, _bh_mu_h
+    from phasesweep.solvers.fem_materials import bh_dB_dH, bh_mu_h
 
     if n_iter is None:
         n_iter = PICARD_MAX_ITERATIONS
@@ -394,7 +411,7 @@ def _newton_solve_wedge(
         mu_cur = gfu_mu.vec.FV().NumPy().copy()
         mu_upd = mu_cur.copy()
         mu_upd[iron_mask] = (
-            _WEDGE_STARTUP_RELAX * _bh_mu_h(project_Hmag())[iron_mask]
+            _WEDGE_STARTUP_RELAX * bh_mu_h(project_Hmag())[iron_mask]
             + (1 - _WEDGE_STARTUP_RELAX) * mu_cur[iron_mask]
         )
         gfu_mu.vec.FV().NumPy()[:] = mu_upd
@@ -406,7 +423,7 @@ def _newton_solve_wedge(
     for _newton_i in range(max(1, n_iter - n_startup)):
         H_vals = project_Hmag()
         mu_upd = mu_seed.copy()
-        mu_upd[iron_mask] = _bh_mu_h(H_vals)[iron_mask]
+        mu_upd[iron_mask] = bh_mu_h(H_vals)[iron_mask]
         gfu_mu.vec.FV().NumPy()[:] = mu_upd
         r_np = residual_np()
         rnorm = float(np.linalg.norm(r_np))
@@ -417,9 +434,9 @@ def _newton_solve_wedge(
         # Tangent slope μ_l = dB/dH per element (iron only), analytic
         # from the BH spline — the clip plateau (where μ_l = μ_t and the
         # correction vanishes) and the vacuum-slope extrapolation are
-        # handled inside _bh_dB_dH; floored at μ0, so μ_l > 0 keeps jac
+        # handled inside bh_dB_dH; floored at μ0, so μ_l > 0 keeps jac
         # SPD.
-        mu_l = _bh_dB_dH(H_vals)
+        mu_l = bh_dB_dH(H_vals)
         gfu_coeff.vec.FV().NumPy()[:] = np.where(
             iron_mask, mu_l - mu_upd, 0.0)
 
@@ -435,7 +452,7 @@ def _newton_solve_wedge(
         for _ in range(8):
             gfu.vec.FV().NumPy()[:] = u0 - alpha * step_np
             mu_trial = mu_seed.copy()
-            mu_trial[iron_mask] = _bh_mu_h(project_Hmag())[iron_mask]
+            mu_trial[iron_mask] = bh_mu_h(project_Hmag())[iron_mask]
             gfu_mu.vec.FV().NumPy()[:] = mu_trial
             if float(np.linalg.norm(residual_np())) < rnorm:
                 accepted = True
@@ -507,7 +524,7 @@ def solve_wedge_2d_equiv(
     mesh = Mesh(OCCGeometry(shape).GenerateMesh(maxh=maxh))
 
     mu = mesh.MaterialCF(
-        {"magnet": _MU0 * mu_r_pm, "gap": _MU0, "iron": _MU0 * mu_r_fe}
+        {"magnet": MU0 * mu_r_pm, "gap": MU0, "iron": MU0 * mu_r_fe}
     )
     r_cf = sqrt(x * x + y * y)
     cos_t, sin_t = x / r_cf, y / r_cf
@@ -528,7 +545,7 @@ def solve_wedge_2d_equiv(
     gfu.vec.data = a.mat.Inverse(fes.FreeDofs(), inverse="sparsecholesky") * lf.vec
 
     # Sample B_r in the gap at r_ag, mid-plane; project onto cos(n_p θ).
-    B_r_cf = -_MU0 * (cos_t * grad(gfu)[0] + sin_t * grad(gfu)[1])
+    B_r_cf = -MU0 * (cos_t * grad(gfu)[0] + sin_t * grad(gfu)[1])
     b1_fem = _fundamental_Br(mesh, B_r_cf, geo.r_ag, n_p, alpha, Lz / 2, n_sample)
 
     b1_analytic = float(zhu_howe_Br(
@@ -592,7 +609,7 @@ def _build_wedge_endeffect(
     for r_in, r_out, mat, role in _radial_bands(geo):
         if mat == "gap":
             continue  # the airgap is built as an explicit solid below
-        sol = _sector_ring(alpha, r_in, r_out, r_big).Extrude(length[role])
+        sol = sector_ring(alpha, r_in, r_out, r_big).Extrude(length[role])
         sol.mat(mat)
         if role == "magnet" and maxh_fine is not None:
             sol.maxh = maxh_fine
@@ -601,12 +618,12 @@ def _build_wedge_endeffect(
     # Explicit airgap solid (full z_box) so it can carry the fine local mesh that
     # resolves the radial field and the stack-end corner.
     g_lo, g_hi = sorted((geo.r_stator, geo.r_magnet))
-    gap_sol = _sector_ring(alpha, g_lo, g_hi, r_big).Extrude(z_box)
+    gap_sol = sector_ring(alpha, g_lo, g_hi, r_big).Extrude(z_box)
     gap_sol.mat("gap")
     if maxh_fine is not None:
         gap_sol.maxh = maxh_fine
 
-    air = _sector_ring(alpha, 0.0, r_out_max, r_big).Extrude(z_box)
+    air = sector_ring(alpha, 0.0, r_out_max, r_big).Extrude(z_box)
     for sol in (*solids, gap_sol):
         air = air - sol
     air.mat("gap")
@@ -655,10 +672,10 @@ def solve_wedge_endeffect(
     mu_r_pm: float = 1.05,
     mu_r_fe: float = 1.0e4,
     nonlinear: bool = False,
-    nonlinear_solver: str = "newton",
+    nonlinear_solver: NonlinearSolver = "newton",
     z_box_factor: float = 6.0,
-    outer_bc: str = "neumann",
-    top_bc: str = "neumann",
+    outer_bc: BoundaryCondition = "neumann",
+    top_bc: BoundaryCondition = "neumann",
     maxh: float | None = None,
     maxh_bulk: float | None = None,
     order: int = 2,
@@ -715,6 +732,12 @@ def solve_wedge_endeffect(
             f"nonlinear_solver must be 'picard' or 'newton', "
             f"got {nonlinear_solver!r}"
         )
+    for _bc_name, _bc_val in [("outer_bc", outer_bc), ("top_bc", top_bc)]:
+        if _bc_val not in ("neumann", "dirichlet"):
+            raise ValueError(
+                f"{_bc_name} must be 'neumann' or 'dirichlet', "
+                f"got {_bc_val!r}"
+            )
 
     alpha = pi / (2 * n_p)
     L_half = L_stk / 2.0
@@ -731,7 +754,7 @@ def solve_wedge_endeffect(
     mesh = Mesh(OCCGeometry(shape).GenerateMesh(maxh=maxh_bulk))
 
     mu = mesh.MaterialCF(
-        {"magnet": _MU0 * mu_r_pm, "gap": _MU0, "iron": _MU0 * mu_r_fe}
+        {"magnet": MU0 * mu_r_pm, "gap": MU0, "iron": MU0 * mu_r_fe}
     )
     r_cf = sqrt(x * x + y * y)
     cos_t, sin_t = x / r_cf, y / r_cf
@@ -769,7 +792,7 @@ def solve_wedge_endeffect(
         )
 
     # B in the gap is -mu0*grad(phi) regardless of iron model (air region).
-    B_r_cf = -_MU0 * (cos_t * grad(gfu)[0] + sin_t * grad(gfu)[1])
+    B_r_cf = -MU0 * (cos_t * grad(gfu)[0] + sin_t * grad(gfu)[1])
     z = np.linspace(0.0, L_half, n_z)
 
     def b2_at(r):
@@ -829,7 +852,9 @@ def compute_k_end(
     One-shot calculator: run per motor, store the result. ``overhang`` is the
     magnet axial extension per side beyond the active stack; ``yoke_overhang``
     defaults to it (rotor cup follows the magnet) — pass 0 for a yoke co-extensive
-    with the stack. B_rem cancels in the ratio, so its value does not matter. Pass
+    with the stack. With ``nonlinear=False`` B_rem cancels in the ratio; with
+    ``nonlinear=True`` it does not (the 3D numerator saturates, the Zhu-Howe
+    denominator is linear), so pass the motor's own B_rem. Pass
     ``nonlinear=True`` for BH iron (lowers k_end a uniform ~4.3–4.4 pt
     below linear across 0–1 mm overhang on the 14 mm outrunner, from converged
     runs — the earlier "~2%" came from silently non-converged solves;

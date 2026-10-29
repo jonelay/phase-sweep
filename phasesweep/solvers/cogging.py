@@ -1,52 +1,28 @@
 """Cogging torque model — rotor sweep at zero armature current.
 
-Entry point: python -m phasesweep.solvers.cogging '<config_json>'
-
 Sweeps solve_field_fem over one cogging period with j_s=0, computing
-Arkkio torque at each angle.  The full sweep runs in one subprocess call
-(run_cogging_safe) with timeout scaled by the angle count.
+Arkkio torque at each angle.
 """
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
-import sys
-import time
 from typing import Any
 
 import numpy as np
 
-from phasesweep.sweep_types import RunConfig, RunResult
+from phasesweep.sweep_types import RunConfig
 
-_PER_ANGLE_TIMEOUT = 300
+__all__ = [
+    "run_cogging",
+]
 
 
-def _run_cogging_impl(config: RunConfig) -> dict[str, Any]:
-    """Run cogging torque sweep from RunConfig.  Executes inside subprocess."""
+def run_cogging(config: RunConfig) -> dict[str, Any]:
+    """Run cogging torque sweep from RunConfig."""
     from phasesweep.solvers.fem_field import solve_field_fem
-    from phasesweep.solvers.fem_mesh import (
-        ENV_CACHE_DIR,
-        disk_cache_dir,
-        set_disk_cache_dir,
-    )
     from phasesweep.solvers.fem_runner import prepare_fem
     from phasesweep.solvers.fem_sampling import arkkio_torque
     from phasesweep.solvers.harmonics import cogging_angles, harmonics_1sided
-
-    # Meshing dominates a cogging sweep (~1.1 s/angle vs ~0.3 s to solve),
-    # and every angle needs its own mesh once magnet arcs are discrete.
-    # run_cogging_safe forwards the parent's cache dir through the
-    # environment so a repeated sweep loads meshes instead of rebuilding.
-    #
-    # This function is also the in-process registry path, where the pool
-    # worker has usually already called set_disk_cache_dir. An ambient env
-    # var must not override that, so the env is only a fallback.
-    if disk_cache_dir() is None:
-        _cache_dir = os.environ.get(ENV_CACHE_DIR)
-        if _cache_dir:
-            set_disk_cache_dir(_cache_dir)
 
     if config.j_s != 0.0:
         raise ValueError(
@@ -129,69 +105,3 @@ def _run_cogging_impl(config: RunConfig) -> dict[str, Any]:
         result["tau_cogging_pp_Nm"] = tau_pp * config.motor.L_stk
 
     return result
-
-
-def run_cogging_safe(
-    config: RunConfig, timeout_s: int | None = None,
-) -> RunResult:
-    """Run cogging torque sweep with timeout via subprocess."""
-    if timeout_s is None:
-        timeout_s = _PER_ANGLE_TIMEOUT * max(config.cogging_points, 1)
-    t0 = time.time()
-    # Hand the child the parent's mesh cache dir; without it the subprocess
-    # starts cold on every sweep.
-    from phasesweep.solvers.fem_mesh import ENV_CACHE_DIR, disk_cache_dir
-    env = dict(os.environ)
-    _cache = disk_cache_dir()
-    if _cache is not None:
-        env[ENV_CACHE_DIR] = str(_cache)
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "phasesweep.solvers.cogging",
-             json.dumps(config.to_dict())],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            env=env,
-        )
-        if proc.returncode != 0:
-            return RunResult(
-                config=config, model="cogging_torque", status="ERROR",
-                metrics=None, elapsed_s=time.time() - t0,
-                error_msg=proc.stderr[:500] if proc.stderr else f"Exit {proc.returncode}",
-            )
-        return RunResult(
-            config=config, model="cogging_torque", status="OK",
-            metrics=json.loads(proc.stdout),
-            elapsed_s=time.time() - t0,
-        )
-    except subprocess.TimeoutExpired:
-        return RunResult(
-            config=config, model="cogging_torque", status="TIMEOUT",
-            metrics=None, elapsed_s=float(timeout_s),
-            error_msg=f"Exceeded {timeout_s}s timeout",
-        )
-    except Exception as e:
-        return RunResult(
-            config=config, model="cogging_torque", status="ERROR",
-            metrics=None, elapsed_s=time.time() - t0,
-            error_msg=str(e),
-        )
-
-
-def _cli_main() -> None:
-    if len(sys.argv) != 2:
-        print("Usage: python -m phasesweep.solvers.cogging '<config_json>'",
-              file=sys.stderr)
-        sys.exit(1)
-    try:
-        config = RunConfig.from_dict(json.loads(sys.argv[1]))
-        metrics = _run_cogging_impl(config)
-        print(json.dumps(metrics))
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    _cli_main()

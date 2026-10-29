@@ -8,11 +8,11 @@ the only generation with a complete public geometry + measurement chain.
 
 All primary data is from freely available US government reports:
 
-| Report | OSTI | Contents |
-|--------|------|----------|
-| ORNL/TM-2004/137 | 885676 | Physical teardown: geometry, winding, materials |
-| ORNL/TM-2004/185 rev. 2007 | 921782 | Measured back-EMF vs speed and temperature |
-| ORNL/TM-2004/247 | 890029 | Dynamometer performance maps |
+| Report | DOI | Contents |
+|--------|-----|----------|
+| ORNL/TM-2004/137 | [10.2172/885676](https://doi.org/10.2172/885676) | Physical teardown: geometry, winding, materials |
+| ORNL/TM-2004/185 rev. 2007 | [10.2172/921782](https://doi.org/10.2172/921782) | Measured back-EMF vs speed and temperature |
+| ORNL/TM-2004/247 | [10.2172/890029](https://doi.org/10.2172/890029) | Dynamometer performance maps |
 | ORNL/TM-2004/217 | — | ORNL's own parametric FEA |
 
 Circuit parameters consistent with Kuptsov et al., *Machines* 7(4):75, 2019
@@ -50,4 +50,4 @@ Following the Prius community-standard calibration practice:
 Apache-2.0 — see https://github.com/Eomys/pyleecan/blob/master/LICENSE.
 
 Other data files contain parameter values transcribed from the cited
-publications and are covered by the project's LGPL-2.1 license.
+publications and are covered by the project's Apache-2.0 license.

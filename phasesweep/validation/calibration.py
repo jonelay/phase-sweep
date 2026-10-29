@@ -35,10 +35,27 @@ from phasesweep.sweep_types import RunConfig, RunResult
 from phasesweep.validation.crossval import DEFAULT_TOLERANCE_PCT, ComparisonRow, compare_results
 from phasesweep.validation.measured import BoundRef, CurveRef, KeyMapping
 
+__all__ = [
+    "CalibrationRecord",
+    "CalibrationResult",
+    "FittedParam",
+    "calibrate",
+    "write_motor_toml",
+]
+
 FITTABLE_PARAMS: tuple[PerturbParam, ...] = (
     "OD", "gap", "L_stk", "B_rem", "k_w", "psi_f", "R_s", "L_d", "L_q",
     "B_core",
+    "R_2", "L_m", "L_sigma_s", "L_sigma_r",
 )
+
+# Induction-circuit scalars live on the nested Motor.induction block;
+# the perturbation transform scales the matching deep-bar/saturation
+# table with them. So a fitted L_m (or R_2, L_sigma_*) is
+# the scale of the whole L_m_vs_i curve, reported as the scalar
+# reference value — not the operating-point inductance the circuit
+# solver reads off the scaled curve.
+_INDUCTION: frozenset[str] = frozenset({"R_2", "L_m", "L_sigma_s", "L_sigma_r"})
 
 # psi_f and B_rem are interderivable: fitting one against a
 # dataset the other was derived from is the same echo, and fitting both
@@ -133,6 +150,10 @@ def _param_value(motor: Motor, param: str) -> float | None:
                 or not hasattr(motor.geometry, "r_magnet")):
             return None
         return abs(motor.geometry.r_stator - motor.geometry.r_magnet)
+    if param in _INDUCTION:
+        if motor.induction is None:
+            return None
+        return getattr(motor.induction, param)
     val = getattr(motor, param)
     return val if isinstance(val, (int, float)) else None
 
@@ -219,11 +240,13 @@ def _auto_models(
                 needed.add(BoundRef.from_dict(bc[q]).computed_key)
             else:
                 needed.add(q)
-    # thermal_duty needs a duty_profile the loop's RunConfig never carries.
+    # Models with runtime inputs (thermal_duty's duty_profile,
+    # im_equivalent_circuit's slip) cannot run on the loop's bare
+    # RunConfig; im_torque_slip carries the rated-point IM outputs.
     candidates = sorted(
         name for name, info in MODEL_REGISTRY.items()
         if info.source == "computed" and info.cost == "fast"
-        and name != "thermal_duty"
+        and not info.needs_runtime
         and needed & info.produces
     )
     models = []
@@ -322,78 +345,13 @@ def _row_dict(row: ComparisonRow) -> dict[str, Any]:
 # Fit
 # ---------------------------------------------------------------------------
 
-def calibrate(
-    motor: Motor,
-    measured: list[RunResult],
-    params: tuple[str, ...] | list[str],
-    quantities: tuple[str, ...] | list[str],
-    *,
-    models: tuple[str, ...] | list[str] | None = None,
-    bounds: dict[str, tuple[float, float]] | None = None,
-    n_theta: int = 360,
-) -> CalibrationResult:
-    """Fit `params` on `motor` against measured/published `measured` results.
-
-    Raises ValueError on identifiability failures (circular fit,
-    under-determination, zero sensitivity, missing residual rows).
-    Never mutates or overwrites the source motor — the calibrated Motor
-    is returned alongside a CalibrationRecord.
-    """
-    from scipy.optimize import least_squares
-
-    params = tuple(params)
-    quantities = tuple(quantities)
-    _guard_params(motor, params)
-    _guard_circular(measured, params)
-    for name, (lo, hi) in (bounds or {}).items():
-        if name not in params:
-            raise ValueError(
-                f"bound for {name!r} matches no fitted param {params}"
-            )
-        if not lo < hi:
-            raise ValueError(
-                f"bound for {name!r}: ({lo}, {hi}) — lower must be < upper"
-            )
-
-    model_tuple = (
-        tuple(models) if models else _auto_models(motor, measured, quantities)
-    )
-    for name in model_tuple:
-        info = MODEL_REGISTRY.get(name)
-        if info is None or info.source != "computed" or info.fn is None:
-            raise ValueError(f"{name!r} is not a runnable computed model")
-        if info.validate is not None:
-            info.validate(motor)
-
-    rows0 = _fit_rows(motor, measured, quantities, model_tuple, n_theta)
-    if not rows0:
-        raise ValueError(
-            f"no equality-style comparison rows for quantities {quantities} "
-            f"between models {model_tuple} and the given datasets — nothing to fit"
-        )
-    if len(params) > len(rows0):
-        raise ValueError(
-            f"under-determined fit refused: {len(params)} param(s) against "
-            f"{len(rows0)} independent residual row(s)"
-        )
-    exactly_determined = len(params) == len(rows0)
-
-    keys = sorted(rows0)
-
-    def residual_fn(x: np.ndarray) -> np.ndarray:
-        m = _apply_deltas(motor, params, x)
-        if m is None:
-            return np.full(len(keys), _REJECT_RESIDUAL)
-        try:
-            rows = _fit_rows(m, measured, quantities, model_tuple, n_theta)
-        except ValueError:
-            return np.full(len(keys), _REJECT_RESIDUAL)
-        return np.array([
-            _residual(rows[k]) if k in rows else _REJECT_RESIDUAL for k in keys
-        ])
-
-    # Zero-sensitivity pre-check: a param with no effect on the selected
-    # quantities would silently ride along at its initial value.
+def _check_sensitivity(
+    residual_fn: Any,
+    params: tuple[str, ...],
+    keys: list[Any],
+    quantities: tuple[str, ...],
+    model_tuple: tuple[str, ...],
+) -> np.ndarray:
     r0 = residual_fn(np.zeros(len(params)))
     step = 1e-3
     jac0 = np.empty((len(keys), len(params)))
@@ -408,19 +366,26 @@ def calibrate(
             f"param(s) {dead} have no sensitivity to quantities "
             f"{quantities} under models {model_tuple} — refusing to fit"
         )
+    return r0
 
-    lb = np.array([(bounds or {}).get(p, DEFAULT_BOUND)[0] for p in params])
-    ub = np.array([(bounds or {}).get(p, DEFAULT_BOUND)[1] for p in params])
-    x0 = np.clip(np.zeros(len(params)), lb, ub)
-    clamped = [p for p, x in zip(params, x0) if x != 0.0]
-    res = least_squares(residual_fn, x0, bounds=(lb, ub))
 
-    motor_cal = _apply_deltas(motor, params, res.x)
-    if motor_cal is None:  # pragma: no cover — bounds keep deltas feasible
-        raise RuntimeError("optimizer returned an infeasible parameter vector")
-    motor_cal = dc_replace(motor_cal, name=f"{motor.name} [calibrated]")
-    rows_after = _fit_rows(motor_cal, measured, quantities, model_tuple, n_theta)
-
+def _build_calibration_result(
+    motor: Motor,
+    motor_cal: Motor,
+    params: tuple[str, ...],
+    quantities: tuple[str, ...],
+    model_tuple: tuple[str, ...],
+    measured: list[RunResult],
+    res: Any,
+    r0: np.ndarray,
+    rows0: dict[tuple[str, str, str, str], Any],
+    rows_after: dict[tuple[str, str, str, str], Any],
+    keys: list[Any],
+    lb: np.ndarray,
+    ub: np.ndarray,
+    clamped: list[str],
+    exactly_determined: bool,
+) -> CalibrationResult:
     warnings_list = _collinearity_warnings(params, res.jac)
     if clamped:
         warnings_list.append(
@@ -493,6 +458,96 @@ def calibrate(
     return CalibrationResult(motor=motor_cal, record=record)
 
 
+def calibrate(
+    motor: Motor,
+    measured: list[RunResult],
+    params: tuple[str, ...] | list[str],
+    quantities: tuple[str, ...] | list[str],
+    *,
+    models: tuple[str, ...] | list[str] | None = None,
+    bounds: dict[str, tuple[float, float]] | None = None,
+    n_theta: int = 360,
+) -> CalibrationResult:
+    """Fit `params` on `motor` against measured/published `measured` results.
+
+    Raises ValueError on identifiability failures (circular fit,
+    under-determination, zero sensitivity, missing residual rows).
+    Never mutates or overwrites the source motor — the calibrated Motor
+    is returned alongside a CalibrationRecord.
+    """
+    from scipy.optimize import least_squares
+
+    params = tuple(params)
+    quantities = tuple(quantities)
+    _guard_params(motor, params)
+    _guard_circular(measured, params)
+    for name, (lo, hi) in (bounds or {}).items():
+        if name not in params:
+            raise ValueError(
+                f"bound for {name!r} matches no fitted param {params}"
+            )
+        if not lo < hi:
+            raise ValueError(
+                f"bound for {name!r}: ({lo}, {hi}) — lower must be < upper"
+            )
+
+    model_tuple = (
+        tuple(models) if models else _auto_models(motor, measured, quantities)
+    )
+    for name in model_tuple:
+        info = MODEL_REGISTRY.get(name)
+        if info is None or info.source != "computed" or info.fn is None:
+            raise ValueError(f"{name!r} is not a runnable computed model")
+        if info.validate is not None:
+            info.validate(motor)
+
+    rows0 = _fit_rows(motor, measured, quantities, model_tuple, n_theta)
+    if not rows0:
+        raise ValueError(
+            f"no equality-style comparison rows for quantities {quantities} "
+            f"between models {model_tuple} and the given datasets — nothing to fit"
+        )
+    if len(params) > len(rows0):
+        raise ValueError(
+            f"under-determined fit refused: {len(params)} param(s) against "
+            f"{len(rows0)} independent residual row(s)"
+        )
+    exactly_determined = len(params) == len(rows0)
+
+    keys = sorted(rows0)
+
+    def residual_fn(x: np.ndarray) -> np.ndarray:
+        m = _apply_deltas(motor, params, x)
+        if m is None:
+            return np.full(len(keys), _REJECT_RESIDUAL)
+        try:
+            rows = _fit_rows(m, measured, quantities, model_tuple, n_theta)
+        except ValueError:
+            return np.full(len(keys), _REJECT_RESIDUAL)
+        return np.array([
+            _residual(rows[k]) if k in rows else _REJECT_RESIDUAL for k in keys
+        ])
+
+    r0 = _check_sensitivity(residual_fn, params, keys, quantities, model_tuple)
+
+    lb = np.array([(bounds or {}).get(p, DEFAULT_BOUND)[0] for p in params])
+    ub = np.array([(bounds or {}).get(p, DEFAULT_BOUND)[1] for p in params])
+    x0 = np.clip(np.zeros(len(params)), lb, ub)
+    clamped = [p for p, x in zip(params, x0) if x != 0.0]
+    res = least_squares(residual_fn, x0, bounds=(lb, ub))
+
+    motor_cal = _apply_deltas(motor, params, res.x)
+    if motor_cal is None:  # pragma: no cover — bounds keep deltas feasible
+        raise RuntimeError("optimizer returned an infeasible parameter vector")
+    motor_cal = dc_replace(motor_cal, name=f"{motor.name} [calibrated]")
+    rows_after = _fit_rows(motor_cal, measured, quantities, model_tuple, n_theta)
+
+    return _build_calibration_result(
+        motor, motor_cal, params, quantities, model_tuple, measured,
+        res, r0, rows0, rows_after, keys, lb, ub, clamped, exactly_determined,
+    )
+
+
 def _collinearity_warnings(
     params: tuple[str, ...], jac: np.ndarray,
 ) -> list[str]:
@@ -545,6 +600,8 @@ def _toml_value(v: Any) -> str:
         return json.dumps(v)  # JSON string escapes are valid TOML basic strings
     if isinstance(v, bool):  # pragma: no cover — no bool motor fields today
         return "true" if v else "false"
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_toml_value(x) for x in v) + "]"
     return repr(v)
 
 
@@ -576,92 +633,8 @@ def write_motor_toml(
         lines += [f"# {ln}" for ln in header.splitlines()]
         lines.append("")
 
-    geo = motor.geometry
-    from phasesweep.machines.geometry import AxialFluxGeometry
-    topo = None
-    if geo is not None:
-        topo = geo.topology if hasattr(geo, "topology") else "axial"
-    lines += _toml_section("motor", {
-        "name": motor.name,
-        "topology": topo,
-    })
-    lines += _toml_section("circuit", {
-        "n_p": motor.n_p,
-        "R_s": motor.R_s,
-        "L_d": motor.L_d,
-        "L_q": motor.L_q,
-        "psi_f": motor.psi_f,
-        "J": motor.J,
-        "I_rated": motor.I_rated,
-    })
-    lines += _toml_section("winding", {
-        "N": motor.N,
-        "k_w": motor.k_w,
-        "coils_series": motor.coils_series,
-    })
-    if geo is not None and not isinstance(geo, AxialFluxGeometry):
-        lines += _toml_section("geometry", {
-            "r_outer": geo.r_outer,
-            "r_stator": geo.r_stator,
-            "r_magnet": geo.r_magnet,
-            "r_rotor": geo.r_rotor,
-            "r_inner": geo.r_inner,
-            "r_ag": geo.r_ag,
-            "n_slots": geo.n_slots,
-            "slot_depth": geo.slot_depth,
-            "slot_width_ratio": geo.slot_width_ratio,
-            "slot_opening_width": geo.slot_opening_width,
-            "back_iron_thickness": geo.back_iron_thickness,
-            "magnet_mount": geo.magnet_mount if geo.magnet_mount != "surface" else None,
-            "bridge_thickness": geo.bridge_thickness,
-            "magnet_overhang": geo.magnet_overhang,
-            "alpha_p": motor.alpha_p,
-            "L_stk": motor.L_stk,
-            "k_end": motor.k_end,
-        })
-    elif isinstance(geo, AxialFluxGeometry):
-        lines += _toml_section("geometry", {
-            "r_out": geo.r_out,
-            "r_in": geo.r_in,
-            "airgap": geo.airgap,
-            "magnet_thickness": geo.magnet_thickness,
-            "rotor_yoke": geo.rotor_yoke,
-            "stator_yoke": geo.stator_yoke,
-            "variant": geo.variant,
-            "n_slots": geo.n_slots,
-            "slot_depth": geo.slot_depth,
-            "slot_width_ratio": geo.slot_width_ratio,
-            "slot_opening_width": geo.slot_opening_width,
-            "alpha_p": motor.alpha_p,
-            "k_end": motor.k_end,
-        })
-    lines += _toml_section("materials", {
-        "B_rem": motor.B_rem,
-        "mu_r_pm": motor.mu_r_pm,
-        "mu_r_fe": motor.mu_r_fe,
-        "alpha_Br": motor.alpha_Br,
-        "B_knee": motor.B_knee,
-        "alpha_B_knee": motor.alpha_B_knee,
-    })
-    lines += _toml_section("drive", {
-        "U_DC": motor.drive.U_DC,
-        "MAX_I_S": motor.drive.MAX_I_S,
-        "W_REF": motor.drive.W_REF,
-        "I_LIMIT": motor.drive.I_LIMIT,
-    })
-    lines += _toml_section("thermal", {
-        "winding_temp_limit": motor.winding_temp_limit,
-        "ambient_temp": motor.ambient_temp,
-        "r_th": motor.r_th,
-        "insulation_class": motor.insulation_class,
-        "thermal_time_constant": motor.thermal_time_constant,
-        "magnet_temp": motor.magnet_temp,
-    })
-    lines += _toml_section("iron", {
-        "k_h": motor.k_h,
-        "k_e": motor.k_e,
-        "alpha_fe": motor.alpha_fe,
-        "m_core": motor.m_core,
-        "B_core": motor.B_core,
-    })
+    from phasesweep.machines.configs import motor_to_toml_dict
+
+    for section, fields in motor_to_toml_dict(motor).items():
+        lines += _toml_section(section, fields)
     path.write_text("\n".join(lines))

@@ -1,0 +1,141 @@
+# Widget contract: DOM structure, class names, data attributes, and
+# empty / loading / null states for the shared widgets viewsweep.css styles.
+# widgets.js (Phase 2) builds these nodes; consumers may also hand-write
+# the markup. Class names are the contract; element types are advisory.
+
+[meta]
+version = 1
+class_prefix = "vs-"
+
+# -- stat tile ----------------------------------------------------------------
+
+[stat_strip]
+description = "Compact KPI row: small uppercase label over a tabular numeral"
+host = ".vs-stat-strip"
+item = ".vs-stat-tile"
+label = ".vs-stat-label"
+value = ".vs-stat-value"
+fields = ["label", "value"]
+null_value = "—"
+loading_class = "is-loading"
+empty_host = "host has no children; strip collapses to zero height"
+
+# -- provenance stamp ----------------------------------------------------------
+
+[provenance]
+description = "Attribution line under a result: model, version, timestamp, id"
+element = ".vs-provenance"
+format = "{model} v{model_version} · {timestamp:%Y-%m-%d %H:%M} · {result_id:.8}"
+unknown_version = "v?"
+empty_state = "element has no text; :empty hides it"
+
+# -- connection indicator -------------------------------------------------------
+
+[connection]
+description = "Dot + label showing data-provider connection state"
+element = ".vs-conn"
+dot = ".vs-conn-dot"
+label = ".vs-conn-label"
+state_attr = "data-state"
+states = ["connected", "connecting", "disconnected"]
+state_colors = { connected = "status-good", connecting = "status-warning", disconnected = "status-critical" }
+
+[banner]
+description = "Full-width notice under the top bar (connection lost, stale data)"
+element = ".vs-banner"
+hidden_attr = "hidden"
+
+# -- status badge --------------------------------------------------------------
+
+[badge]
+description = "Pill badge coloured by job or verdict status"
+element = ".vs-badge"
+status_attr = "data-status"
+statuses = ["pending", "running", "completed", "failed", "cancelled"]
+status_colors = { running = "accent", completed = "status-good", failed = "status-critical", cancelled = "warn-ink" }
+default_color = "text-muted"
+
+[progress]
+description = "Thin determinate progress bar"
+track = ".vs-progress-track"
+fill = ".vs-progress-fill"
+fill_color = "accent"
+
+# -- toast ----------------------------------------------------------------------
+
+[toast]
+description = "Bottom-centre transient notice, inverted colours"
+element = ".vs-toast"
+show_class = "show"
+default_duration_ms = 2500
+
+# -- panel card -----------------------------------------------------------------
+
+[panel]
+description = "Titled tile with optional header controls and collapsible body"
+element = ".vs-panel"
+header = ".vs-panel > header"
+title = ".vs-panel > header h2"
+header_slot = ".vs-panel-slot"
+body = ".vs-panel-body"
+collapse_button = ".vs-panel-collapse"
+collapsed_class = "collapsed"
+maximized_class = "maximized"
+drag_handle = ".vs-drag-handle"
+dragover_class = "dragover"
+
+[panel.empty_hint]
+element = ".vs-empty-hint"
+description = "Centered muted text shown instead of a plot when there is no data"
+
+[panel.caption]
+element = ".vs-caption"
+
+# -- tabs -----------------------------------------------------------------------
+
+[tabs]
+description = "Hash-routed tab bar; ARIA tablist / tab / tabpanel"
+list = ".vs-tabs"
+list_role = "tablist"
+tab = ".vs-tabs button"
+tab_role = "tab"
+selected_attr = "aria-selected"
+attention_class = "attention"
+pane = ".vs-tab-pane"
+pane_role = "tabpanel"
+pane_hidden_attr = "hidden"
+pane_maximized_class = "has-max"
+
+# -- app frame ------------------------------------------------------------------
+
+[frame]
+description = "Fixed rows: topbar / banner / subbar / layout / statusbar; only layout children scroll"
+topbar = ".vs-topbar"
+brand = ".vs-brand"
+subbar = ".vs-subbar"
+layout = ".vs-layout"
+sidebar = ".vs-sidebar"
+sidebar_collapsed_class = "rail-collapsed"
+rail_toggle = ".vs-rail-toggle"
+main = ".vs-main"
+statusbar = ".vs-statusbar"
+side_section = ".vs-side-section"
+
+# -- controls -------------------------------------------------------------------
+
+[controls]
+button = ".vs-btn"
+primary_class = "primary"
+active_class = "active"
+select = ".vs-select"
+chip = ".vs-chip"
+chip_dot = ".vs-chip-dot"
+chip_remove = ".vs-chip-x"
+theme_toggle = ".vs-theme-toggle"
+
+# -- keyboard overlay -----------------------------------------------------------
+
+[kbd_overlay]
+element = ".vs-kbd-overlay"
+card = ".vs-kbd-card"
+hidden_attr = "hidden"

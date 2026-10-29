@@ -1,26 +1,41 @@
-"""FastAPI app factory: settings, logging, lifespan wiring."""
+"""FastAPI app factory: settings and domain lifespan on top of the
+view-sweep app factory.
+
+view-sweep owns the generic layer — WebSocket connection manager, local-
+only Host/Origin guard, logging, static mounts. This module owns what is
+phase-sweep's: motor configs, the result store, the job manager, and the
+dashboard tree.
+"""
 
 from __future__ import annotations
 
-import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
 
-import structlog
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
-from starlette.datastructures import Headers
-from starlette.types import ASGIApp, Receive, Scope, Send
+from phasesweep._extras import install_hint
 
+try:
+    import structlog
+    from fastapi import FastAPI
+except ImportError as e:
+    raise ImportError(f"phasesweep.server needs {e.name}; {install_hint('server')}") from None
+
+from phasesweep._view_sweep_server import AppConfig
+from phasesweep._view_sweep_server import create_app as create_view_sweep_app
 from phasesweep.machines.configs import load_motor
 from phasesweep.machines.motor import Motor
 from phasesweep.result_store import ResultStore
 from phasesweep.server.jobs import JobManager
-from phasesweep.server.routes import ConnectionManager, api, ws_router
+from phasesweep.server.routes import api
+
+__all__ = [
+    "ServerSettings",
+    "create_app",
+    "load_motor_configs",
+    "load_user_configs",
+]
 
 log = structlog.get_logger()
 
@@ -37,71 +52,6 @@ class ServerSettings:
     extra_allowed_hosts: tuple[str, ...] = ()
 
 
-# "testserver" is starlette's TestClient default host (Django precedent);
-# not publicly resolvable, so it adds no rebinding surface.
-_LOCAL_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1", "testserver"})
-
-
-def _host_hostname(host: str) -> str:
-    if host.startswith("["):
-        return host.partition("]")[0].lstrip("[")
-    return host.rsplit(":", 1)[0]
-
-
-class LocalOnlyMiddleware:
-    """Reject requests whose Host or Origin is not local — closes the
-    DNS-rebinding / cross-site hole in the localhost server.
-    Non-browser clients without an Origin header pass through."""
-
-    def __init__(self, app: ASGIApp, extra_hosts: frozenset[str] = frozenset()) -> None:
-        self.app = app
-        self.allowed = _LOCAL_HOSTNAMES | extra_hosts
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] not in ("http", "websocket"):
-            await self.app(scope, receive, send)
-            return
-        headers = Headers(scope=scope)
-        host = headers.get("host", "")
-        if _host_hostname(host.strip()).lower() not in self.allowed:
-            log.warning("host_rejected", host=host)
-            await self._reject(scope, receive, send, 400, "invalid Host header")
-            return
-        origin = headers.get("origin")
-        if origin is not None and urlsplit(origin).hostname not in self.allowed:
-            log.warning("origin_rejected", origin=origin)
-            await self._reject(scope, receive, send, 403,
-                               "cross-origin request rejected")
-            return
-        await self.app(scope, receive, send)
-
-    @staticmethod
-    async def _reject(
-        scope: Scope, receive: Receive, send: Send, status: int, detail: str,
-    ) -> None:
-        if scope["type"] == "websocket":
-            await receive()  # websocket.connect
-            await send({"type": "websocket.close", "code": 1008})
-            return
-        await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send)
-
-
-def configure_logging(log_json: bool = False) -> None:
-    """Human-readable console output for development, JSON for production —
-    same log calls, different renderer."""
-    renderer = (structlog.processors.JSONRenderer() if log_json
-                else structlog.dev.ConsoleRenderer())
-    structlog.configure(
-        processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
-            renderer,
-        ],
-        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-    )
-
-
 def load_motor_configs(motors_dir: Path) -> dict[str, Motor]:
     """Motors keyed by TOML filename stem; invalid files
     are skipped with a warning, matching configs.load_motors."""
@@ -109,7 +59,7 @@ def load_motor_configs(motors_dir: Path) -> dict[str, Motor]:
     for p in sorted(Path(motors_dir).glob("*.toml")):
         try:
             out[p.stem] = load_motor(p)
-        except (KeyError, ValueError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             log.warning("config_skipped", file=p.name, error=str(e))
     return out
 
@@ -130,14 +80,12 @@ def load_user_configs(user_dir: Path, motors: dict[str, Motor]) -> set[str]:
 
 def create_app(settings: ServerSettings | None = None) -> FastAPI:
     settings = settings or ServerSettings()
-    configure_logging(settings.log_json)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         motors = load_motor_configs(settings.motors_dir)
         user_names = load_user_configs(settings.user_configs_dir, motors)
         store = ResultStore(settings.output_dir)
-        ws_manager = ConnectionManager()
         manager = JobManager(
             motors, store,
             workers=settings.workers,
@@ -145,9 +93,10 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
             mesh_cache_dir=settings.mesh_cache_dir,
         )
         app.state.manager = manager
-        app.state.ws_manager = ws_manager
         app.state.settings = settings
         app.state.user_config_names = user_names
+        ws_manager = app.state.ws_manager  # created by view-sweep before us
+        ws_manager.on_cancel = _cancel_hook(manager)
         await manager.start(ws_manager.broadcast)
         log.info("server_started", motors=len(motors), user_configs=len(user_names),
                  output_dir=str(settings.output_dir), workers=settings.workers)
@@ -157,15 +106,24 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
             await manager.stop()
             log.info("server_stopped")
 
-    app = FastAPI(title="phase-sweep server", lifespan=lifespan)
-    app.add_middleware(
-        LocalOnlyMiddleware,
-        extra_hosts=frozenset(h.lower() for h in settings.extra_allowed_hosts))
-    app.include_router(api)
-    app.include_router(ws_router)
-
-    # Dashboard static mount — lands with Phase 3b
+    # Dashboard static mount
     dashboard = Path(__file__).resolve().parent.parent / "dashboard"
-    if dashboard.is_dir():
-        app.mount("/", StaticFiles(directory=dashboard, html=True), name="dashboard")
-    return app
+    return create_view_sweep_app(AppConfig(
+        title="phase-sweep server",
+        routers=[api],
+        lifespan=lifespan,
+        static_dir=dashboard,
+        allowed_hosts=settings.extra_allowed_hosts,
+        log_json=settings.log_json,
+    ))
+
+
+def _cancel_hook(manager: JobManager):
+    """WS `cancel` frames map to JobManager.cancel; unknown ids are a
+    client error, not a server one, so they are logged and dropped."""
+    def cancel(job_id: str) -> None:
+        try:
+            manager.cancel(job_id)
+        except KeyError:
+            log.info("ws_cancel_unknown_job", job_id=job_id)
+    return cancel

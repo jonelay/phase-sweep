@@ -5,8 +5,6 @@
 // job completion the FULL id list is fetched through app.onJobComplete
 // (the routeFresh path is capped for big sweeps).
 
-import { PLOT_CONFIG, SERIES, axisStyle, baseLayout } from "./plot_theme.js";
-
 // Any computed result belongs in the table; measured/published imports
 // don't (they live in the validation panels). Older records predate the
 // source field, hence the fallback.
@@ -16,7 +14,7 @@ const isComputed = (r) => (r.source ?? "computed") === "computed";
 const GEO_COLS = [
   ["r_outer", (r) => r.config?.motor?.geometry?.r_outer],
   ["L_stk", (r) => r.config?.motor?.L_stk],
-  ["r_ag", (r) => r.config?.motor?.geometry?.r_ag],
+  ["airgap", (r) => { const g = r.config?.motor?.geometry; return g ? Math.abs(g.r_stator - g.r_magnet) : undefined; }],
   ["back_iron", (r) => r.config?.motor?.geometry?.back_iron_thickness],
 ];
 
@@ -62,15 +60,17 @@ let axisSel = null;
 let metricSel = null;
 let pickerWrap = null; // <details> column chooser in the header slot
 let pickerBody = null;
+let validateBtn = null;
 let overflowEl = null; // "N columns hidden" caption
 const rows = new Map(); // result_id -> result
 const metricCols = []; // insertion-ordered, every metric seen (uncapped)
-let hidden = readHidden(); // metric keys the user chose to hide (persisted)
+const hidden = readHidden(); // metric keys the user chose to hide (persisted)
 let hideEmpty = localStorage.getItem(HIDE_EMPTY_KEY) !== "0"; // default on
 let sortKey = null;
 let sortDir = 1;
 let selectedId = null;
 let axisPicked = false; // user's select choice wins over the auto-pick
+const checked = new Set(); // result_ids selected for validate
 
 function readHidden() {
   try {
@@ -218,6 +218,7 @@ function buildTraces(axisKey, metricKey) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push([x * 1000, y]);
   }
+  const { series } = appRef.theme;
   return [...groups].map(([name, pts], i) => {
     pts.sort((a, b) => a[0] - b[0]);
     return {
@@ -225,7 +226,7 @@ function buildTraces(axisKey, metricKey) {
       x: pts.map((p) => p[0]),
       y: pts.map((p) => p[1]),
       mode: "lines+markers",
-      line: { color: SERIES[i % SERIES.length], width: 2 },
+      line: { color: series[i % series.length], width: 2 },
       marker: { size: 6 },
     };
   });
@@ -238,19 +239,71 @@ function renderPlot() {
   const plottable = traces.some((t) => new Set(t.x).size >= 2);
   plotEl.style.display = plottable ? "" : "none";
   if (!plottable) return;
-  Plotly.react(plotEl, traces, baseLayout({
+  const { plot } = appRef;
+  Plotly.react(plotEl, traces, plot.layout({
     height: 260,
     // traces here are colored by GROUP index, not compare-set slot, so
     // the chips can't identify them — this panel keeps its legend
-    // (baseLayout defaults to legend-free for the overlay pools)
+    // (the spec layout defaults to legend-free for the overlay pools)
     showlegend: true,
-    xaxis: axisStyle(`${axisSel.value} [mm]`),
-    yaxis: axisStyle(metricSel.value),
+    xaxis: plot.axisStyle(`${axisSel.value} [mm]`),
+    yaxis: plot.axisStyle(metricSel.value),
     // legend above: at 260 px the below-plot default collides with the
     // x-axis title in the bottom margin
     legend: { orientation: "h", y: 1.02, yanchor: "bottom" },
     margin: { l: 55, r: 12, t: 30, b: 42 },
-  }), PLOT_CONFIG);
+  }), plot.config);
+}
+
+// -- explore-then-validate -------------------------------------------------------
+
+function syncValidateBtn() {
+  if (validateBtn) validateBtn.disabled = !checked.size;
+}
+
+async function validateSelected() {
+  if (!checked.size) return;
+  const motorNames = new Set();
+  for (const rid of checked) {
+    const r = rows.get(rid);
+    if (r?.config?.motor?.name) motorNames.add(r.config.motor.name);
+  }
+  let allModels;
+  try {
+    allModels = await appRef.api.get("/api/models");
+  } catch (e) {
+    console.warn("model list fetch failed", e);
+    return;
+  }
+  const valModels = allModels
+    .filter((m) => m.kind === "single" && m.key !== "analytical")
+    .map((m) => m.key);
+  if (!valModels.length) return;
+  for (const motorName of motorNames) {
+    const configKey = appRef.configKeyFor(motorName);
+    if (!configKey) continue;
+    const params = { models: valModels };
+    for (const mk of valModels) {
+      const meta = allModels.find((m) => m.key === mk);
+      if (meta?.needs_params?.length) {
+        try {
+          const defs = await appRef.api.get(
+            `/api/model-defaults/${encodeURIComponent(configKey)}/${mk}`);
+          Object.assign(params, defs);
+        } catch { /* skip gated model */ }
+      }
+    }
+    try {
+      await appRef.submitJob({ motor: configKey, model: "validate", params });
+    } catch (e) {
+      console.warn("validate submit failed", configKey, e);
+    }
+  }
+  const n = motorNames.size;
+  appRef.toast(`${n} validate job${n === 1 ? "" : "s"} submitted`);
+  checked.clear();
+  appRef.activateTab("validation");
+  render();
 }
 
 // -- table ---------------------------------------------------------------------
@@ -276,6 +329,14 @@ function render() {
 
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
+  // select-all checkbox column
+  const selTh = document.createElement("th");
+  selTh.className = "sweep-check";
+  const selAll = document.createElement("input");
+  selAll.type = "checkbox";
+  selAll.title = "select all visible rows";
+  selTh.append(selAll);
+  headRow.append(selTh);
   for (const c of cols) {
     const th = document.createElement("th");
     const geoCol = GEO_COLS.some(([name]) => name === c);
@@ -302,6 +363,20 @@ function render() {
     const tr = document.createElement("tr");
     tr.dataset.rid = result.result_id;
     tr.classList.toggle("selected", result.result_id === selectedId);
+    // per-row checkbox
+    const chkTd = document.createElement("td");
+    chkTd.className = "sweep-check";
+    const chk = document.createElement("input");
+    chk.type = "checkbox";
+    chk.checked = checked.has(result.result_id);
+    chk.addEventListener("change", () => {
+      if (chk.checked) checked.add(result.result_id);
+      else checked.delete(result.result_id);
+      syncValidateBtn();
+    });
+    chkTd.addEventListener("click", (ev) => ev.stopPropagation());
+    chkTd.append(chk);
+    tr.append(chkTd);
     tr.append(cell(result.config?.motor?.name ?? "?"));
     tr.append(cell(result.model));
     for (const [, get] of GEO_COLS) tr.append(cell(mm(get(result))));
@@ -329,6 +404,16 @@ function render() {
   }
   table.append(thead, tbody);
   tableWrap.replaceChildren(table);
+  // select-all wiring: toggles displayed rows only
+  const allIds = displayed.map((r) => r.result_id);
+  selAll.checked = allIds.length > 0 && allIds.every((id) => checked.has(id));
+  selAll.indeterminate = !selAll.checked && allIds.some((id) => checked.has(id));
+  selAll.addEventListener("change", () => {
+    if (selAll.checked) for (const id of allIds) checked.add(id);
+    else for (const id of allIds) checked.delete(id);
+    render();
+  });
+  syncValidateBtn();
   updateScrollHint();
   renderPlot();
 }
@@ -392,7 +477,7 @@ export default {
     const pickSummary = document.createElement("summary");
     pickSummary.textContent = "Columns";
     pickerBody = document.createElement("div");
-    pickerBody.className = "col-picker-body";
+    pickerBody.className = "vs-popover";
     pickerWrap.append(pickSummary, pickerBody);
     headerSlot?.append(pickerWrap);
 
@@ -423,36 +508,45 @@ export default {
     emptyLabel.append(emptyCb, document.createTextNode("hide empty"));
 
     const exportBtn = document.createElement("button");
+    exportBtn.className = "vs-btn";
     exportBtn.textContent = "Export CSV";
     exportBtn.title = "exports all metric columns, not just the shown ones";
     exportBtn.addEventListener("click", () => {
       if (rows.size) exportCsv();
     });
     const clearBtn = document.createElement("button");
+    clearBtn.className = "vs-btn";
     clearBtn.textContent = "Clear table";
     clearBtn.addEventListener("click", () => {
       rows.clear();
       metricCols.length = 0;
+      checked.clear();
       sortKey = null;
       selectedId = null;
       axisPicked = false;
       render();
     });
-    toolbar.append(axisSel, metricSel, emptyLabel, exportBtn, clearBtn);
+    validateBtn = document.createElement("button");
+    validateBtn.className = "vs-btn primary";
+    validateBtn.textContent = "Validate Selected";
+    validateBtn.title = "run multi-model validation on the selected configs";
+    validateBtn.disabled = true;
+    validateBtn.addEventListener("click", validateSelected);
+    toolbar.append(axisSel, metricSel, emptyLabel, exportBtn, clearBtn, validateBtn);
 
     overflowEl = document.createElement("div");
-    overflowEl.className = "panel-caption sweep-overflow";
+    overflowEl.className = "vs-caption sweep-overflow";
     overflowEl.style.display = "none";
 
     hintEl = document.createElement("div");
-    hintEl.className = "empty-hint";
+    hintEl.className = "vs-empty-hint";
     hintEl.textContent = "No results yet — submit a sweep (or any job) to fill the table.";
 
     plotEl = document.createElement("div");
     plotEl.style.display = "none";
 
     scrollOuter = document.createElement("div");
-    scrollOuter.className = "scroll-shadow";
+    scrollOuter.className = "vs-scroll-shadow";
     tableWrap = document.createElement("div");
     tableWrap.className = "sweep-table-wrap";
     tableWrap.addEventListener("scroll", updateScrollHint);
@@ -490,8 +584,9 @@ export default {
   destroy() {
     rows.clear();
     metricCols.length = 0;
+    checked.clear();
     axisPicked = false;
     tableWrap = scrollOuter = hintEl = plotEl = axisSel = metricSel = appRef = null;
-    pickerWrap = pickerBody = overflowEl = null;
+    pickerWrap = pickerBody = validateBtn = overflowEl = null;
   },
 };

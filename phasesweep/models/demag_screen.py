@@ -25,20 +25,27 @@ fem_sampling.sample_magnet_Bm).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import pi
+from math import isfinite, pi
 from typing import TYPE_CHECKING, Any
 
 from phasesweep.solver_params import (
-    _reject_induction,
-    _require_geometry,
-    _resolve_b_rem,
+    MAGNET_REF_TEMP_C,
     n_eff,
+    reject_induction,
+    require_geometry,
+    resolve_b_rem,
 )
 from phasesweep.solvers.fem_runner import FemParams
 
 if TYPE_CHECKING:
     from phasesweep.machines.motor import Motor
     from phasesweep.sweep_types import RunConfig
+
+__all__ = [
+    "DemagScreenParams",
+    "prepare_demag_screen",
+    "run_demag_screen",
+]
 
 
 def run_demag_screen(config: RunConfig) -> dict[str, Any]:
@@ -54,6 +61,11 @@ def run_demag_screen(config: RunConfig) -> dict[str, Any]:
             f"RunConfig.i_fault (peak phase current to screen at) — no "
             f"drive-limit fallback; the screening current is a deliberate "
             f"choice (MAX_I_S, steady short-circuit, transient peak)"
+        )
+    if config.i_fault <= 0 or not isfinite(config.i_fault):
+        raise ValueError(
+            f"RunConfig.i_fault must be > 0 and finite (peak fault current), "
+            f"got {config.i_fault}"
         )
     j_s_fault = j_s_from_phase_current(config.motor, config.i_fault)
 
@@ -111,17 +123,17 @@ def prepare_demag_screen(motor: Motor) -> DemagScreenParams:
     B_rem·[1 + alpha_Br·(T − 20)] and B_knee + alpha_B_knee·(T − 20)
     (the knee slope is absolute T/K — the knee can cross zero).
     """
-    from phasesweep.models.thermal_duty import psi_f_at_magnet_temp
+    from phasesweep.solver_params import derate_motor
 
-    _reject_induction(motor, "demag_screen")
-    geo = _require_geometry(motor, "demag_screen")
+    reject_induction(motor, "demag_screen")
+    geo = require_geometry(motor, "demag_screen")
     if geo.n_slots == 0 or geo.slot_depth == 0:
         raise ValueError(
             f"Motor '{motor.name}': demag_screen needs a slotted geometry "
             f"(n_slots > 0, slot_depth > 0) — the d-axis current sheet "
             f"integrates over slot faces"
         )
-    b_rem = _resolve_b_rem(motor)
+    b_rem = resolve_b_rem(motor)
     if motor.B_knee is None:
         raise ValueError(
             f"Motor '{motor.name}': demag_screen needs B_knee "
@@ -147,8 +159,8 @@ def prepare_demag_screen(motor: Motor) -> DemagScreenParams:
                 f"20 °C knee at operating temperature is optimistic for "
                 f"NdFeB)"
             )
-        b_rem = psi_f_at_magnet_temp(b_rem, motor.magnet_temp, alpha_Br)
-        b_knee = b_knee + alpha_B_knee * (motor.magnet_temp - 20.0)
+        b_rem = derate_motor(motor, None, b_rem)[1]  # shared range guard
+        b_knee = b_knee + alpha_B_knee * (motor.magnet_temp - MAGNET_REF_TEMP_C)
 
     from math import radians
 

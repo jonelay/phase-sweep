@@ -92,7 +92,7 @@ const SECTION_FIELDS = {
 
 // all sweepable fields are lengths — entered in mm like the form above,
 // converted to the metres SweepAxis expects on submit
-const SWEEP_FIELDS = ["r_outer", "L_stk", "r_ag", "back_iron_thickness"];
+const SWEEP_FIELDS = ["r_outer", "L_stk", "airgap", "back_iron_thickness"];
 const SWEEP_STRATEGIES = ["proportional", "fixed_gap"];
 
 let app = null;
@@ -138,9 +138,7 @@ function fieldRow(section, field, desc, value) {
 // the OD/ID geometry spelling (CREATOR) isn't in the catalog — its length
 // fields still get the mm treatment instead of falling back to raw metres
 const ALT_LENGTHS = new Set([
-  "stator_od", "stator_id", "rotor_od", "air_gap", "magnet_width",
-  "magnet_thickness", "slot_height", "slot_width", "slot_opening_height",
-  "tooth_width", "tooth_height",
+  "stator_od", "stator_id", "rotor_od", "magnet_thickness", "slot_height",
 ]);
 
 function inferDesc(section, field, value) {
@@ -315,6 +313,7 @@ function axisRow() {
   for (const s of SWEEP_STRATEGIES) strategy.add(new Option(s, s));
   const rm = document.createElement("button");
   rm.type = "button";
+  rm.className = "vs-btn danger";
   rm.textContent = "×";
   rm.title = "remove axis";
   rm.addEventListener("click", () => row.remove());
@@ -357,7 +356,7 @@ async function runModels() {
     return;
   }
   // fetch default params for models that need them (sim_plan, etc.)
-  let params = {};
+  const params = {};
   const gated = models.filter(modelNeedsParams);
   for (const mk of gated) {
     try {
@@ -414,6 +413,7 @@ export default {
     saveNameEl.type = "text";
     saveNameEl.placeholder = "config name";
     const saveBtn = document.createElement("button");
+    saveBtn.className = "vs-btn primary";
     saveBtn.textContent = "Save";
     saveBtn.addEventListener("click", save);
     saveMsgEl = document.createElement("span");
@@ -430,6 +430,7 @@ export default {
     modelListEl = document.createElement("div");
     modelListEl.className = "model-list";
     const runBtn = document.createElement("button");
+    runBtn.className = "vs-btn primary";
     runBtn.textContent = "Run on active config";
     runBtn.addEventListener("click", runModels);
 
@@ -439,9 +440,10 @@ export default {
     axesEl.className = "axes";
     const addAxis = document.createElement("button");
     addAxis.textContent = "Add axis";
-    addAxis.className = "ghost-btn";
+    addAxis.className = "vs-btn";
     addAxis.addEventListener("click", () => axesEl.append(axisRow()));
     const sweepBtn = document.createElement("button");
+    sweepBtn.className = "vs-btn primary";
     sweepBtn.textContent = "Run sweep";
     sweepBtn.addEventListener("click", runSweep);
     runMsgEl = document.createElement("div");

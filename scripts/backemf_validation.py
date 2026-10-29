@@ -36,16 +36,18 @@ from phasesweep.solver_params import (
     winding_transfer,
 )
 from phasesweep.solvers.analytical import (
-    _derive_B_rem,
-    carter_adjusted_radii,
     end_effect_factor,
     end_effect_factor_pole_pitch,
     prepare_analytical,
-    zhu_howe_Br,
 )
 from phasesweep.solvers.fem_field import solve_field_fem
 from phasesweep.solvers.fem_runner import prepare_fem
 from phasesweep.solvers.fem_sampling import sample_Br
+from phasesweep.solvers.field_solution import (
+    carter_adjusted_radii,
+    derive_B_rem,
+    zhu_howe_Br,
+)
 from phasesweep.solvers.harmonics import compute_thd, harmonics_1sided
 
 # ── Constants ──────────────────────────────────────────────────────────
@@ -470,7 +472,7 @@ def _b_rem_from_params(psi_f, n_p, N_eff, k_w, L_stk, geo, mu_r_pm, alpha_p,
                        carter_geo=None):
     """Invert psi_f to B_rem. With Carter, uses adjusted radii for field but original for winding."""
     r_s_c, r_m_c = carter_geo if carter_geo else (None, None)
-    return _derive_B_rem(
+    return derive_B_rem(
         psi_f, n_p, N_eff, k_w, L_stk,
         r_stator=geo.r_stator, r_magnet=geo.r_magnet, r_rotor=geo.r_rotor,
         mu_r_pm=mu_r_pm, alpha_p=alpha_p,
@@ -2317,7 +2319,7 @@ def generate_report(
     if b_rem_result:
         w("### Effective B_rem Back-Calculation")
         w()
-        w(f"Back-calculated from measured psi_f = {PSI_F_MEAS*1e3:.3f} mWb using `_derive_B_rem()` "
+        w(f"Back-calculated from measured psi_f = {PSI_F_MEAS*1e3:.3f} mWb using `derive_B_rem()` "
           f"with Carter-corrected geometry. This is a *combined* effective B_rem that absorbs "
           f"the magnetization profile, leakage, and any k_w/alpha_p error — it is what the "
           f"remanence would need to be if the ideal square-wave model were otherwise exact.")

@@ -9,19 +9,32 @@ no global L2 projection, except the deliberate one in
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from math import pi
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
 
-from phasesweep.solvers.fem_materials import _MU0
-from phasesweep.solvers.fem_mesh import _DEFAULT_GEO, _pm_radii
+from phasesweep.solvers.fem_materials import MU0
+from phasesweep.solvers.fem_mesh import DEFAULT_GEO, pm_radii
+from phasesweep.sweep_types import Magnetization
 
 if TYPE_CHECKING:
     from ngsolve import GridFunction, Mesh
 
     from phasesweep.machines.geometry import Geometry
+
+__all__ = [
+    "arkkio_torque",
+    "demag_margin",
+    "maxwell_interaction_torque_order",
+    "maxwell_stress_torque",
+    "rasterise_cross_section",
+    "rasterise_fields",
+    "sample_Br",
+    "sample_magnet_Bm",
+]
 
 def sample_Br(
     mesh: Mesh, gfu: GridFunction, radius: float, n_theta: int = 360,
@@ -65,7 +78,7 @@ def maxwell_stress_torque(
     """
     B_r, B_t = _sample_B_polar(mesh, gfu, radius, n_theta)
     integral = float(np.sum(B_r * B_t)) * (2 * pi / n_theta)
-    return L_stk * radius * radius / _MU0 * integral
+    return L_stk * radius * radius / MU0 * integral
 
 
 def arkkio_torque(
@@ -87,12 +100,16 @@ def arkkio_torque(
     Sign convention matches ``maxwell_stress_torque``: torque on the
     enclosed region (rotor for inrunner; negate for outrunner rotor).
     """
+    if r_outer <= r_inner:
+        raise ValueError(
+            f"arkkio_torque: r_outer ({r_outer}) must exceed r_inner ({r_inner})"
+        )
     radii = np.linspace(r_inner, r_outer, n_r)
     tau_per_r = np.empty(n_r)
     for i, r in enumerate(radii):
         B_r, B_t = _sample_B_polar(mesh, gfu, r, n_theta)
         integral = float(np.sum(B_r * B_t)) * (2 * pi / n_theta)
-        tau_per_r[i] = L_stk * r * r / _MU0 * integral
+        tau_per_r[i] = L_stk * r * r / MU0 * integral
     return float(np.trapezoid(tau_per_r, radii) / (r_outer - r_inner))
 
 
@@ -144,7 +161,7 @@ def maxwell_interaction_torque_order(
     c_r_b = np.fft.rfft(B_r_b)[order] / n_theta
     c_t_b = np.fft.rfft(B_t_b)[order] / n_theta
     cross = 2.0 * np.real(c_r_a * np.conj(c_t_b) + c_r_b * np.conj(c_t_a))
-    return float(2 * pi * L_stk * radius * radius / _MU0 * cross)
+    return float(2 * pi * L_stk * radius * radius / MU0 * cross)
 
 
 def sample_magnet_Bm(
@@ -156,7 +173,7 @@ def sample_magnet_Bm(
     rotation: float = 0.0,
     n_r: int = 8,
     n_arc: int = 24,
-    magnetization: str = "radial",
+    magnetization: Magnetization = "radial",
     halbach_segments: int | None = None,
     halbach_angles_rad: tuple[float, ...] | None = None,
 ) -> tuple[NDArray[np.floating], NDArray[np.floating],
@@ -198,7 +215,7 @@ def sample_magnet_Bm(
     # would read iron, not magnet, operating points. On both topologies
     # r_pm_inner < r_pm_outer numerically (inrunner: r_rotor .. r_magnet-t;
     # outrunner: r_magnet+t .. r_rotor).
-    r_pm_outer, r_pm_inner = _pm_radii(geo)
+    r_pm_outer, r_pm_inner = pm_radii(geo)
     r_lo, r_hi = r_pm_inner, r_pm_outer
 
     r_grid = r_lo + (np.arange(n_r) + 0.5) * (r_hi - r_lo) / n_r
@@ -287,7 +304,7 @@ def demag_margin(
     rotation: float = 0.0,
     n_r: int = 8,
     n_arc: int = 24,
-    magnetization: str = "radial",
+    magnetization: Magnetization = "radial",
     halbach_segments: int | None = None,
     halbach_angles_rad: tuple[float, ...] | None = None,
 ) -> dict[str, float]:
@@ -324,26 +341,45 @@ def rasterise_cross_section(
     mesh: Mesh,
     gfu: GridFunction,
     n_grid: int = 100,
-    r_bound: float = _DEFAULT_GEO.r_outer,
+    r_bound: float = DEFAULT_GEO.r_outer,
 ) -> tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]]:
     """Evaluate A_z and |B| on a regular Cartesian grid covering the motor disk."""
-    from ngsolve import L2, GridFunction, grad, sqrt
+    from ngsolve import grad, sqrt
 
     B_mag_cf = sqrt(grad(gfu)[0]**2 + grad(gfu)[1]**2)
+    xi, yi, fields = rasterise_fields(mesh, {"Az": gfu, "Bmag": B_mag_cf}, n_grid, r_bound)
+    return xi, yi, fields["Az"], fields["Bmag"]
+
+
+def rasterise_fields(
+    mesh: Mesh,
+    fields: Mapping[str, Any],
+    n_grid: int = 100,
+    r_bound: float = DEFAULT_GEO.r_outer,
+) -> tuple[NDArray[np.floating], NDArray[np.floating], dict[str, NDArray[np.floating]]]:
+    """Evaluate real scalar fields (GridFunctions or CoefficientFunctions,
+    the latter projected onto an order-3 L2 space first) on a regular
+    Cartesian grid over the disk r < r_bound; NaN outside the mesh."""
+    from ngsolve import L2, GridFunction
+
     fes_L2 = L2(mesh, order=3)
-    gfu_Bmag = GridFunction(fes_L2)
-    gfu_Bmag.Set(B_mag_cf)
+    gfs: dict[str, Any] = {}
+    for name, cf in fields.items():
+        if isinstance(cf, GridFunction):
+            gfs[name] = cf
+            continue
+        gf = GridFunction(fes_L2)
+        gf.Set(cf)
+        gfs[name] = gf
 
     coords = np.linspace(-r_bound, r_bound, n_grid)
     xi, yi = np.meshgrid(coords, coords)
-
-    Az   = np.full((n_grid, n_grid), np.nan)
-    Bmag = np.full((n_grid, n_grid), np.nan)
+    out = {name: np.full((n_grid, n_grid), np.nan) for name in gfs}
 
     r2 = xi**2 + yi**2
     inside = r2 < r_bound**2
     if not np.any(inside):
-        return xi, yi, Az, Bmag
+        return xi, yi, out
 
     # One batched point-locate for the whole grid; points the mesh does
     # not contain come back with nr == -1 and must be excluded before
@@ -352,15 +388,13 @@ def rasterise_cross_section(
     found = mips["nr"] != -1
     if np.any(found):
         mips_ok = mips[found]
-        az_flat = np.full(mips.shape, np.nan)
-        bm_flat = np.full(mips.shape, np.nan)
-        az_flat[found] = np.asarray(gfu(mips_ok), dtype=float).reshape(-1)
-        bm_flat[found] = np.asarray(gfu_Bmag(mips_ok), dtype=float).reshape(-1)
-        Az[inside]   = az_flat
-        Bmag[inside] = bm_flat
+        for name, gf in gfs.items():
+            flat = np.full(mips.shape, np.nan)
+            flat[found] = np.asarray(gf(mips_ok), dtype=float).reshape(-1)
+            out[name][inside] = flat
 
     failed = int(np.count_nonzero(~found))
     if failed:
         logging.warning("rasterise: %d points failed evaluation", failed)
 
-    return xi, yi, Az, Bmag
+    return xi, yi, out

@@ -8,15 +8,12 @@ validation anchor.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from phasesweep import load_motor
+from phasesweep.check_motor import build_report
 from phasesweep.registry import MODEL_REGISTRY
 from phasesweep.sweep_types import RunConfig
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-import check_motor as cm
 
 STARTER = (
     Path(__file__).resolve().parent.parent
@@ -62,7 +59,7 @@ def test_starter_fast_results_in_broad_ranges() -> None:
 
 
 def test_starter_checker_status() -> None:
-    report = cm.build_report(STARTER)
+    report = build_report(STARTER)
     assert report.exit_code == 0
     assert report.config_status == "valid"
     assert report.consistency_status == "ok (single source)"

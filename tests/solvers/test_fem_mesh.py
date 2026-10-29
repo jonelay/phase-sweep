@@ -21,9 +21,7 @@ from phasesweep.machines.geometry import default_inrunner, inrunner, outrunner
 from phasesweep.solvers import fem_mesh
 from phasesweep.solvers.fem_mesh import (
     _build_annular_regions,
-    _build_geometry,
     _build_motor_geometry,
-    _build_slotted_geometry,
     _circle_spec,
     _mesh_cache,
     clear_mesh_cache,
@@ -50,7 +48,7 @@ pytestmark = requires_fem
 # ---------------------------------------------------------------------------
 
 def test_smooth_geometry_materials():
-    shape = _build_geometry(_GEO)
+    shape = _build_motor_geometry(_GEO)
     mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.08))
     mats = set(mesh.GetMaterials())
     assert {"stator", "airgap", "pm", "shaft"} <= mats
@@ -87,7 +85,7 @@ def test_circle_spec_outrunner_regions():
 
 def test_build_geometry_from_geo_materials():
     geo = default_inrunner()
-    shape = _build_geometry(geo)
+    shape = _build_motor_geometry(geo)
     mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.08))
     mats = set(mesh.GetMaterials())
     expected = {n for _, n in _circle_spec(geo)}
@@ -97,7 +95,8 @@ def test_build_geometry_from_geo_materials():
 def test_slotted_geometry_materials():
     geo = inrunner(r_outer=1.0, r_stator=0.70, r_magnet=0.64, r_rotor=0.30,
                    r_inner=0.0, n_slots=12, slot_depth=0.05)
-    shape = _build_slotted_geometry(geo, n_slots=12)
+    shape = _build_motor_geometry(geo, n_slots=12, slot_width_ratio=geo.slot_width_ratio,
+                                  slot_depth=geo.slot_depth, slot_opening_ratio=geo.slot_opening_ratio)
     mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.08))
     mats = set(mesh.GetMaterials())
     assert {"stator", "slot", "airgap", "pm", "shaft"} <= mats
@@ -107,7 +106,8 @@ def test_slotted_geometry_materials():
 def test_slotted_geometry_slot_count(n_slots):
     geo = inrunner(r_outer=1.0, r_stator=0.70, r_magnet=0.64, r_rotor=0.30,
                    r_inner=0.0, n_slots=n_slots, slot_depth=0.05)
-    shape = _build_slotted_geometry(geo, n_slots=n_slots)
+    shape = _build_motor_geometry(geo, n_slots=n_slots, slot_width_ratio=geo.slot_width_ratio,
+                                  slot_depth=geo.slot_depth, slot_opening_ratio=geo.slot_opening_ratio)
     mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.08))
     slot_count = sum(1 for m in mesh.GetMaterials() if m == "slot")
     assert slot_count == n_slots
@@ -158,7 +158,7 @@ def test_surface_bridge_mesh_materials():
 
 
 def test_outrunner_smooth_geometry_materials():
-    shape = _build_geometry(_GEO_OUT)
+    shape = _build_motor_geometry(_GEO_OUT)
     mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.01))
     mats = set(mesh.GetMaterials())
     assert {"stator", "airgap", "pm", "yoke", "air"} <= mats
@@ -169,7 +169,7 @@ def test_outrunner_back_iron_split_materials():
     """back_iron_thickness splits the yoke into back_iron + shell regions."""
     geo = outrunner(r_outer=0.10, r_rotor=0.08, r_magnet=0.06,
                     r_stator=0.04, r_inner=0.02, back_iron_thickness=0.01)
-    shape = _build_geometry(geo)
+    shape = _build_motor_geometry(geo)
     mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.01))
     mats = set(mesh.GetMaterials())
     assert {"stator", "airgap", "pm", "back_iron", "shell", "air"} <= mats
@@ -179,7 +179,8 @@ def test_outrunner_back_iron_split_materials():
 def test_outrunner_slotted_geometry_materials():
     geo = outrunner(r_outer=0.10, r_rotor=0.08, r_magnet=0.06,
                     r_stator=0.04, r_inner=0.02, n_slots=6, slot_depth=0.005)
-    shape = _build_slotted_geometry(geo, n_slots=6)
+    shape = _build_motor_geometry(geo, n_slots=6, slot_width_ratio=geo.slot_width_ratio,
+                                  slot_depth=geo.slot_depth, slot_opening_ratio=geo.slot_opening_ratio)
     mesh = Mesh(OCCGeometry(shape, dim=2).GenerateMesh(maxh=0.005))
     mats = set(mesh.GetMaterials())
     assert {"stator", "slot", "airgap", "pm", "yoke", "air"} <= mats
@@ -398,7 +399,7 @@ def test_arcs_active_legs():
     assert fem_mesh._arcs_active(geo, at, n_p)
     assert not fem_mesh._arcs_active(geo, at + 1e-9, n_p)
     # Outrunner leg: the gap wedge is narrowest at the PM-annulus inner
-    # radius, which is r_magnet here, not r_rotor — pin the _pm_radii
+    # radius, which is r_magnet here, not r_rotor — pin the pm_radii
     # topology branch through the same boundary check.
     geo_o = outrunner(r_outer=0.10, r_rotor=0.08, r_magnet=0.06,
                       r_stator=0.04, r_inner=0.02)
@@ -415,7 +416,9 @@ def test_arcs_active_legs():
 def test_rotation_key_normalised_when_arcs_collapse(_clean_mesh_cache):
     """The riskiest leg of _arcs_active: alpha_p < 1 requests arcs, but the
     interpole gap is under the OCC cut threshold so none are built. The key
-    must follow the geometry that was actually meshed, not the request."""
+    must follow the geometry that was actually meshed, not the request.
+    solve_field_fem refuses this input, so the mesh layer is driven
+    directly."""
     geo = default_inrunner()
     # Gap just under _MIN_ARC_GAP_M, so the arcs collapse to a full ring.
     n_p = 4
@@ -423,8 +426,9 @@ def test_rotation_key_normalised_when_arcs_collapse(_clean_mesh_cache):
     alpha_p = 1.0 - 0.9 * fem_mesh._MIN_ARC_GAP_M * n_p / (np.pi * r_pm)
     assert not fem_mesh._arcs_active(geo, alpha_p, n_p)
 
-    _solve(geo=geo, n_p=n_p, alpha_p=alpha_p, rotation=0.0, **FAST)
-    _solve(geo=geo, n_p=n_p, alpha_p=alpha_p, rotation=0.12, **FAST)
+    for rotation in (0.0, 0.12):
+        fem_mesh._get_or_build_mesh(geo, 0.1, 0, 0.6, alpha_p, n_p, False,
+                                    rotation=rotation)
     assert len(_mesh_cache) == 1
 
 
@@ -622,3 +626,86 @@ class TestHalbachCacheKey:
         r1 = ("abc123", 0.05, 0, 0.6, 1.0, 10, 0.1, "h3")
         assert r0 != r1
         assert _cache_filename(r0) != _cache_filename(r1)
+
+
+# ---------------------------------------------------------------------------
+# Squirrel-cage rotor
+# ---------------------------------------------------------------------------
+
+_CAGE_KW = dict(r_outer=0.05, r_stator=0.032, r_magnet=0.031, r_rotor=0.031,
+                r_inner=0.011, n_bars=8, bar_width=0.0034, bar_height=0.01)
+
+
+def _cage(**kw):
+    return inrunner(**{**_CAGE_KW, **kw})
+
+
+def _region_area(mesh, name):
+    from ngsolve import CoefficientFunction, Integrate
+    return Integrate(CoefficientFunction(1), mesh, definedon=mesh.Materials(name))
+
+
+class TestCageMesh:
+
+    def test_regions_named_per_bar(self, _clean_mesh_cache):
+        geo = _cage(n_slots=6, slot_depth=0.006, bar_bridge_thickness=0.001,
+                    bar_opening_width=0.001)
+        mesh = fem_mesh.get_or_build_cage_mesh(geo, 0.1)
+        mats = set(mesh.GetMaterials())
+        assert {"stator", "airgap", "rotor", "bar_open"} <= mats
+        assert {f"bar{k}" for k in range(8)} <= mats
+        assert {f"slot{k}" for k in range(6)} <= mats
+        assert "slot" not in mats
+        assert "pm" not in mats and "shaft" not in mats
+        assert "outer" in set(mesh.GetBoundaries())
+
+    def test_occ_bar_areas_exact(self):
+        for geo in (_cage(), _cage(bar_shape="round", bar_height=0.0)):
+            shape = fem_mesh._build_cage_geometry(geo)
+            for k in range(geo.n_bars):
+                area = next(iter(shape.faces[f"bar{k}"])).mass
+                assert area == pytest.approx(geo.bar_area, rel=1e-9)
+
+    @pytest.mark.parametrize("shape, tol", [("rectangular", 1e-3), ("round", 2e-2)])
+    def test_mesh_region_areas(self, _clean_mesh_cache, shape, tol):
+        """Meshed bar regions integrate to the analytic bar area (round
+        bars polygonize at the bar mesh size); rotor iron is the disk
+        minus bars and notches."""
+        import math
+        geo = _cage(bar_shape=shape, bar_height=0.01 if shape == "rectangular" else 0.0,
+                    bar_bridge_thickness=0.001, bar_opening_width=0.001)
+        mesh = fem_mesh.get_or_build_cage_mesh(geo, 0.1)
+        for k in range(geo.n_bars):
+            assert _region_area(mesh, f"bar{k}") == pytest.approx(geo.bar_area, rel=tol)
+        r_top = geo.bar_radii[0]
+        notch = geo.n_bars * (geo.bar_opening_width / geo.r_rotor) \
+            * (geo.r_rotor**2 - r_top**2) / 2
+        assert _region_area(mesh, "bar_open") == pytest.approx(notch, rel=1e-3)
+        rotor = math.pi * geo.r_rotor**2 - geo.n_bars * geo.bar_area - notch
+        assert _region_area(mesh, "rotor") == pytest.approx(rotor, rel=tol)
+
+    def test_pm_path_rejects_cage(self):
+        geo = _cage()
+        with pytest.raises(ValueError, match="cage-rotor geometry"):
+            fem_mesh._get_or_build_mesh(geo, 0.1, 0, 0.6, 1.0, 2, False)
+        with pytest.raises(ValueError, match="cage-rotor geometry"):
+            _build_motor_geometry(geo)
+
+    def test_cage_path_rejects_pm(self):
+        with pytest.raises(ValueError, match="needs a cage rotor"):
+            fem_mesh.get_or_build_cage_mesh(default_inrunner(), 0.1)
+        with pytest.raises(ValueError, match="needs a cage rotor"):
+            fem_mesh._build_cage_geometry(default_inrunner())
+
+    def test_cache_key_carries_cage_tag(self, _clean_mesh_cache):
+        geo = _cage()
+        fem_mesh.get_or_build_cage_mesh(geo, 0.1)
+        (key,) = _mesh_cache
+        assert key[-1] == "cage2"
+        assert fem_mesh._cache_filename(key).endswith("_cage2.vol.gz")
+
+    def test_build_cross_section_dispatches(self):
+        shape = fem_mesh.build_cross_section(_cage(n_slots=6, slot_depth=0.006))
+        names = {f.name for f in shape.faces}
+        assert "bar0" in names and "slot0" in names and "pm" not in names
+        assert "slot" not in names

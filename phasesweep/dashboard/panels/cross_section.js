@@ -1,10 +1,14 @@
 // Cross-section heatmap panel: |B| over the motor
 // cross-section from the FEM raster (B_mag_grid), material region
 // boundaries drawn as circles from the config geometry. Plotly heatmap
-// (decision: no Three.js).
+// (no Three.js).
+//
+// Multi-config: when 2+ configs have FEM results in the compare set, the
+// panel tiles them side-by-side (internal columns) rather
+// than overlaying — heatmaps don't overlay. Each tile gets its own Plotly
+// div, colorbar, boundary circles, and a label with the compare-set dot.
 
-import { PLOT_CONFIG, SERIES, axisStyle, baseLayout, chartVar, sequential } from "./plot_theme.js";
-import { provenanceText } from "./widgets.js";
+import { provenanceText } from "/view-sweep/js/widgets.js";
 
 // |B| above ~2.2 T is corner/singularity overshoot in linear solves;
 // clamp the color ramp so it doesn't wash out the field structure
@@ -13,35 +17,10 @@ const ZMAX_CAP = 2.5;
 
 const HINT = "No cross-section yet — submit a fem job.";
 
-let plotEl = null;
+const slots = new Map(); // motor display name → {tileEl, plotEl, labelEl, provEl, result, key, captionRest}
+let containerEl = null;
 let hintEl = null;
-let captionEl = null;
-let provEl = null;
 let appCtx = null;
-let shownKey = null;
-let shownResult = null; // kept so retheme() can rebuild with fresh colors
-let shownMotor = "";
-let captionRest = "";
-
-// Single-result panel in a multi-config compare session shows only the
-// latest routed result — badge names it, with the config's compare-set
-// dot color where it maps to a live member. Refreshed
-// via app.compare.onChange.
-function renderCaption() {
-  captionEl.replaceChildren();
-  if (!shownMotor) return;
-  const slot = appCtx.compare.slotFor(shownMotor);
-  if (slot !== undefined) {
-    const dot = document.createElement("span");
-    dot.className = "chip-dot";
-    dot.style.background = SERIES[slot];
-    captionEl.append(dot);
-  }
-  const overlaid = appCtx.compare.overlays().length;
-  captionEl.append(
-    (overlaid > 0 ? `showing: ${shownMotor} (latest routed)` : shownMotor) + captionRest,
-  );
-}
 
 function boundaryRadii(geometry) {
   if (!geometry) return [];
@@ -54,6 +33,110 @@ function boundaryRadii(geometry) {
   return radii;
 }
 
+function renderLabel(motorName, slot) {
+  slot.labelEl.replaceChildren();
+  const cs = appCtx.compare.slotFor(motorName);
+  if (cs !== undefined) {
+    const dot = document.createElement("span");
+    dot.className = "vs-chip-dot";
+    dot.style.background = appCtx.theme.series[cs];
+    slot.labelEl.append(dot);
+  }
+  slot.labelEl.append(motorName + slot.captionRest);
+}
+
+function renderTile(motorName, slot) {
+  const result = slot.result;
+  const m = result.metrics;
+  const mm = m.grid_coords_list.map((c) => c * 1000);
+  let zmax = 0;
+  for (const row of m.B_mag_grid) {
+    for (const v of row) if (v !== null && v > zmax) zmax = v;
+  }
+
+  const geometry = result.config?.motor?.geometry;
+  const shapes = boundaryRadii(geometry).map((r) => ({
+    type: "circle",
+    xref: "x", yref: "y",
+    x0: -r * 1000, y0: -r * 1000, x1: r * 1000, y1: r * 1000,
+    line: { color: appCtx.plot.token("chart-ink"), width: 1 },
+  }));
+
+  const clipped = zmax > ZMAX_CAP;
+  const colorbar = { title: { text: "|B| [T]" }, thickness: 12, outlinewidth: 0 };
+  if (clipped) {
+    colorbar.tickvals = [];
+    colorbar.ticktext = [];
+    for (let v = 0; v < ZMAX_CAP; v += 0.5) {
+      colorbar.tickvals.push(v);
+      colorbar.ticktext.push(String(v));
+    }
+    colorbar.tickvals.push(ZMAX_CAP);
+    colorbar.ticktext.push(`≥${ZMAX_CAP}`);
+  }
+  const trace = {
+    type: "heatmap",
+    x: mm,
+    y: mm,
+    z: m.B_mag_grid,
+    colorscale: appCtx.plot.sequential(),
+    zmin: 0,
+    zmax: Math.min(zmax, ZMAX_CAP),
+    hoverongaps: false,
+    hovertemplate: "x=%{x:.2f}, y=%{y:.2f} mm · |B|=%{z:.3f} T<extra></extra>",
+    colorbar,
+  };
+  const { plot } = appCtx;
+  const layout = plot.layout({
+    hovermode: "closest",
+    showlegend: false,
+    xaxis: plot.axisStyle("x [mm]"),
+    yaxis: { ...plot.axisStyle("y [mm]"), scaleanchor: "x", scaleratio: 1 },
+    shapes,
+  });
+
+  const ironNote = typeof m.b_iron_max === "number"
+    ? ` · peak iron |B| ${m.b_iron_max.toFixed(2)} T` : "";
+  slot.captionRest = ironNote
+    + (clipped ? ` · peak |B| ${zmax.toFixed(2)} T (ramp clipped)` : "");
+  renderLabel(motorName, slot);
+  slot.provEl.textContent = provenanceText(result);
+
+  Plotly.react(slot.plotEl, [trace], layout, plot.config);
+}
+
+function syncTileLayout() {
+  for (const slot of slots.values()) {
+    slot.tileEl.style.flex = slots.size > 1 ? "1 1 0" : "1 1 100%";
+  }
+  requestAnimationFrame(() => {
+    for (const slot of slots.values()) {
+      if (slot.plotEl) Plotly.Plots.resize(slot.plotEl);
+    }
+  });
+}
+
+function pruneSlots() {
+  let removed = false;
+  for (const [name, slot] of slots) {
+    const inSet = appCtx.compare.slotFor(name) !== undefined;
+    const isActive = name === appCtx.getActiveMotor();
+    if (!inSet && !isActive) {
+      Plotly.purge(slot.plotEl);
+      slot.tileEl.remove();
+      slots.delete(name);
+      removed = true;
+    }
+  }
+  for (const [name, slot] of slots) renderLabel(name, slot);
+  if (removed) syncTileLayout();
+  if (!slots.size) {
+    hintEl.textContent = HINT;
+    hintEl.style.display = "";
+    containerEl.style.display = "none";
+  }
+}
+
 export default {
   name: "cross_section",
   label: "Cross-Section |B|",
@@ -62,119 +145,81 @@ export default {
   init(container, app) {
     appCtx = app;
     hintEl = document.createElement("div");
-    hintEl.className = "empty-hint";
+    hintEl.className = "vs-empty-hint";
     hintEl.textContent = HINT;
 
-    captionEl = document.createElement("div");
-    captionEl.className = "panel-caption";
+    containerEl = document.createElement("div");
+    containerEl.className = "cs-tiles";
+    containerEl.style.display = "none";
 
-    plotEl = document.createElement("div");
-    plotEl.style.height = "420px";
-    plotEl.style.display = "none";
-
-    provEl = document.createElement("div");
-    provEl.className = "provenance";
-
-    container.append(hintEl, captionEl, plotEl, provEl);
-    app.compare.onChange(renderCaption);
+    container.append(hintEl, containerEl);
+    app.compare.onChange(() => pruneSlots());
   },
 
   clear() {
-    shownKey = null;
-    shownResult = null;
-    shownMotor = "";
-    captionRest = "";
+    for (const slot of slots.values()) {
+      Plotly.purge(slot.plotEl);
+      slot.tileEl.remove();
+    }
+    slots.clear();
     hintEl.textContent = HINT;
     hintEl.style.display = "";
-    captionEl.textContent = "";
-    provEl.textContent = "";
-    plotEl.style.display = "none";
+    containerEl.style.display = "none";
   },
 
   retheme() {
-    if (!shownResult) return;
-    shownKey = null; // defeat the same-id dedup; colors changed
-    this.update(shownResult);
+    for (const [name, slot] of slots) {
+      slot.key = null;
+      renderTile(name, slot);
+    }
   },
 
   update(result) {
     const m = result.metrics;
     if (!m) return;
     if (!m.B_mag_grid || !m.grid_coords_list) {
-      if (shownKey === null) {
+      if (!slots.size) {
         hintEl.textContent = "This fem result predates cross-section capture — re-run the fem job.";
       }
       return;
     }
-    if (shownKey === result.result_id) return;
-    shownKey = result.result_id;
-    shownResult = result;
+    const motorName = result.config?.motor?.name ?? "?";
 
-    const mm = m.grid_coords_list.map((c) => c * 1000);
-    let zmax = 0;
-    for (const row of m.B_mag_grid) {
-      for (const v of row) if (v !== null && v > zmax) zmax = v;
+    let slot = slots.get(motorName);
+    if (slot && slot.key === result.result_id) return;
+
+    if (!slot) {
+      const tileEl = document.createElement("div");
+      tileEl.className = "cs-tile";
+
+      const labelEl = document.createElement("div");
+      labelEl.className = "vs-caption cs-tile-label";
+
+      const plotEl = document.createElement("div");
+      plotEl.style.height = "420px";
+
+      const provEl = document.createElement("div");
+      provEl.className = "vs-provenance";
+
+      tileEl.append(labelEl, plotEl, provEl);
+      containerEl.append(tileEl);
+
+      slot = { tileEl, plotEl, labelEl, provEl, result: null, key: null, captionRest: "" };
+      slots.set(motorName, slot);
     }
 
-    const geometry = result.config?.motor?.geometry;
-    const shapes = boundaryRadii(geometry).map((r) => ({
-      type: "circle",
-      xref: "x", yref: "y",
-      x0: -r * 1000, y0: -r * 1000, x1: r * 1000, y1: r * 1000,
-      line: { color: chartVar("ink"), width: 1 },
-    }));
-
-    // clipped ramp: pin the ticks so the top one can say "≥CAP"
-    const clipped = zmax > ZMAX_CAP;
-    const colorbar = { title: { text: "|B| [T]" }, thickness: 12, outlinewidth: 0 };
-    if (clipped) {
-      colorbar.tickvals = [];
-      colorbar.ticktext = [];
-      for (let v = 0; v < ZMAX_CAP; v += 0.5) {
-        colorbar.tickvals.push(v);
-        colorbar.ticktext.push(String(v));
-      }
-      colorbar.tickvals.push(ZMAX_CAP);
-      colorbar.ticktext.push(`≥${ZMAX_CAP}`);
-    }
-    const trace = {
-      type: "heatmap",
-      x: mm,
-      y: mm,
-      z: m.B_mag_grid,
-      colorscale: sequential(),
-      zmin: 0,
-      zmax: Math.min(zmax, ZMAX_CAP),
-      hoverongaps: false,
-      hovertemplate: "x=%{x:.2f}, y=%{y:.2f} mm · |B|=%{z:.3f} T<extra></extra>",
-      colorbar,
-    };
-    const layout = baseLayout({
-      hovermode: "closest",
-      showlegend: false,
-      xaxis: axisStyle("x [mm]"),
-      yaxis: { ...axisStyle("y [mm]"), scaleanchor: "x", scaleratio: 1 },
-      shapes,
-    });
-
-    const ironNote = typeof m.b_iron_max === "number"
-      ? ` · peak iron |B| ${m.b_iron_max.toFixed(2)} T` : "";
-    shownMotor = result.config?.motor?.name ?? "?";
-    captionRest = ironNote
-      + (clipped ? ` · peak |B| ${zmax.toFixed(2)} T (ramp clipped)` : "");
-    renderCaption();
-    provEl.textContent = provenanceText(result);
+    slot.result = result;
+    slot.key = result.result_id;
+    renderTile(motorName, slot);
 
     hintEl.style.display = "none";
-    plotEl.style.display = "";
-    Plotly.react(plotEl, [trace], layout, PLOT_CONFIG);
+    containerEl.style.display = "";
+    syncTileLayout();
   },
 
   destroy() {
-    if (plotEl) Plotly.purge(plotEl);
-    plotEl = hintEl = captionEl = provEl = appCtx = null;
-    shownKey = shownResult = null;
-    shownMotor = "";
-    captionRest = "";
+    for (const slot of slots.values()) Plotly.purge(slot.plotEl);
+    slots.clear();
+    containerEl = hintEl = appCtx = null;
   },
 };

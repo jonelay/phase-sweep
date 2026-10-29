@@ -1,5 +1,6 @@
 # Jilin University 5.5 kW SynRM — pure synchronous reluctance, no magnets
-# Source: I-f control paper, PMC11679518 (2024), Jilin University.
+# Source: Actuators 13(12):530, 2024, DOI 10.3390/act13120530
+#   (PubMed Central PMC11679518), Jilin University.
 #   Table 1: R_s, J, n_p, rated voltage/current/power.
 #   Table 2: L_d/L_q vs current (saturation-dependent).
 #

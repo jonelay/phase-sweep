@@ -137,42 +137,12 @@ class TestCompareResults:
 # Shape scalars vs fundamental-only models
 # ---------------------------------------------------------------------------
 
-class TestShapeScalarSkip:
-    """Shape scalars (thd_pct, peak_Br, ...) against a fundamental-only
-    model must surface as skipped rows, not guaranteed-FAIL deltas.
+class TestShapeScalarCompare:
+    """Shape scalars (thd_pct, peak_Br, ...) are genuine delta
+    comparisons between waveform models; since the analytical
+    odd-harmonic series landed there is no fundamental-only model and
+    no skip path."""
 
-    No registry model sets fundamental_only any more (the analytical
-    odd-harmonic series landed), so the machinery is exercised through a
-    monkeypatched fundamental-only variant; the live-registry test at the
-    bottom pins that analytical THD now compares for real."""
-
-    @pytest.fixture
-    def fundamental_only_analytical(self, monkeypatch):
-        import dataclasses
-
-        from phasesweep.registry import MODEL_REGISTRY
-        info = MODEL_REGISTRY["analytical"]
-        monkeypatch.setitem(MODEL_REGISTRY, "analytical",
-                            dataclasses.replace(info, fundamental_only=True))
-
-    def test_thd_skipped_against_fundamental_only_model(
-            self, fundamental_only_analytical):
-        a = _result(model="analytical", metrics={"fundamental": 0.5, "thd_pct": 0.0})
-        b = _result(model="fem", metrics={"fundamental": 0.502, "thd_pct": 4.2})
-        rows = compare_results(a, b)
-        thd = next(r for r in rows if r.quantity == "thd_pct")
-        assert thd.comparison_type == "skipped"
-        assert thd.passed is True
-        fund = next(r for r in rows if r.quantity == "fundamental")
-        assert fund.comparison_type == "delta"
-
-    def test_thd_skipped_vs_measured(self, fundamental_only_analytical):
-        a = _result(model="analytical", metrics={"fundamental": 1.0, "thd_pct": 0.0})
-        m = _result(model="backemf_capture", source="measured",
-                    metrics={"fundamental": 1.01, "thd_pct": 8.0})
-        rows = compare_results(a, m)
-        thd = next(r for r in rows if r.quantity == "thd_pct")
-        assert thd.comparison_type == "skipped"
 
     def test_thd_still_compared_between_waveform_models(self):
         b = _result(model="fem", metrics={"thd_pct": 4.0})
@@ -181,22 +151,6 @@ class TestShapeScalarSkip:
         rows = compare_results(b, m)
         assert rows[0].comparison_type == "delta"
         assert rows[0].passed is True
-
-    def test_thd_skip_restores_models_agree(self, fundamental_only_analytical):
-        # The guaranteed-FAIL thd row used to flip models_agree and yield
-        # spurious "models disagree" even with B₁ in perfect agreement.
-        a = _result(model="analytical", metrics={"fundamental": 1.0, "thd_pct": 0.0})
-        b = _result(model="fem", metrics={"fundamental": 1.005, "thd_pct": 5.0})
-        assert diagnose([a, b]) == "models agree"
-
-    def test_skipped_row_in_summary_and_diagnosis(
-            self, fundamental_only_analytical):
-        a = _result(model="analytical", metrics={"fundamental": 1.0, "thd_pct": 0.0})
-        b = _result(model="fem", metrics={"fundamental": 1.005, "thd_pct": 5.0})
-        summary = diagnose_detailed([a, b])
-        assert len(summary.skipped_rows) == 1
-        assert summary.all_pass
-        assert "skipped" in format_diagnosis(summary)
 
     def test_analytical_thd_compares_for_real_since_odd_harmonics(self):
         # Live registry: the odd-harmonic series gives analytical a real
@@ -324,13 +278,13 @@ class TestPerDatasetTolerances:
         assert r.tol_pct == 10.0  # dataset tolerance, not source-tier 5%
         assert r.passed is True
 
-    def test_max_of_both_tolerances(self):
+    def test_min_of_both_tolerances(self):
         a = _result(model="analytical", metrics={"fundamental": 100.0},
                     tolerances={"fundamental": 3.0})
         b = _result(model="fem", metrics={"fundamental": 105.0},
                     tolerances={"fundamental": 7.0})
         rows = compare_results(a, b)
-        assert rows[0].tol_pct == 7.0  # max(3, 7)
+        assert rows[0].tol_pct == 3.0  # tightest wins, never silently widened
 
     def test_published_tier_selection(self):
         a = _result(model="analytical", metrics={"backemf_fundamental": 100.0})
@@ -428,16 +382,32 @@ class TestCurveCompare:
         assert curve_rows[0].val_b == pytest.approx(10.5)
         assert curve_rows[0].passed is True
 
+    def test_curve_interp_rejects_unsorted_x(self):
+        measured = _result(
+            model="torque_test", source="measured",
+            metrics={
+                "gamma_at_5A": 10.0,
+                "_curve_compare": {"gamma_at_5A": {
+                    "curve_x": "I_curve", "curve_y": "gamma_curve_deg",
+                    "at_x": 5.0, "extract": "interp",
+                }},
+            },
+        )
+        computed = _result(
+            model="rated_torque",
+            metrics={"I_curve": [10, 5, 0], "gamma_curve_deg": [20, 10.5, 0]},
+        )
+        with pytest.raises(ValueError, match="'I_curve' .* not strictly ascending"):
+            compare_results(measured, computed)
+
     @pytest.mark.parametrize("model,n_curve,n_skipped", [
         ("fem", 1, 0),
         ("analytical", 1, 0),  # real waveform since analytical v4
         ("unregistered-model", 1, 0),
     ])
     def test_curve_extract_max(self, model, n_curve, n_skipped):
-        """Waveform models get a real extract=max comparison. (The
-        fundamental-only skip path this used to pin against analytical is
-        covered by TestShapeScalarSkip's monkeypatched variant — since
-        analytical v4 every registry waveform model has a true peak.)"""
+        """Every registry waveform model has a true peak since analytical
+        v4, so extract=max is always a real comparison."""
         measured = _result(
             model="airgap_flux_test", source="published",
             metrics={
@@ -469,7 +439,7 @@ class TestCurveCompare:
             assert len(summary.skipped_rows) == 1
             assert "skipped" in format_diagnosis(summary)
 
-    def test_extract_interp_allowed_for_fundamental_only_model(self):
+    def test_extract_interp_on_analytical(self):
         measured = _result(
             model="airgap_flux_test", source="published",
             metrics={

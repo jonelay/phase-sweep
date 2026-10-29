@@ -25,8 +25,8 @@ from pathlib import Path
 import numpy as np
 
 from phasesweep.machines.geometry import default_inrunner
-from phasesweep.solvers.analytical import zhu_howe_Br_series
 from phasesweep.solvers.fem_field import solve_field_fem
+from phasesweep.solvers.field_solution import zhu_howe_Br_series
 from phasesweep.solvers.harmonics import harmonics_1sided
 
 ROOT = Path(__file__).resolve().parent.parent

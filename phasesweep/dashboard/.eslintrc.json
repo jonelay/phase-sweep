@@ -1,0 +1,21 @@
+{
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "module"
+  },
+  "env": {
+    "browser": true,
+    "es6": true
+  },
+  "globals": {
+    "Plotly": "readonly"
+  },
+  "rules": {
+    "no-undef": "error",
+    "no-unused-vars": ["warn", {"argsIgnorePattern": "^_"}],
+    "no-redeclare": "error",
+    "eqeqeq": ["error", "always", {"null": "ignore"}],
+    "no-var": "error",
+    "prefer-const": "warn"
+  }
+}

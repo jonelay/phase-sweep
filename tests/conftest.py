@@ -12,6 +12,9 @@ from phasesweep.machines.motor import DriveParams, Motor
 # Anchor for repo-relative test data — keeps tests cwd-independent
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# TOMLs under data/ that are not motor definitions (reference sets, columns).
+NOT_MOTOR_TOMLS = frozenset({"reference.toml", "two_ambient_columns.toml"})
+
 # ---------------------------------------------------------------------------
 # Optional-dep detection + skip markers
 # ---------------------------------------------------------------------------
@@ -68,6 +71,13 @@ CREATOR_IM_SKIP = (
 # Lab capture CSVs are tracked on main but excluded from the public release
 # branch, where their absence is by design rather than a broken checkout.
 CAPTURES_SKIP = "lab capture CSVs absent (not on the public release branch)"
+# The M-19 catalog table is CC BY-NC-SA, so the public release cites its
+# source instead of redistributing it; the fitted i3 coefficients still ship.
+M19_TABLE_SKIP = "M-19 core-loss table absent (not redistributed on the public release branch)"
+# A browser is a developer-machine tool, not a repo file: the CI image ships
+# no Chromium, so the dashboard boot tests skip there by design. Put a
+# browser in the image (or set the Playwright cache) to make them run.
+CHROMIUM_SKIP = "headless Chromium not found (PATH or Playwright cache)"
 # Deliberately NOT in ALLOWED_SKIP_SUBSTRINGS: the pinned Elmer JSONs are
 # committed repo files (scripts/elmer_*/pinned/), so their absence means a
 # broken checkout and must fail a strict-skip run.
@@ -82,6 +92,8 @@ ALLOWED_SKIP_SUBSTRINGS = (
     STEEL_TABLES_SKIP,
     CREATOR_IM_SKIP,
     CAPTURES_SKIP,
+    M19_TABLE_SKIP,
+    CHROMIUM_SKIP,
     FEM_SKIP,
 )
 if _CORE_LANE:

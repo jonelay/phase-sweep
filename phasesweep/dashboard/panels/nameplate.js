@@ -5,7 +5,7 @@
 // differs on peak_Br/thd_pct); the source tile names which model the
 // numbers came from. Subsumes the old topbar #active-config span.
 
-import { statStrip } from "./widgets.js";
+import { statStrip } from "/view-sweep/js/widgets.js";
 
 let nameEl = null;
 let statsEl = null;
@@ -44,8 +44,7 @@ export default {
     appCtx = app;
     nameEl = document.createElement("span");
     nameEl.className = "nameplate-name";
-    statsEl = document.createElement("div");
-    statsEl.className = "stat-strip";
+    statsEl = document.createElement("div"); // statStrip adds .vs-stat-strip
     container.append(nameEl, statsEl);
     render();
   },

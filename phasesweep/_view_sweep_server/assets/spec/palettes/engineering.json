@@ -1,0 +1,382 @@
+{
+  "meta": {
+    "name": "engineering",
+    "variants": [
+      "light",
+      "dark"
+    ],
+    "default_variant": "light",
+    "default_categorical": "okabe_ito",
+    "default_sequential": "accent"
+  },
+  "light": {
+    "bg": "#f9f9f7",
+    "surface": "#fcfcfb",
+    "text": "#0b0b0b",
+    "text-2": "#52514e",
+    "text-muted": "#706e69",
+    "hairline": "#e1e0d9",
+    "accent": "#2a78d6",
+    "accent-ink": "#2a78d6",
+    "warn-ink": "#b47b00",
+    "banner-text": "#7a5800",
+    "shadow": "rgba(11, 11, 11, 0.12)",
+    "status-good": "#0ca30c",
+    "status-warning": "#fab219",
+    "status-critical": "#d03b3b",
+    "hoverlabel-bg": "#fcfcfb",
+    "legend-bg": "#fcfcfb",
+    "chart-bg": "#fcfcfb",
+    "chart-text": "#52514e",
+    "chart-muted": "#706e69",
+    "chart-grid": "#e1e0d9",
+    "chart-zeroline": "#c3c2b7",
+    "chart-ink": "rgba(11, 11, 11, 0.35)",
+    "seq-lo": "#f4f7fb",
+    "seq-mid": "#2a78d6",
+    "seq-hi": "#12294a",
+    "font-ui": "system-ui, -apple-system, \"Segoe UI\", sans-serif",
+    "font-mono": "ui-monospace, monospace",
+    "font-size": "13px",
+    "radius": "4px",
+    "series-1": "#0072b2",
+    "series-2": "#009e73",
+    "series-3": "#d55e00",
+    "series-4": "#cc79a7",
+    "series-5": "#56b4e9",
+    "series-6": "#e69f00",
+    "series-7": "#999999",
+    "series-8": "#f0e442"
+  },
+  "dark": {
+    "bg": "#141518",
+    "surface": "#1b1d20",
+    "text": "#e8e6e3",
+    "text-2": "#b3b1ac",
+    "text-muted": "#908e89",
+    "hairline": "#2c2e33",
+    "accent": "#2a78d6",
+    "accent-ink": "#4a8de0",
+    "warn-ink": "#d99a2b",
+    "banner-text": "#edc35c",
+    "shadow": "rgba(0, 0, 0, 0.45)",
+    "status-good": "#0ca30c",
+    "status-warning": "#fab219",
+    "status-critical": "#d03b3b",
+    "hoverlabel-bg": "#1b1d20",
+    "legend-bg": "#1b1d20",
+    "chart-bg": "#1b1d20",
+    "chart-text": "#b3b1ac",
+    "chart-muted": "#908e89",
+    "chart-grid": "#2c2e33",
+    "chart-zeroline": "#45474d",
+    "chart-ink": "rgba(232, 230, 227, 0.35)",
+    "seq-lo": "#16181b",
+    "seq-mid": "#4a8de0",
+    "seq-hi": "#dbe9fb",
+    "font-ui": "system-ui, -apple-system, \"Segoe UI\", sans-serif",
+    "font-mono": "ui-monospace, monospace",
+    "font-size": "13px",
+    "radius": "4px",
+    "series-1": "#0072b2",
+    "series-2": "#009e73",
+    "series-3": "#d55e00",
+    "series-4": "#cc79a7",
+    "series-5": "#56b4e9",
+    "series-6": "#e69f00",
+    "series-7": "#999999",
+    "series-8": "#f0e442"
+  },
+  "categorical": {
+    "okabe_ito": {
+      "label": "Okabe-Ito",
+      "colors": [
+        "#0072b2",
+        "#009e73",
+        "#d55e00",
+        "#cc79a7",
+        "#56b4e9",
+        "#e69f00",
+        "#999999",
+        "#f0e442"
+      ]
+    },
+    "tol_vibrant": {
+      "label": "Tol vibrant",
+      "colors": [
+        "#009988",
+        "#0077bb",
+        "#cc3311",
+        "#ee3377",
+        "#ee7733",
+        "#33bbee",
+        "#bbbbbb"
+      ]
+    },
+    "tol_bright": {
+      "label": "Tol bright",
+      "colors": [
+        "#4477aa",
+        "#228833",
+        "#ee6677",
+        "#aa3377",
+        "#66ccee",
+        "#ccbb44",
+        "#bbbbbb"
+      ]
+    },
+    "seaborn_colorblind": {
+      "label": "Seaborn colorblind",
+      "colors": [
+        "#0173b2",
+        "#029e73",
+        "#d55e00",
+        "#cc78bc",
+        "#de8f05",
+        "#56b4e9",
+        "#ca9161",
+        "#949494",
+        "#fbafe4",
+        "#ece133"
+      ]
+    },
+    "tableau10": {
+      "label": "Tableau 10",
+      "colors": [
+        "#4e79a7",
+        "#59a14f",
+        "#e15759",
+        "#b07aa1",
+        "#f28e2b",
+        "#76b7b2",
+        "#9c755f",
+        "#bab0ac",
+        "#ff9da7",
+        "#edc948"
+      ]
+    }
+  },
+  "sequential": {
+    "accent": {
+      "label": "Accent",
+      "from_vars": [
+        "seq-lo",
+        "seq-mid",
+        "seq-hi"
+      ]
+    },
+    "viridis": {
+      "label": "Viridis",
+      "light": [
+        [
+          0.0,
+          "#440154"
+        ],
+        [
+          0.13,
+          "#472d7b"
+        ],
+        [
+          0.25,
+          "#3b528b"
+        ],
+        [
+          0.38,
+          "#2c728e"
+        ],
+        [
+          0.5,
+          "#21918c"
+        ],
+        [
+          0.63,
+          "#28ae80"
+        ],
+        [
+          0.75,
+          "#5ec962"
+        ],
+        [
+          0.88,
+          "#addc30"
+        ],
+        [
+          1.0,
+          "#fde725"
+        ]
+      ],
+      "dark": [
+        [
+          0.0,
+          "#2c728e"
+        ],
+        [
+          0.25,
+          "#21918c"
+        ],
+        [
+          0.5,
+          "#28ae80"
+        ],
+        [
+          0.7,
+          "#5ec962"
+        ],
+        [
+          0.85,
+          "#addc30"
+        ],
+        [
+          1.0,
+          "#fde725"
+        ]
+      ]
+    },
+    "cividis": {
+      "label": "Cividis",
+      "light": [
+        [
+          0.0,
+          "#00224e"
+        ],
+        [
+          0.11,
+          "#123570"
+        ],
+        [
+          0.22,
+          "#3b496c"
+        ],
+        [
+          0.33,
+          "#575d6e"
+        ],
+        [
+          0.44,
+          "#707173"
+        ],
+        [
+          0.56,
+          "#8a8779"
+        ],
+        [
+          0.67,
+          "#a69d75"
+        ],
+        [
+          0.78,
+          "#c3b56c"
+        ],
+        [
+          0.89,
+          "#e1cd60"
+        ],
+        [
+          1.0,
+          "#ffea46"
+        ]
+      ],
+      "dark": [
+        [
+          0.0,
+          "#575d6e"
+        ],
+        [
+          0.2,
+          "#707173"
+        ],
+        [
+          0.4,
+          "#8a8779"
+        ],
+        [
+          0.6,
+          "#a69d75"
+        ],
+        [
+          0.8,
+          "#c3b56c"
+        ],
+        [
+          0.9,
+          "#e1cd60"
+        ],
+        [
+          1.0,
+          "#ffea46"
+        ]
+      ]
+    },
+    "magma": {
+      "label": "Magma",
+      "light": [
+        [
+          0.0,
+          "#000004"
+        ],
+        [
+          0.11,
+          "#180f3e"
+        ],
+        [
+          0.22,
+          "#451077"
+        ],
+        [
+          0.33,
+          "#721f81"
+        ],
+        [
+          0.44,
+          "#9f2f7f"
+        ],
+        [
+          0.56,
+          "#cd4071"
+        ],
+        [
+          0.67,
+          "#f1605d"
+        ],
+        [
+          0.78,
+          "#fd9567"
+        ],
+        [
+          0.89,
+          "#feca8d"
+        ],
+        [
+          1.0,
+          "#fcfdbf"
+        ]
+      ],
+      "dark": [
+        [
+          0.0,
+          "#9f2f7f"
+        ],
+        [
+          0.25,
+          "#cd4071"
+        ],
+        [
+          0.5,
+          "#f1605d"
+        ],
+        [
+          0.7,
+          "#fd9567"
+        ],
+        [
+          0.85,
+          "#feca8d"
+        ],
+        [
+          1.0,
+          "#fcfdbf"
+        ]
+      ]
+    }
+  }
+}

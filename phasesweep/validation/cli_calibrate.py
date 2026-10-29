@@ -7,6 +7,10 @@ import json
 import sys
 from pathlib import Path
 
+__all__ = [
+    "main",
+]
+
 
 def _parse_bound(spec: str) -> tuple[str, tuple[float, float]]:
     try:

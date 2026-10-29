@@ -12,9 +12,10 @@ import json
 
 import pytest
 
-from tests.conftest import ELMER_PINNED_SKIP, REPO_ROOT
+from tests.conftest import ELMER_PINNED_SKIP, REPO_ROOT, requires_fem
 from tests.crossval.axial_fem_contract import (
     CV1_ANALYTICAL_REL_TOL,
+    CV1_CROSS_CODE_REL_TOL,
     CV2_REL_TOL,
     NONTRIVIAL_FIELD_T,
     circuit_limit_Bz,
@@ -74,3 +75,26 @@ def test_cv1_ideal_iron_diagnostic(pinned):
                                 motor.mu_r_pm, motor.alpha_p)
     B1 = pinned["cases"]["cv1_slotless_ideal_iron"]["B1_T"]
     assert abs(B1 - ref) / ref <= 0.005
+
+
+@requires_fem
+@pytest.mark.parametrize(("case", "mu_r_fe"), [
+    ("cv1_slotless", None),                 # the motor's 1000: -0.39 %
+    ("cv1_slotless_ideal_iron", 1.0e6),     # -0.001 %
+])
+def test_cv1_cross_code_ngsolve_vs_elmer(pinned, case, mu_r_fe):
+    """The cross-code gate itself: fem_axial's slotless plane against the
+    pinned Elmer B1 at the same iron permeability (it was only compared
+    at merge, so the published delta could drift unseen)."""
+    from dataclasses import replace
+
+    from phasesweep.solvers.fem_axial import fundamental_amplitude, solve_plane
+
+    motor = load_parviainen_motor()
+    geo = replace(motor.geometry, n_slots=0, slot_depth=0.0)
+    mu = motor.mu_r_fe if mu_r_fe is None else mu_r_fe
+    assert pinned["cases"][case].get("params", {}).get("mu_r_fe", mu) == mu
+    _, Bz = solve_plane(geo, geo.r_mean, motor.n_p, motor.B_rem,
+                        motor.mu_r_pm, mu, motor.alpha_p)
+    elmer = pinned["cases"][case]["B1_T"]
+    assert abs(fundamental_amplitude(Bz) - elmer) / elmer <= CV1_CROSS_CODE_REL_TOL

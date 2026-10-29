@@ -1,9 +1,8 @@
-"""Nitsche rotation spike — decision gate for R2.
+"""Nitsche rotation spike — mesh-deformation rotation vs per-angle remeshing.
 
-Evaluates mesh-deformation rotation vs the R1 per-angle remeshing approach.
+Evaluates whether rotating the rotor by mesh deformation (nodes inside
+the mid-gap radius rotated in place) can replace per-angle remeshing.
 Script-only (not package code).
-
-Plan reference: two-mass rotation plan §R2.
 
 Decision criteria:
   - Adopt if accuracy within 5% AND clearly wins on noise or wall-clock cost

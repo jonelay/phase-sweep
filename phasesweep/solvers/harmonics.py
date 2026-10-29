@@ -9,6 +9,14 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+__all__ = [
+    "assert_waveform_symmetry",
+    "batch_harmonics",
+    "cogging_angles",
+    "compute_thd",
+    "harmonics_1sided",
+]
+
 try:
     import cupy as cp
     _CUPY = True
@@ -34,6 +42,12 @@ def harmonics_1sided(B_r: NDArray[np.floating]) -> NDArray[np.floating]:
 
 def compute_thd(amps: NDArray[np.floating], fund_idx: int) -> float:
     """THD as percentage of fundamental from one-sided harmonic amplitudes."""
+    if not (1 <= fund_idx < len(amps)):
+        raise ValueError(
+            f"fund_idx={fund_idx} out of range [1, {len(amps)})"
+        )
+    if not np.all(np.isfinite(amps)):
+        raise ValueError("non-finite amplitude(s) in input")
     fundamental = float(amps[fund_idx])
     if fundamental == 0.0:
         return float("nan")
@@ -41,6 +55,54 @@ def compute_thd(amps: NDArray[np.floating], fund_idx: int) -> float:
         np.sqrt(max(np.sum(amps[1:] ** 2) - amps[fund_idx] ** 2, 0.0))
         / fundamental * 100
     )
+
+
+def assert_waveform_symmetry(
+    amps: NDArray[np.floating],
+    n_p: int,
+    *,
+    label: str = "B_r",
+) -> None:
+    """Assert odd-harmonic cosine-series invariants on one-sided FFT amplitudes.
+
+    True by construction for a sum of cos(k*n_p*theta), k odd:
+    - DC bin is zero
+    - Only odd multiples of n_p carry energy
+    - (Half-wave antisymmetry and even symmetry about magnet centre follow
+      from the cosine-only, odd-k structure.)
+
+    Tolerance: 1e-9 x fundamental amplitude.  Raises RuntimeError on
+    violation -- a non-zero forbidden bin means a code bug, not a physics
+    issue.
+    """
+    fundamental = float(amps[n_p]) if n_p < len(amps) else 0.0
+    tol = 1e-9 * max(fundamental, 1e-30)
+
+    if abs(float(amps[0])) > tol:
+        raise RuntimeError(
+            f"{label} waveform symmetry: DC bin = {float(amps[0]):.3e}, "
+            f"expected 0 (tol {tol:.1e})"
+        )
+
+    indices = np.arange(1, len(amps))
+    allowed = np.zeros(len(amps), dtype=bool)
+    allowed[n_p::2 * n_p] = True
+    forbidden = ~allowed[1:]
+    magnitudes = np.abs(amps[1:])
+    violators = forbidden & (magnitudes > tol)
+    if np.any(violators):
+        idx = int(indices[violators][0])
+        val = float(amps[idx])
+        if idx % n_p != 0:
+            raise RuntimeError(
+                f"{label} waveform symmetry: bin {idx} = {val:.3e}, "
+                f"expected 0 (not a multiple of n_p={n_p}, tol {tol:.1e})"
+            )
+        k = idx // n_p
+        raise RuntimeError(
+            f"{label} waveform symmetry: bin {idx} (k={k}*n_p) = "
+            f"{val:.3e}, expected 0 (even k, tol {tol:.1e})"
+        )
 
 
 def cogging_angles(

@@ -1,0 +1,57 @@
+{
+  "layout": {
+    "hovermode": "x unified",
+    "showlegend": false,
+    "uirevision": "keep",
+    "margin": {
+      "l": 55,
+      "r": 12,
+      "t": 8,
+      "b": 42
+    },
+    "font": {
+      "size": 12,
+      "family": "'Iowan Old Style', 'Source Serif Pro', Georgia, serif",
+      "color": "#d8dde6"
+    },
+    "paper_bgcolor": "rgba(0, 0, 0, 0)",
+    "plot_bgcolor": "rgba(0, 0, 0, 0)",
+    "hoverlabel": {
+      "bgcolor": "#131820",
+      "bordercolor": "#1f2630",
+      "font": {
+        "color": "#d8dde6"
+      }
+    },
+    "modebar": {
+      "color": "#8a93a3",
+      "activecolor": "#d8dde6"
+    },
+    "legend": {
+      "bgcolor": "#131820",
+      "bordercolor": "#1f2630"
+    },
+    "xaxis": {
+      "gridcolor": "#1f2630",
+      "zerolinecolor": "#2a3140",
+      "linecolor": "#2a3140",
+      "color": "#8a93a3"
+    },
+    "yaxis": {
+      "gridcolor": "#1f2630",
+      "zerolinecolor": "#2a3140",
+      "linecolor": "#2a3140",
+      "color": "#8a93a3"
+    },
+    "colorway": [
+      "#6dd3c8",
+      "#f2a35e",
+      "#6ea4f2",
+      "#5fd99c",
+      "#f2c96e",
+      "#e07b6b",
+      "#b0b8c6",
+      "#8a93a3"
+    ]
+  }
+}

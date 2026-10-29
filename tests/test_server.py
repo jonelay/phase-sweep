@@ -21,10 +21,10 @@ if not find_spec("fastapi"):
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from phasesweep._view_sweep_server.ws import ConnectionManager
 from phasesweep.result_store import ResultStore
 from phasesweep.server.app import ServerSettings, create_app, load_motor_configs
 from phasesweep.server.jobs import JobManager
-from phasesweep.server.routes import ConnectionManager
 
 MOTOR_TOML = """
 [motor]
@@ -313,6 +313,22 @@ def test_result_with_nan_metric_served_as_null(client):
     assert metrics["peak_Br"] == 1.0
 
 
+def test_get_result_by_stored_run_id(client, workspace):
+    """GET /results/{id} keys on the stamped run_id, not a recomputed hash."""
+    import json
+
+    done = wait_job(client, submit(client, "analytical")["id"])
+    rid = done["result_ids"][0]
+    results_file = workspace["output"] / "results.jsonl"
+    d = json.loads(results_file.read_text())
+    assert d["run_id"] == rid
+    d["run_id"] = "sentinel00001"
+    results_file.write_text(json.dumps(d) + "\n")
+
+    assert client.get("/api/results/sentinel00001").status_code == 200
+    assert client.get(f"/api/results/{rid}").status_code == 404
+
+
 def test_job_list_filter(client):
     job = submit(client, "analytical")
     wait_job(client, job["id"])
@@ -391,6 +407,17 @@ def test_submit_bad_param_shapes_are_400(client):
     submit(client, "analytical", params={"duty_profile": 42}, expect=400)
     submit(client, "sweep", params={"model_keys": 42, "axes": [
         {"field": "r_outer", "start": 0.9, "stop": 1.1, "steps": 2}]}, expect=400)
+
+
+def test_submit_string_params_are_typed(client):
+    """Query/form strings are parsed into the RunConfig type: "false"
+    must not hash as a truthy string, garbage must be a 400."""
+    typed = submit(client, "analytical", params={"nonlinear": False, "n_theta": 180})
+    parsed = submit(client, "analytical", params={"nonlinear": "false", "n_theta": "180"})
+    assert parsed["subtasks"][0]["run_id"] == typed["subtasks"][0]["run_id"]
+    submit(client, "analytical", params={"nonlinear": "nope"}, expect=400)
+    submit(client, "analytical", params={"n_theta": "18.5"}, expect=400)
+    submit(client, "analytical", params={"maxh_fraction": "nan"}, expect=400)
 
 
 def test_drive_sim_two_mass_submit_and_auto_derive(client):
@@ -553,6 +580,8 @@ def test_validate_default_models_exclude_gated_and_slow(client):
     assert "drive_sim" not in models           # sim_plan-gated
     assert "drive_sim_two_mass" not in models  # load_mech-gated
     assert "thermal_duty" not in models        # duty_profile-gated
+    assert "operating_point" not in models     # w_mech/tau_ref not settable
+    assert "motor_thermal" not in models
     done = wait_job(client, job["id"])
     assert done["status"] == "completed"
 
@@ -642,7 +671,98 @@ def test_stop_returns_while_job_draining(workspace, monkeypatch):
     release.set()
 
 
-# -- WebSocket -----------------------------------------------------
+def _run_manager_jobs(workspace, submissions, monkeypatch=None, fake=None):
+    """Run *submissions* (model, params) in order on a fresh manager,
+    swapping execute_parallel for *fake* after the first job completes."""
+    import phasesweep.server.jobs as jobs_mod
+
+    async def scenario():
+        motors = load_motor_configs(workspace["motors"])
+        store = ResultStore(workspace["output"])
+        manager = JobManager(motors, store, workers=1)
+
+        async def broadcast(msg):
+            pass
+
+        await manager.start(broadcast)
+        done = []
+        for i, (model, params) in enumerate(submissions):
+            if i == 1 and fake is not None:
+                monkeypatch.setattr(jobs_mod, "execute_parallel", fake)
+            job = manager.submit(model, "test_inrunner", params)
+            t0 = time.monotonic()
+            while job.status not in ("completed", "failed", "cancelled"):
+                assert time.monotonic() - t0 < 30.0
+                await asyncio.sleep(0.02)
+            done.append(job)
+        await manager.stop()
+        return done, store
+
+    return asyncio.run(scenario())
+
+
+def test_executor_exception_fails_job_despite_cached_sibling(workspace, monkeypatch):
+    """An exception out of execute_parallel marks the unreported sub-tasks
+    ERROR with its message and fails the job — a cached sibling used to
+    turn it into 'completed' with a sub-task stuck 'pending'."""
+    def boom(worker_jobs, **kw):
+        raise RuntimeError("pool broke")
+
+    (_, job), store = _run_manager_jobs(workspace, [
+        ("analytical", None),
+        ("validate", {"models": ["analytical", "rated_torque"]}),
+    ], monkeypatch, boom)
+    assert job.status == "failed"
+    assert job.error == "RuntimeError: pool broke"
+    by_model = {st.model: st for st in job.subtasks}
+    assert by_model["analytical"].status == "cached"
+    assert by_model["rated_torque"].status == "ERROR"
+    assert by_model["rated_torque"].error_msg == "RuntimeError: pool broke"
+    assert {r.model for r in store.load_results()} == {"analytical"}
+
+
+def test_cancelled_subtasks_persist_no_rows(workspace, monkeypatch):
+    """Sub-tasks the executor reports CANCELLED never ran: status only,
+    no ERROR row in the store."""
+    def cancel_all(worker_jobs, *, cancel, on_complete, **kw):
+        cancel.set()
+        for i, wj in enumerate(worker_jobs, 1):
+            on_complete({"run_id": wj["run_id"], "status": "CANCELLED",
+                         "error_msg": "Cancelled before start"},
+                        i, len(worker_jobs))
+        return []
+
+    (_, job), store = _run_manager_jobs(workspace, [
+        ("analytical", None),
+        ("validate", {"models": ["analytical", "rated_torque"]}),
+    ], monkeypatch, cancel_all)
+    assert job.status == "cancelled"
+    by_model = {st.model: st for st in job.subtasks}
+    assert by_model["rated_torque"].status == "CANCELLED"
+    assert {r.model for r in store.load_results()} == {"analytical"}
+
+
+def test_sweep_forces_nonlinear_for_fem_only(workspace):
+    """Server sweeps mirror geo_parallel.run_sweep: nonlinear defaults on
+    for fem only; cogging_torque hashes nonlinear, so forcing it there
+    split one grid into two run-id sets."""
+    motors = load_motor_configs(workspace["motors"])
+    manager = JobManager(motors, ResultStore(workspace["output"]), workers=1)
+    axes = [{"field": "r_outer", "start": 0.9, "stop": 1.1, "steps": 2}]
+    motor = motors["test_inrunner"]
+    fem = manager._sweep_subtasks(motor, {"model_keys": ["fem"], "axes": axes})
+    assert all(st.config.nonlinear for st in fem)
+    from phasesweep import load_motor
+    from tests.conftest import REPO_ROOT
+    cog_motor = load_motor(REPO_ROOT / "motors/creator_case_pmsm.toml")
+    cog = manager._sweep_subtasks(cog_motor, {
+        "model_keys": ["cogging_torque"],
+        "axes": [{"field": "r_outer", "start": cog_motor.geometry.r_outer,
+                  "stop": cog_motor.geometry.r_outer * 1.02, "steps": 2}]})
+    assert cog and not any(st.config.nonlinear for st in cog)
+
+
+# -- WebSocket ------------------------------------------------------------------
 
 def test_ws_message_sequence_manager_level(workspace):
     """Deterministic full-sequence assertion: progress 1..N, then complete."""
@@ -688,7 +808,7 @@ def test_ws_endpoint_subscribe_and_filter(client):
         })
         watched = submit(client, "sweep", params={
             "model_keys": ["analytical"],
-            "axes": [{"field": "r_ag", "start": 0.05, "stop": 0.07, "steps": 3}],
+            "axes": [{"field": "airgap", "start": 0.05, "stop": 0.07, "steps": 3}],
         })
         # Serial FIFO runner: `watched` cannot start until `blocker`'s 30
         # sub-tasks finish, so this subscribe always lands first.
@@ -710,8 +830,10 @@ def test_ws_endpoint_subscribe_and_filter(client):
 
 
 def test_ws_handle_ignores_malformed_frames():
-    """Non-dict frames, missing/non-list job_ids, and non-string ids
-    are dropped instead of raising in the endpoint loop."""
+    """Non-dict frames, missing/non-list job_ids, and lists with non-string
+    ids are dropped whole instead of raising in the endpoint loop. The
+    manager is view-sweep's; this pins the protocol behaviour the server
+    relies on (full coverage lives in view-sweep's test_ws.py)."""
     cm = ConnectionManager()
     ws = object()
     cm._subs[ws] = set()
@@ -719,8 +841,24 @@ def test_ws_handle_ignores_malformed_frames():
     cm.handle(ws, {"type": "subscribe"})
     cm.handle(ws, {"type": "subscribe", "job_ids": "abc"})
     cm.handle(ws, {"type": "subscribe", "job_ids": [1, "ok", None]})
+    cm.handle(ws, {"type": "subscribe", "job_ids": ["ok"]})
     cm.handle(ws, {"type": "unsubscribe", "job_ids": ["missing"]})
-    assert cm._subs[ws] == {"ok"}
+    assert cm.subscriptions(ws) == {"ok"}
+
+
+def test_ws_cancel_frame_cancels_job(client):
+    """A `cancel` client message reaches JobManager.cancel."""
+    blocker = submit(client, "sweep", params={
+        "model_keys": ["analytical"],
+        "axes": [{"field": "r_outer", "start": 0.85, "stop": 1.15, "steps": 30}],
+    })
+    target = submit(client, "analytical")
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "cancel", "job_id": target["id"]})
+        ws.send_json({"type": "cancel", "job_id": "no-such-job"})  # logged, not fatal
+        ws.send_json({"type": "subscribe", "job_ids": [target["id"]]})
+        assert wait_job(client, target["id"])["status"] == "cancelled"
+    wait_job(client, blocker["id"])
 
 
 def test_ws_malformed_json_closes_connection(client):
@@ -728,6 +866,17 @@ def test_ws_malformed_json_closes_connection(client):
         ws.send_text("not json")
         with pytest.raises(WebSocketDisconnect):
             ws_receive_json(ws, timeout_s=10.0)
+
+
+def test_view_sweep_assets_mounted_but_nothing_else(client):
+    """The dashboard needs /view-sweep/{css,js,spec}; the rest of the
+    view-sweep checkout must not be reachable."""
+    assert client.get("/view-sweep/css/viewsweep.css").status_code == 200
+    assert client.get("/view-sweep/spec/palettes/engineering.css").status_code == 200
+    assert client.get("/view-sweep/js/theme.js").status_code == 200
+    assert client.get("/view-sweep/.git/HEAD").status_code == 404
+    assert client.get("/view-sweep/uv.lock").status_code == 404
+    assert client.get("/").status_code == 200  # dashboard index
 
 
 # -- host/origin validation ------------------------------------------------------
@@ -786,6 +935,14 @@ def test_measured_import_errors(client):
     assert client.post("/api/measured/test_inrunner", json=no_dataset).status_code == 400
 
     assert client.post("/api/measured/nope", json=dict(MEASURED_JSON)).status_code == 404
+
+
+def test_measured_import_string_value_rejected_before_persist(client):
+    bad = dict(MEASURED_JSON)
+    bad["quantities"] = {k: str(v) for k, v in MEASURED_JSON["quantities"].items()}
+    r = client.post("/api/measured/test_inrunner", json=bad)
+    assert r.status_code == 400, r.text
+    assert client.get("/api/results", params={"source": "measured"}).json() == []
 
 
 # tau_mtpa = 1.5 * n_p * psi_f * I_rated = 1.5*2*0.1*5 = 1.5 N·m
@@ -901,11 +1058,11 @@ def test_validation_surfaces_derived_params(client):
 
 
 def test_validation_dedupes_duplicate_and_stale_runs(client):
-    """load_results is unfiltered, so duplicate or superseded
-    runs of one model reach compare_all and produce model↔model self-pair
-    columns plus doubled cross columns. The summary dedupes to
+    """Duplicate or superseded runs of one model would reach compare_all
+    and produce model↔model self-pair columns plus doubled cross columns.
+    The summary loads current-only and dedupes to
     latest-per-(model, source, dataset_id) — the newest current run wins,
-    superseded-version records drop out (H1)."""
+    superseded-version records drop out."""
     from phasesweep.sweep_types import RunConfig, RunResult
 
     manager = client.app.state.manager
@@ -971,6 +1128,20 @@ def test_models_endpoint(client):
     assert by_key["validate"]["kind"] == "multi"
     # measured registry entries are not submittable job types
     assert "torque_test" not in by_key
+    # nor models needing RunConfig fields no job param can set
+    assert "operating_point" not in by_key
+    assert "motor_thermal" not in by_key
+
+
+@pytest.mark.parametrize("model", ["operating_point", "motor_thermal"])
+def test_submit_rejects_model_needing_unsettable_fields(client, workspace, model):
+    """A model needing w_mech/tau_ref is a 400 at submit, not a failed
+    job with a stored ERROR row."""
+    r = client.post("/api/jobs", json={
+        "motor": "test_inrunner", "model": model, "params": {}})
+    assert r.status_code == 400
+    assert "Python API" in r.json()["detail"]
+    assert not list(ResultStore(workspace["output"]).load_slim())
 
 
 # -- dashboard static files ------------------
