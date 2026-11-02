@@ -10,8 +10,8 @@ solver_params utilities.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from phasesweep._extras import install_hint
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 __all__ = [
     "MODEL_REGISTRY",
     "ModelInfo",
+    "headline_key",
 ]
 
 
@@ -39,6 +40,14 @@ class ModelInfo:
     ``needs`` lists motor fields required for applicability validation.
     ``needs_runtime`` lists additional ``RunConfig`` fields that have no
     usable default and whose absence makes the model runner raise.
+
+    ``headline`` names the 2–5 outputs that summarize one result: a key
+    from ``produces``, or ``max:<key>`` for the maximum of a list output.
+    Keys present only for some inputs may be absent from a given result.
+    ``units`` gives the native unit of each headline key as stored ("1"
+    for dimensionless, "" for strings and booleans). ``limits`` lists
+    model-inherent omissions; ``phasesweep.trust`` reports them on every
+    OK result alongside caveats derived from the result's provenance keys.
     """
 
     name: str
@@ -60,6 +69,14 @@ class ModelInfo:
     # Execution-strategy hint only: does not enter hash_fields or
     # compute_run_id. Outputs must be byte-identical to fn per config.
     batch_fn: Callable[[Sequence[RunConfig]], list[dict[str, Any] | Exception]] | None = None
+    headline: tuple[str, ...] = ()
+    units: Mapping[str, str] = field(default_factory=dict)
+    limits: tuple[str, ...] = ()
+
+
+def headline_key(entry: str) -> str:
+    """The ``produces`` key behind a headline entry (``max:k`` -> ``k``)."""
+    return entry.removeprefix("max:")
 
 
 # ---------------------------------------------------------------------------
@@ -271,18 +288,13 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "analytical": ModelInfo(
         name="analytical",
         source="computed",
-        # v4: odd-harmonic square-wave series — B_r_list becomes the
-        # full waveform (was pure fundamental), thd_pct becomes non-zero,
-        # peak_Br added; the fundamental bin is unchanged.
-        # (v4, no bump): optional Motor.k_end (computed 3D wedge factor,
-        # input-schema change — hashed into Motor.config_id) now corrects
-        # the B_rem-derived flux_linkage_peak / backemf_fundamental;
-        # outputs unchanged for motors without k_end. Additive
-        # k_end_source ("computed" | "heuristic" | None) and
-        # k_end_applied (bool: whether flux_linkage_peak carries the
-        # correction) outputs.
-        # (v4, no bump): additive backemf_source ("psi_f" | "computed" |
-        # None) output; backemf_fundamental unchanged.
+        # Odd-harmonic square-wave series: B_r_list is the full waveform,
+        # peak_Br and thd_pct follow from it. Optional Motor.k_end
+        # (computed 3D wedge factor, hashed into Motor.config_id)
+        # corrects the B_rem-derived flux_linkage_peak /
+        # backemf_fundamental; k_end_source is "computed" | "heuristic" |
+        # None and k_end_applied says whether flux_linkage_peak carries
+        # the correction. backemf_source is "psi_f" | "computed" | None.
         version=4,
         cost="fast",
         produces=frozenset({
@@ -298,11 +310,10 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "analytical_axial": ModelInfo(
         name="analytical_axial",
         source="computed",
-        # v1: quasi-3D Cartesian layer model at r_mean (Parviainen 2005
+        # Quasi-3D Cartesian layer model at r_mean (Parviainen 2005
         # Ch. 2): odd-harmonic series, Carter on the physical gap
         # (Eq. 2.11), Qu PM-leakage factor into flux_linkage_peak.
         # B_r_list holds B_z at the stator surface of one gap.
-        # (v1, no bump): additive backemf_source output.
         version=1,
         cost="fast",
         produces=frozenset({
@@ -318,15 +329,11 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "fem_axial": ModelInfo(
         name="fem_axial",
         source="computed",
-        # v1: multi-plane quasi-3D 2D Cartesian FEM.
+        # Multi-plane quasi-3D 2D Cartesian FEM.
         # K unrolled mirror planes at midpoint radii, A_z with Dirichlet
         # on the magnet-center planes; explicit slots (no Carter);
         # flux linkage from the per-plane sum with a radial-edge
         # leakage factor. B_r_list holds B_z of the middle plane.
-        # (v2): PCHIP BH spline + Newton-default nonlinear solve
-        # (shared fem_field/fem_materials change, see ModelInfo
-        # comment); nonlinear outputs only.
-        # (v2, no bump): additive backemf_source output.
         version=2,
         cost="slow",
         produces=frozenset({
@@ -344,22 +351,12 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "fem": ModelInfo(
         name="fem",
         source="computed",
-        # (v5, no bump): additive Maxwell-stress torque outputs
-        # tau_maxwell_per_m / tau_maxwell on armature (j_s != 0) runs;
-        # existing outputs unchanged. Also: j_s != 0 with no slot
-        # faces in the mesh (slot_depth = 0) is now a loud ValueError —
-        # it was silently ignored before.
-        # (v5, no bump): additive cross-section raster
-        # (B_mag_grid / grid_coords_list) for the dashboard heatmap;
-        # existing outputs unchanged.
-        # (v6): per-face pm_gap refinement, see ModelInfo comment.
-        # Additive info flag arcs_collapsed on sub-0.5 mm interpole gaps.
-        # (v7): interpole gap width measured at the inner radius,
-        # see ModelInfo comment; mesh prefix -> mesh_v6.
-        # (v8): PCHIP BH spline + Newton-default nonlinear solve,
-        # see ModelInfo comment; nonlinear outputs only.
-        # (v8, no bump): sub-0.5 mm interpole gaps now raise; the
-        # arcs_collapsed flag is gone.
+        # Maxwell-stress torque (tau_maxwell_per_m / tau_maxwell) only on
+        # armature (j_s != 0) runs; B_mag_grid / grid_coords_list are the
+        # cross-section raster for the dashboard heatmap. Guards: j_s != 0
+        # with no slot faces in the mesh (slot_depth = 0) raises
+        # ValueError; interpole gaps under 0.5 mm (measured at the inner
+        # radius) raise.
         version=8,
         cost="slow",
         produces=frozenset({
@@ -381,15 +378,12 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "drive_sim": ModelInfo(
         name="drive_sim",
         source="computed",
-        # (v3, no bump): additive downsampled time-domain traces
-        # (t/w_M/tau_M/|i_s|) for the dashboard sim-waveforms panel;
-        # scalar outputs unchanged. FluxMap machine model (machine_model
-        # = "flux_map") is a new input path — the map hashes into
-        # Motor.config_id, so constant-L runs keep their IDs and outputs.
-        # v4: R_s at winding_temp_limit, psi_f and the flux map at
-        # magnet_temp (shared solver_params.derate) — moves only motors
-        # that set those fields (hot R_s ≈ +43% at 130 °C, psi_f −10% at
-        # 100 °C NdFeB); cold motors are output-identical.
+        # t/w_M/tau_M/i_s_abs lists are downsampled time-domain traces
+        # for the dashboard sim-waveforms panel. machine_model =
+        # "flux_map" selects the FluxMap machine (the map hashes into
+        # Motor.config_id). R_s is taken at winding_temp_limit, psi_f and
+        # the flux map at magnet_temp (solver_params.derate); motors
+        # without those fields run cold.
         version=4,
         cost="medium",
         produces=frozenset({
@@ -409,9 +403,8 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "drive_sim_two_mass": ModelInfo(
         name="drive_sim_two_mass",
         source="computed",
-        # v2: shares the prepare_drive_sim derate of drive_sim v4 — R_s at
-        # winding_temp_limit, psi_f / flux map at magnet_temp. Missed when
-        # drive_sim went to v4; cold motors output-identical.
+        # Same prepare_drive_sim derate as drive_sim: R_s at
+        # winding_temp_limit, psi_f / flux map at magnet_temp.
         version=2,
         cost="medium",
         produces=frozenset({
@@ -431,19 +424,14 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "rated_torque": ModelInfo(
         name="rated_torque",
         source="computed",
-        # v4: reverse-salient (L_d > L_q) machines take the MTPA branch
-        # (gamma < 0, magnetizing i_d) instead of degrading to k_T·I_rated;
-        # adds k_T_effective output.
-        # v5: psi_f and the flux map at magnet_temp (shared
-        # solver_params.derate); tau_mtpa −10% at 100 °C NdFeB, cold
-        # motors output-identical.
-        # v6: a map-only psi_f is referred to 20 °C from the map's
-        # magnet_temp_ref_C before derating (was taken as 20 °C: −7% psi_f
-        # for a map extracted at 80 °C); the map MTPA runs only when the
-        # grid covers the current circle, else analytical (was pinned to
-        # the grid edge, labeled flux_map). Shipped motors output-identical.
-        # The four *_curve keys are analytical-path only (absent when the
-        # flux map supplies the MTPA point).
+        # Reverse-salient (L_d > L_q) machines take the MTPA branch
+        # (gamma < 0, magnetizing i_d); k_T_effective reports the result.
+        # psi_f and the flux map are derated to magnet_temp
+        # (solver_params.derate); a map-only psi_f is first referred to
+        # 20 °C from the map's magnet_temp_ref_C. The map MTPA runs only
+        # when the grid covers the current circle, else analytical
+        # (mtpa_source). The four *_curve keys are analytical-path only
+        # (absent when the flux map supplies the MTPA point).
         version=6,
         cost="fast",
         produces=frozenset({
@@ -459,13 +447,10 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "stall_torque": ModelInfo(
         name="stall_torque",
         source="computed",
-        # v4: reverse-salient MTPA branch + k_T_effective (see rated_torque).
-        # v5: psi_f / map at magnet_temp and I_stall_electromagnetic at
-        # the winding_temp_limit R_s (−30% at 130 °C); cold motors
-        # output-identical.
-        # v6: map psi_f reference temperature and MTPA grid-coverage rule
-        # (see rated_torque v6); adds mtpa_source_electromagnetic.
-        # Curve keys analytical-path only, as rated_torque.
+        # MTPA branch, derate and map rules as rated_torque; additionally
+        # I_stall_electromagnetic at the winding_temp_limit R_s, with
+        # mtpa_source_electromagnetic. Curve keys analytical-path only,
+        # as rated_torque.
         version=6,
         cost="fast",
         produces=frozenset({
@@ -483,20 +468,15 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "thermal_duty": ModelInfo(
         name="thermal_duty",
         source="computed",
-        # v2: R_s derated to the winding operating-temperature limit
-        # for copper loss — raises consumed loss (and the over_budget_ratio
-        # verdict) on the thermal_resistance budget path; cancels on the
-        # rated_current path.
-        # v3: reverse-salient torque→current inverse uses the MTPA locus
-        # (was non-salient k_T mapping) — lowers thermal current for
-        # L_d > L_q machines.
-        # (v3, no bump): optional [iron] p_fe joins consumption +
-        # rated_current budget — outputs change only when the new inputs
-        # are set (input-schema rule); [iron] hashes via config_id, W_REF
-        # added to hash_fields. Also: optional
-        # thermal_time_constant enables the first-order transient march
-        # (transient_peak_ratio/within_s1_transient/winding_temp_peak) —
-        # also input-schema, hashes via config_id.
+        # Copper loss uses R_s derated to winding_temp_limit — raises
+        # consumed loss (and the over_budget_ratio verdict) on the
+        # thermal_resistance budget path, cancels on the rated_current
+        # path. The torque→current inverse uses the MTPA locus. Optional
+        # [iron] p_fe joins consumption and the rated_current budget
+        # ([iron] hashes via config_id; W_REF is in hash_fields for it).
+        # Optional thermal_time_constant enables the first-order transient
+        # march (transient_peak_ratio / within_s1_transient /
+        # winding_temp_peak), also hashed via config_id.
         version=3,
         cost="fast",
         produces=frozenset({
@@ -516,16 +496,11 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         name="torque_speed",
         source="computed",
         cost="fast",
-        # (v3, no bump): i_d/i_q_curve_* are additive outputs — the
-        # envelope currents were computed and dropped before; same-version
-        # cached rows lack the keys, so consumers treat them as optional.
-        # v4: R_s at winding_temp_limit, psi_f and the flux map at
-        # magnet_temp (shared solver_params.derate); the hot envelope
-        # loses the low-speed torque with psi_f and moves the voltage
-        # corner with R_s. Cold motors output-identical.
-        # v5: a map-only psi_f is referred to 20 °C from the map's
-        # magnet_temp_ref_C before derating (rated_torque v6). Shipped
-        # motors output-identical.
+        # i_d/i_q_curve_* may be absent on older cached rows; consumers
+        # treat them as optional. R_s at winding_temp_limit, psi_f and
+        # the flux map at magnet_temp (solver_params.derate); a map-only
+        # psi_f is first referred to 20 °C from the map's
+        # magnet_temp_ref_C.
         version=5,
         produces=frozenset({
             "speed_curve", "tau_curve_peak", "tau_curve_cont",
@@ -545,18 +520,15 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "operating_point": ModelInfo(
         name="operating_point",
         source="computed",
-        # v1: minimum-current (i_d, i_q) for a (w_mech, tau_ref)
+        # Minimum-current (i_d, i_q) for a (w_mech, tau_ref)
         # demand — constant-L MTPA + three-stage constant-torque field
         # weakening, or a bracketed contour search on the flux map;
         # temperature-continuous on both paths (R_s(T), psi_f(T) / map
         # psi_d shift). The demand is an operating point, so it lives on
-        # RunConfig and in hash_fields, not on the Motor.
-        # (v1, no bump): psi_d / psi_q are additive outputs — the dq flux
-        # linkages the voltages were built from; same-version rows written
-        # before them lack the keys.
-        # v2: map-only psi_f referred to 20 °C from magnet_temp_ref_C
-        # (torque_speed v5) on the off-map path. Shipped motors
-        # output-identical.
+        # RunConfig and in hash_fields, not on the Motor. A map-only
+        # psi_f is referred to 20 °C from magnet_temp_ref_C on the
+        # off-map path. psi_d / psi_q (the dq flux linkages the voltages
+        # were built from) may be absent on older cached rows.
         cost="fast",
         version=2,
         produces=frozenset({
@@ -574,12 +546,11 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "iron_loss": ModelInfo(
         name="iron_loss",
         source="computed",
-        # v1: lumped Bertotti stator-core loss. Synchronous
+        # Lumped Bertotti stator-core loss. Synchronous
         # machines at f_e = n_p·W_REF/2π; induction machines at the rated
-        # supply f_rated (induction path added without a bump: previously
-        # rejected, so no cached output changes). The rotor fundamental
-        # s_rated·f_rated is the f_rotor_Hz key, emitted only on induction
-        # machines with s_rated set.
+        # supply f_rated. The rotor fundamental s_rated·f_rated is the
+        # f_rotor_Hz key, emitted only on induction machines with
+        # s_rated set.
         cost="fast",
         produces=frozenset({
             "p_fe", "p_fe_hysteresis", "p_fe_eddy",
@@ -593,20 +564,17 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "motor_thermal": ModelInfo(
         name="motor_thermal",
         source="computed",
-        # v1: coupled steady solve of the three-node W/Fe/M
+        # Coupled steady solve of the three-node W/Fe/M
         # lumped network with the operating point — copper loss at the
         # winding node temperature, PM flux at the magnet node, iron loss
         # scaled by |psi_s|/psi_ref at f_e = n_p·w_mech/2π. The demand and
         # the coolant temperature are operating conditions on RunConfig;
         # the network is a machine property ([thermal_network], hashed
-        # via config_id). No W_REF.
-        # (v1, additive): headroom_winding_K / headroom_magnet_K /
-        # binding_limit / within_s1 against winding_temp_limit and
-        # magnet_temp_max (None when unset); temperatures unchanged.
-        # v2: map-only psi_f referred to 20 °C from magnet_temp_ref_C on
-        # the off-map path (operating_point v2), and the map-path psi_ref
-        # likewise (was the map at its own reference temperature). Shipped
-        # motors output-identical.
+        # via config_id). No W_REF. headroom_winding_K / headroom_magnet_K
+        # / binding_limit / within_s1 are measured against
+        # winding_temp_limit and magnet_temp_max (None when unset). A
+        # map-only psi_f is referred to 20 °C from magnet_temp_ref_C on
+        # the off-map path, and the map-path psi_ref likewise.
         cost="fast",
         version=2,
         produces=frozenset({
@@ -632,11 +600,9 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "demag_screen": ModelInfo(
         name="demag_screen",
         source="computed",
-        # v1: FEM demag screen — magnet field + pure
+        # FEM demag screen — magnet field + pure
         # demagnetizing d-axis sheet (sheet_phase = +π/2) at i_fault,
         # worst-point B_m margin against B_knee(T).
-        # (v2): PCHIP BH spline + Newton-default nonlinear solve
-        # (shared fem change); nonlinear outputs only.
         version=2,
         cost="slow",
         produces=frozenset({
@@ -656,7 +622,7 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "im_equivalent_circuit": ModelInfo(
         name="im_equivalent_circuit",
         source="computed",
-        # v1: steady-state per-phase IEEE equivalent circuit
+        # Steady-state per-phase IEEE equivalent circuit
         # solved at RunConfig.slip, rated supply (V_LL_rated / f_rated
         # from [induction]). Deep-bar R_2(f_r) / leakage tables and
         # L_m(I_m) saturation applied when supplied. Per-phase rms
@@ -680,7 +646,7 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "im_torque_slip": ModelInfo(
         name="im_torque_slip",
         source="computed",
-        # v1: torque-slip sweep of the same circuit on a
+        # Torque-slip sweep of the same circuit on a
         # fixed 400-point geometric slip grid (1e-3..1) at rated supply;
         # breakdown/starting/rated-point extracts plus the
         # constant-parameter Thévenin closed form for reference. The
@@ -703,7 +669,7 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "im_bar_impedance": ModelInfo(
         name="im_bar_impedance",
         source="computed",
-        # v1: predicted deep-bar R_2(f_r) / L_sigma_r(f_r)
+        # Predicted deep-bar R_2(f_r) / L_sigma_r(f_r)
         # tables from a Bloch-periodic single-slot-pitch harmonic solve
         # (A_z = 0 on the bore, prescribed bar current) plus the lumped
         # end-ring segment and the cage turns ratio. Slot + tooth-top +
@@ -726,30 +692,25 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "im_fem_harmonic": ModelInfo(
         name="im_fem_harmonic",
         source="computed",
-        # v1: full-machine 2D time-harmonic solve on the cage
+        # Full-machine 2D time-harmonic solve on the cage
         # mesh with a per-slot double-layer winding at RunConfig.slip and
-        # the rated supply (V_LL_rated / f_rated). Linear iron, R_1 at
-        # its reference temperature. Per-phase rms outputs like the
-        # circuit models. Slip sweeps go through the sweep engine (slip
-        # is the RunConfig axis), not a built-in grid.
-        # RunConfig.nonlinear (F5) replaces the linear iron by the
-        # energy-equivalent saturation fixed point on the motor's
-        # [materials] bh_curve (or the generic curve): iron_model,
-        # bh_iterations and B_peak_iron_max report which and how far.
-        # (v1, no bump): Geometry.skew_angle turns the solve into
-        # the decoupled multi-slice average (skew enters Motor.config_id,
-        # so skewed runs hash apart); additive skew_model /
-        # n_skew_slices outputs, unskewed outputs unchanged. Skew with
-        # nonlinear=True is rejected.
-        # (v2): Boldea stator end-winding leakage L_ew added to Z_phase
-        # (π/2 semicircular default). All I²-scaled outputs shift: I_rms
-        # decreases ~1–2%, torque/losses follow. Additive L_ew_H output.
-        # (v3): one stator-circuit owner. Operating points carry the 2D
-        # Z_int; operating_point_at_voltage alone adds R_1 + jωL_ew (and
-        # R_fe), so the saturation fixed point now targets the FEM-branch
-        # current I_int with L_ew and R_fe in (it saturated at V/|R_1+Z_int|,
-        # CREATOR ~+0.7 % current). Z_phase_re/_im are terminal, R_fe
-        # included; r_fe_over_x_m from Z_int. Linear outputs unchanged.
+        # the rated supply (V_LL_rated / f_rated). R_1 at its reference
+        # temperature. Per-phase rms outputs like the circuit models.
+        # Slip sweeps go through the sweep engine (slip is the RunConfig
+        # axis), not a built-in grid. Linear iron by default;
+        # RunConfig.nonlinear replaces it by the energy-equivalent
+        # saturation fixed point on the motor's [materials] bh_curve (or
+        # the generic curve): iron_model, bh_iterations and
+        # B_peak_iron_max report which and how far. Geometry.skew_angle
+        # turns the solve into the decoupled multi-slice average (skew
+        # enters Motor.config_id); skew_model / n_skew_slices report it.
+        # Skew with nonlinear=True is rejected. Boldea stator end-winding
+        # leakage L_ew (π/2 semicircular default) is part of Z_phase;
+        # L_ew_H reports it. One stator-circuit owner: operating points
+        # carry the 2D Z_int, operating_point_at_voltage alone adds
+        # R_1 + jωL_ew (and R_fe), and the saturation fixed point targets
+        # the FEM-branch current I_int. Z_phase_re/_im are terminal, R_fe
+        # included; r_fe_over_x_m from Z_int.
         version=3,
         cost="slow",
         produces=frozenset({
@@ -772,7 +733,7 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "im_fem_locked_rotor": ModelInfo(
         name="im_fem_locked_rotor",
         source="computed",
-        # v1: virtual blocked-rotor solves (s = 1) at the
+        # Virtual blocked-rotor solves (s = 1) at the
         # motor's table frequencies ∪ f_rated, identified through the
         # IEEE-112 locked-rotor step (im_circuit.identify_locked_rotor,
         # leakage split from [induction] design_letter or 0.5) into
@@ -784,20 +745,16 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         # (*_no_load_list, L_m_list, I_m_rms_list over fractions of the
         # rated voltage through identify_from_tests) is the L_m(I_m)
         # identification when RunConfig.nonlinear runs the saturation
-        # fixed point (F5) and the flat linear value otherwise; the
-        # locked-rotor lists stay linear in both cases.
-        # (v1, no bump): multi-slice skew as on im_fem_harmonic;
-        # additive skew_model / n_skew_slices outputs.
-        # (v2): Boldea stator end-winding leakage L_ew added to the
-        # identified L_sigma_s (after the IEEE-112 split, so it stays on
-        # the stator side). L_sigma_s_list increases by L_ew at every
-        # frequency; R_2, L_sigma_r, Z, X_lr unchanged. Additive L_ew_H.
-        # (v3): the no-load quantities include L_ew as terminal values
-        # (I_no_load_rms_*, L_no_load_*; they were 2D-only while L_sigma_s
-        # carried L_ew, CREATOR ~−0.6 % current); identification drops the
-        # L_ew voltage so L_m is unchanged under linear iron; the
-        # saturated sweep targets I_int (as im_fem_harmonic v3).
-        # Locked-rotor lists unchanged.
+        # fixed point and the flat linear value otherwise; the
+        # locked-rotor lists stay linear in both cases. Multi-slice skew
+        # as on im_fem_harmonic; skew_model / n_skew_slices report it.
+        # Boldea stator end-winding leakage L_ew is added to the
+        # identified L_sigma_s after the IEEE-112 split (stator side;
+        # L_ew_H reports it); R_2, L_sigma_r, Z and X_lr do not carry it.
+        # The no-load quantities (I_no_load_rms_*, L_no_load_*) are
+        # terminal values including L_ew; identification drops the L_ew
+        # voltage so L_m is unaffected under linear iron; the saturated
+        # sweep targets I_int (as im_fem_harmonic).
         version=3,
         cost="slow",
         produces=frozenset({
@@ -821,11 +778,7 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
     "cogging_torque": ModelInfo(
         name="cogging_torque",
         source="computed",
-        # v1: rotor sweep at j_s=0 with Arkkio radial-averaging torque.
-        # RunConfig.rotation is an input-schema addition with an
-        # identity-preserving default (no fem version bump).
-        # (v2): PCHIP BH spline + Newton-default nonlinear solve
-        # (shared fem change); nonlinear outputs only.
+        # Rotor sweep at j_s=0 with Arkkio radial-averaging torque.
         version=2,
         cost="slow",
         produces=frozenset({
@@ -890,3 +843,121 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
         hash_fields=frozenset(),
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Trust metadata: headline (key -> native unit, in display order) and limits
+# ---------------------------------------------------------------------------
+# Units verified against the producing code. Conventions the unit strings
+# do not repeat: PM-machine currents, voltages and flux linkages are peak
+# per phase unless the key ends in _rms; induction-machine quantities are
+# rms per phase; speeds are mechanical rad/s. "1" = dimensionless (ratios
+# and fractions, not percent); "" = string or boolean.
+# Limits restate README "Scope and limitations", docs/validation-report.md,
+# or the entry's own comment above — no new claims.
+
+_LIM_2D = "two-dimensional field solution; 3D end effects are not included"
+_LIM_QUASI_3D = ("quasi-3D: several 2D planes; 3D effects are estimated "
+                 "only by separate offline studies")
+_LIM_PM_SAT = ("saturation enters only through a user-supplied [flux_map]; "
+               "no saturated inductance is predicted from geometry")
+_LIM_IM_SAT = ("saturation enters only through a user-supplied [induction] "
+               "L_m_vs_i table")
+_LIM_LOSSES = "AC winding losses and magnet eddy-current losses are not implemented"
+
+_TRUST: dict[str, tuple[dict[str, str], tuple[str, ...]]] = {
+    "analytical": (
+        {"fundamental": "T", "thd_pct": "%", "backemf_fundamental": "V",
+         "flux_linkage_peak": "Wb"},
+        ("two-dimensional field model; 3D end effects enter only through k_end",),
+    ),
+    "analytical_axial": (
+        {"fundamental": "T", "thd_pct": "%", "backemf_fundamental": "V",
+         "flux_linkage_peak": "Wb"},
+        (_LIM_QUASI_3D,),
+    ),
+    "fem": (
+        {"fundamental": "T", "thd_pct": "%", "b_iron_max": "T", "tau_maxwell": "N·m"},
+        (_LIM_2D,),
+    ),
+    "fem_axial": (
+        {"fundamental": "T", "thd_pct": "%", "backemf_fundamental": "V"},
+        (_LIM_QUASI_3D,),
+    ),
+    "cogging_torque": (
+        {"tau_cogging_pp_Nm": "N·m", "dominant_order": "1/rev"},
+        (_LIM_2D + "; skew is not modelled",),
+    ),
+    "demag_screen": (
+        {"margin": "T", "B_m_min": "T", "frac_below_knee": "1"},
+        (_LIM_2D,),
+    ),
+    "rated_torque": (
+        {"tau_mtpa": "N·m", "k_T": "N·m/A", "gamma_opt_deg": "deg"},
+        (_LIM_PM_SAT,),
+    ),
+    "stall_torque": (
+        {"tau_stall": "N·m", "I_stall": "A", "saturation_ratio": "1"},
+        (_LIM_PM_SAT,),
+    ),
+    "torque_speed": (
+        {"max:tau_curve_peak": "N·m", "p_max_peak": "W",
+         "base_speed_peak": "rad/s", "max_speed_peak": "rad/s"},
+        (_LIM_PM_SAT,),
+    ),
+    "operating_point": (
+        {"I_s_rms": "A", "pf": "1", "m_index": "1", "regime": ""},
+        (_LIM_PM_SAT,),
+    ),
+    "thermal_duty": (
+        {"within_s1": "", "winding_temp_peak": "°C", "over_budget_ratio": "1"},
+        (_LIM_LOSSES,),
+    ),
+    "motor_thermal": (
+        {"T_winding": "°C", "T_magnet": "°C", "binding_limit": "", "within_s1": ""},
+        (_LIM_PM_SAT, _LIM_LOSSES),
+    ),
+    "iron_loss": (
+        {"p_fe": "W", "loss_density_W_per_kg": "W/kg"},
+        ("stator-core loss only; on the CREATOR IM it under-predicts measured "
+         "no-load loss about 3.9×",),
+    ),
+    "drive_sim": (
+        {"t_settle": "s", "speed_droop": "1", "tau_peak": "N·m"},
+        (_LIM_PM_SAT,),
+    ),
+    "drive_sim_two_mass": (
+        {"t_settle": "s", "speed_droop": "1", "tau_peak": "N·m", "tau_S_peak": "N·m"},
+        (_LIM_PM_SAT,),
+    ),
+    "im_equivalent_circuit": (
+        {"tau": "N·m", "I_1_rms": "A", "pf": "1", "eta_circuit": "1"},
+        (_LIM_IM_SAT, "eta_circuit excludes friction and windage"),
+    ),
+    "im_fem_harmonic": (
+        {"tau": "N·m", "I_1_rms": "A", "pf": "1", "eta_circuit": "1"},
+        (_LIM_2D,),
+    ),
+    "im_torque_slip": (
+        {"tau_breakdown": "N·m", "tau_starting": "N·m", "slip_breakdown": "1",
+         "tau_rated": "N·m"},
+        (_LIM_IM_SAT, "breakdown point is sampled on a fixed 400-point slip grid"),
+    ),
+    "im_bar_impedance": (
+        {"R_2_dc": "Ω", "L_sigma_r_dc": "H"},
+        (_LIM_2D, "skew is not modelled; differential leakage is reported "
+                  "separately (L_sigma_r_diff)"),
+    ),
+    "im_fem_locked_rotor": (
+        {"I_no_load_rms_linear_iron": "A", "L_no_load_linear_iron": "H",
+         "phase_asymmetry_max": "1"},
+        (_LIM_2D, "the locked-rotor tables and the *_linear_iron no-load values "
+                  "always use linear iron; the latter are a diagnostic, not an "
+                  "L_m identification"),
+    ),
+}
+
+for _key, (_units, _limits) in _TRUST.items():
+    MODEL_REGISTRY[_key] = replace(
+        MODEL_REGISTRY[_key], headline=tuple(_units), units=_units, limits=_limits)
+del _key, _units, _limits

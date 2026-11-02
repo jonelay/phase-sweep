@@ -432,8 +432,8 @@ class TestCreatorGeometry:
              - rows["Rotor end ring inner diameter"]) / 2)
 
     @pytest.mark.slow
+    @requires_fem
     def test_cage_mesh_builds(self, motor):
-        pytest.importorskip("ngsolve")
         from ngsolve import CoefficientFunction, Integrate
 
         from phasesweep.solvers.fem_mesh import get_or_build_cage_mesh

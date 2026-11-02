@@ -74,6 +74,20 @@ CAPTURES_SKIP = "lab capture CSVs absent (not on the public release branch)"
 # The M-19 catalog table is CC BY-NC-SA, so the public release cites its
 # source instead of redistributing it; the fitted i3 coefficients still ship.
 M19_TABLE_SKIP = "M-19 core-loss table absent (not redistributed on the public release branch)"
+# The CREATOR paper transcriptions and the B_core calibration record sit under
+# the dataset's CC BY-NC-ND terms, so the public release does not ship them.
+CREATOR_RELEASE_SKIP = (
+    "CREATOR transcription absent (not redistributed on the public release branch)"
+)
+
+
+def creator_file(name: str) -> Path:
+    """Path to a data/creator_case_pmsm file the public release withholds;
+    skips the calling test when it is absent."""
+    path = REPO_ROOT / "data" / "creator_case_pmsm" / name
+    if not path.exists():
+        pytest.skip(CREATOR_RELEASE_SKIP)
+    return path
 # A browser is a developer-machine tool, not a repo file: the CI image ships
 # no Chromium, so the dashboard boot tests skip there by design. Put a
 # browser in the image (or set the Playwright cache) to make them run.
@@ -93,6 +107,7 @@ ALLOWED_SKIP_SUBSTRINGS = (
     CREATOR_IM_SKIP,
     CAPTURES_SKIP,
     M19_TABLE_SKIP,
+    CREATOR_RELEASE_SKIP,
     CHROMIUM_SKIP,
     FEM_SKIP,
 )

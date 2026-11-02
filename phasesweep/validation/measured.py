@@ -109,6 +109,9 @@ class CurveRef:
 class BoundRef:
     computed_key: str
     relation: Relation
+    # Why the bound holds or what a pass does not show; surfaced as the
+    # comparison row's note.
+    semantic_note: str = ""
 
     def __post_init__(self) -> None:
         if self.relation not in get_args(Relation):
@@ -117,11 +120,15 @@ class BoundRef:
                 f"got {self.relation!r}")
 
     def to_dict(self) -> dict[str, Any]:
-        return {"computed_key": self.computed_key, "relation": self.relation}
+        d: dict[str, Any] = {"computed_key": self.computed_key, "relation": self.relation}
+        if self.semantic_note:
+            d["semantic_note"] = self.semantic_note
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> BoundRef:
-        return cls(computed_key=d["computed_key"], relation=d["relation"])
+        return cls(computed_key=d["computed_key"], relation=d["relation"],
+                   semantic_note=d.get("semantic_note", ""))
 
 
 @dataclass(frozen=True)

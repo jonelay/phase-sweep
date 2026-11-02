@@ -58,7 +58,9 @@ CREATOR CRC-TRR361 (TU Graz):
   DOI 10.3217/kh3v7-dhn98  IM benchmark (CC BY-NC 4.0)
 
 These datasets are fetched on demand and excluded from the distributed
-wheel and sdist; only transcribed anchor parameters are committed.
+wheel and sdist; the public release ships only the motor parameters
+transcribed into `motors/creator_case_pmsm.toml` and
+`data/creator_case_im/creator_case_im.toml`.
 
 ## BMW i3 supplementary files (CC BY 4.0)
 

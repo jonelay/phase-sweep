@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import warnings
 from math import pi
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from phasesweep.defaults import COPPER_TEMP_COEFF
 from phasesweep.machines.geometry import AxialFluxGeometry, Geometry
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from phasesweep.machines.motor import Motor
 
 __all__ = [
+    "B_IRON_SATURATION_T",
     "MAGNET_REF_TEMP_C",
     "R_S_REF_TEMP_C",
     "backemf_from_flux",
@@ -68,6 +69,11 @@ R_S_REF_TEMP_C: float = 20.0
 # universal alpha, the magnet coefficient is grade-specific and lives on
 # Motor.alpha_Br.
 MAGNET_REF_TEMP_C: float = 20.0
+
+# Peak element-mean |B| in iron above which a field solve is flagged as
+# saturating: fem_field logs it, and phasesweep.trust escalates a
+# linear-iron fem result past it to a warning.
+B_IRON_SATURATION_T: float = 1.8
 
 
 def psi_f_at_magnet_temp(
@@ -465,6 +471,24 @@ def resolve_psi_f(motor: Motor) -> float:
         f"derive it from B_rem; missing for derivation: "
         f"{', '.join(_derivation_gaps(motor, 'B_rem'))}"
     )
+
+
+def nonlinear_required_reason(geo: Any) -> str | None:
+    """Why a FEM solve of *geo* must be nonlinear, or None if linear is allowed.
+
+    Inset interpole iron and bridge rings saturate by design; a linear
+    solve grossly overestimates the shunt flux through them. fem_field
+    raises this message, and the server rejects a linear submit with it.
+    """
+    if getattr(geo, "magnet_mount", None) == "inset":
+        return ("magnet_mount='inset' requires nonlinear=True: the interpole "
+                "iron (and bridge ring, when set) saturates by design — a "
+                "linear solve grossly overestimates the leakage shunt")
+    if getattr(geo, "bridge_thickness", None) is not None:
+        return ("bridge_thickness requires nonlinear=True: the iron bridge "
+                "ring saturates by design — a linear solve grossly "
+                "overestimates the shunt flux through it")
+    return None
 
 
 def _check_consistency(motor: Motor) -> None:

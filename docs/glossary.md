@@ -1,7 +1,7 @@
-# Glossary — Validation Report & Sensitivity Analysis
+# Glossary
 
-Terms, symbols, and abbreviations appearing in the phase-sweep validation
-report (`scripts/validation_report.py`) and supporting modules.
+Terms, symbols, and abbreviations used across phase-sweep's models,
+TOML fields, result keys, and validation report.
 
 ---
 
@@ -27,7 +27,7 @@ covered under [Thermal](#thermal).
 
 ## Motor Types
 
-| Term | Meaning | Verified against |
+| Term | Meaning | Source / mapping |
 |------|---------|-----------------|
 | PMSM | Permanent Magnet Synchronous Machine | — |
 | SPMSM | Surface-mounted PMSM (non-salient: L_d ≈ L_q) | Zhu & Howe: surface-mounted assumed throughout |
@@ -37,9 +37,6 @@ covered under [Thermal](#thermal).
 | Outrunner | Stator inside rotor (e.g. Belkhadir 22p/24s) | Zhu Fig 1(b): "External rotor" |
 | FSCW | Fractional-Slot Concentrated Winding | — (Zhu §IV covers nonoverlapping windings) |
 | SCIM / IM | Squirrel-Cage Induction Machine (`[induction]` TOML section; `motor.induction is not None`) | CREATOR IM anchor (`data/creator_case_im/`) |
-
-> **Zhu disambiguation:** Zhu calls these "internal rotor" and "external rotor."
-> We use the more common "inrunner"/"outrunner" terminology.
 
 ## Geometry
 
@@ -70,23 +67,20 @@ covered under [Thermal](#thermal).
 > narrower than 0.5 mm raises `ValueError` (`fem_field.solve_field_fem`);
 > pass `alpha_p = 1.0` for a full ring.
 
-> **Key collision (resolved):** Zhu's R_s (stator bore radius) ≠ motulator's R_s
-> (stator winding resistance). Our `r_stator` sidesteps this.
-
 > **Outrunner radius ordering** flips: r_outer > r_rotor > r_magnet > r_stator > r_inner.
 > The names stay the same — r_stator is always the bore, r_magnet always the PM/air
-> boundary — but their geometric relationship reverses. Code enforces this in `Geometry.__post_init__`.
+> boundary — but their geometric relationship reverses.
 
 ## Magnetic & Material Properties
 
 | Symbol | Units | Meaning | Zhu / motulator mapping |
 |--------|-------|---------|------------------------|
-| B_rem | T | Permanent magnet remanence | Zhu: B_r (Eq 2, 7a). We use B_rem to avoid collision with B_r(θ) waveform. |
-| psi_f (ψ_f) | Vs (Wb) | PM flux linkage per phase (peak value) | motulator: `psi_f` on SynchronousMachinePars ✓ |
-| mu_r_pm (μ_r,pm) | — | Relative recoil permeability of magnet | Zhu: μ_r (Eq 1b, assumed constant) ✓ |
+| B_rem | T | Permanent magnet remanence | Zhu: B_r (Eq 2, 7a); `B_rem` avoids collision with the B_r(θ) waveform |
+| psi_f (ψ_f) | Vs (Wb) | PM flux linkage per phase (peak value) | motulator: `psi_f` on SynchronousMachinePars |
+| mu_r_pm (μ_r,pm) | — | Relative recoil permeability of magnet | Zhu: μ_r (Eq 1b, assumed constant) |
 | mu_r_fe (μ_r,fe) | — | Relative permeability of stator/rotor iron | Zhu: assumes μ_r,fe → ∞ (Eq 11a–b); our FEM relaxes this |
-| MU0 (μ₀) | H/m | Permeability of free space (4π × 10⁻⁷) | Zhu: μ₀ (Eq 1a) ✓ |
-| n_p | — | Number of pole pairs | Zhu: p (Eq 6a). motulator: `n_p` ✓ |
+| MU0 (μ₀) | H/m | Permeability of free space (4π × 10⁻⁷) | Zhu: μ₀ (Eq 1a) |
+| n_p | — | Number of pole pairs | Zhu: p (Eq 6a); motulator: `n_p` |
 
 > **Zhu assumes infinite iron permeability** (boundary conditions Eq 11a–b impose
 > H_θ = 0 at iron surfaces). Our FEM solver relaxes this via finite mu_r_fe and
@@ -119,7 +113,7 @@ covered under [Thermal](#thermal).
 |--------|-------|---------|
 | τ_rated (tau_rated) | N·m | Rated torque: MTPA torque at I_rated (metric key: `tau_mtpa`) |
 | τ_stall (tau_stall) | N·m | Stall torque: MTPA torque at I_stall (drive-limited peak current) |
-| saturation_ratio | — | I_stall / I_rated — how far beyond rated the stall current is |
+| saturation_ratio | — | I_stall / I_rated: how far beyond rated the stall current is |
 | saturation_warning | — | Boolean flag: true when saturation_ratio > 3.0 and linear model is unreliable |
 | k_T | N·m/A_peak | Torque constant = 1.5 × n_p × ψ_f (peak current convention) |
 | k_T_rms | N·m/A_rms | RMS torque constant = k_T × √2 |
@@ -143,7 +137,7 @@ covered under [Thermal](#thermal).
 | pf | — | `operating_point`: power factor cos∠(u, i); `None` at zero current |
 | regime | — | `operating_point`: `"mtpa"` (voltage-feasible MTPA point) or `"field_weakening"` |
 | op_source | — | `operating_point`: `"flux_map"` or `"analytical"` (constant-L) surface used |
-| R_s_op / psi_f_op | Ω, Wb | `operating_point`: resistance and PM flux at the temperatures the solve used — its `winding_temp` argument (the motor's winding_temp_limit by default) and magnet_temp, or the node temperatures when `motor_thermal` drives the solve |
+| R_s_op / psi_f_op | Ω, Wb | `operating_point`: resistance and PM flux at the temperatures the solve used: its `winding_temp` argument (the motor's winding_temp_limit by default) and magnet_temp, or the node temperatures when `motor_thermal` drives the solve |
 | p_cu / p_shaft / p_elec | W | `operating_point`: copper loss 1.5·R_s_op·I_s², shaft power tau·w_mech, their sum (no iron loss) |
 | psi_d / psi_q | Wb_peak | `operating_point`: dq flux linkages the voltages were built from (constant-L or map) |
 
@@ -191,13 +185,13 @@ resistance, continuous loss budget and first-order transient) and
 | Continuous power | SAE J2907: maximum power held for 30 min | Not S1. A rating labeled "continuous" should name which definition it uses |
 | Peak power | SAE J2907 maximum (net) power; manufacturers state a duration (BMW i3: 125 kW for at most 30 s) | A short-time capability; unrelated to peak amplitude |
 | Derating | Automotive: the controller reduces power when a temperature limit is approached ("power reduction") | Not modeled. `solver_params.derate` is a different sense: the temperature correction of R_s and ψ_f |
-| Thermal runaway | Loss rises with temperature faster than heat removal; no steady state exists | `motor_thermal` raises `ThermalRunaway` (growing residual, or an iterate outside the derating range), beside `InfeasibleDemand` (the demand leaves the envelope) and `NoConvergence` (budget exhausted). The types are diagnostic: only `InfeasibleDemand` with `at_coolant` says the demand itself is infeasible; any later failure means no fixed point was found on the climb. None is a limit exceedance, which is reported as negative headroom |
+| Thermal runaway | Loss rises with temperature faster than heat removal; no steady state exists | `motor_thermal` raises `ThermalRunaway`, `InfeasibleDemand` or `NoConvergence`; a limit exceedance is not an error but negative headroom |
 | Losses / heat source | Motor design / FEM and thermal-network tools | `p_cu`, `p_fe` are the heat sources of the winding and iron nodes |
 
 ## Induction-Machine Circuit Tier (im_* models)
 
 Per-phase RMS convention — every output is suffixed `_rms` or is a
-per-phase power/torque; deliberately not the PM tier's peak convention.
+per-phase power/torque, not the PM tier's peak convention.
 
 | Symbol | Units | Meaning |
 |--------|-------|---------|
@@ -208,7 +202,7 @@ per-phase power/torque; deliberately not the PM tier's peak convention.
 | tau_breakdown / slip_breakdown | N·m / — | Swept curve maximum (deep-bar-aware); `_thevenin` variants are the constant-parameter closed form |
 | tau_starting / I_locked_rotor_rms | N·m / A rms | s = 1 point of the sweep |
 | p_ag / p_cu_s / p_cu_r / p_mech | W | Air-gap power, stator/rotor copper loss (p_cu_r = s·p_ag), gross mechanical power |
-| eta_circuit | — | p_mech / p_in — CIRCUIT losses only (no iron, friction, windage; documented over-estimate) |
+| eta_circuit | — | p_mech / p_in: circuit losses only (no iron, friction, windage; documented over-estimate) |
 
 ## Drive Simulation
 
@@ -216,19 +210,19 @@ per-phase power/torque; deliberately not the PM tier's peak convention.
 |--------|-------|---------|---------------------|
 | W_REF | rad/s | Motor reference speed (**mechanical**) | — (our convention; TOML comments confirm "rpm mechanical") |
 | U_DC | V | DC bus voltage | `u_dc` on VoltageSourceConverter (lowercase in motulator) |
-| MAX_I_S | A_peak | Maximum stator current | `i_s_max` on CurrentVectorControllerCfg ✓ |
+| MAX_I_S | A_peak | Maximum stator current | `i_s_max` on CurrentVectorControllerCfg |
 | tau_peak | N·m | Peak torque during acceleration transient | — (extracted from tau_M time series) |
 | i_ss | A_peak | Steady-state stator current magnitude | — (extracted from |i_s_ab| time series) |
 | speed_droop | — | Fractional speed dip after load step (w_dip / w_ref) | — |
 | t_settle | s | Time from speed step to within 5% of target | — |
-| w_M | rad/s | Mechanical rotor speed | motulator: `w_M` on MechanicalSystem ✓ |
+| w_M | rad/s | Mechanical rotor speed | motulator: `w_M` on MechanicalSystem |
 | w_m | rad/s | Electrical rotor speed = w_M × n_p | motulator: local `w_m = par.n_p * inp.w_M` in rhs() |
-| tau_M | N·m | Electromagnetic torque | motulator: `tau_M` ✓ |
-| i_s_ab | A (complex) | Stator current in αβ frame (peak) | motulator: `i_s_ab` ✓ |
-| J | kg·m² | Moment of inertia | motulator: `J` on MechanicalSystem ✓ |
+| tau_M | N·m | Electromagnetic torque | motulator: `tau_M` |
+| i_s_ab | A (complex) | Stator current in αβ frame (peak) | motulator: `i_s_ab` |
+| J | kg·m² | Moment of inertia | motulator: `J` on MechanicalSystem |
 
 > **backemf_fundamental:** mechanical speed is converted to electrical
-> speed before applying `E = ω_e × ψ_f`. Numerical validation results live
+> speed before applying `E = ω_e × ψ_f`. Numerical comparisons are
 > in the validation report.
 
 ## Winding Parameters
@@ -239,7 +233,7 @@ per-phase power/torque; deliberately not the PM tier's peak convention.
 | N_eff | — | Effective series turns per phase = N × coils_series | Zhu: W (Table I: "Series turns/phase") |
 | k_w | — | Winding factor (= k_d × k_p in general) | Zhu: K_dpν (Eq 22, combined distribution × pitch factor) |
 | coils_series | — | Coils in series per phase (required explicitly when N/k_w are set; no auto-derivation) | — |
-| R_s | Ω | Stator winding resistance | motulator: `R_s` on SynchronousMachinePars ✓ |
+| R_s | Ω | Stator winding resistance | motulator: `R_s` on SynchronousMachinePars |
 | backemf_fundamental | V | Fundamental back-EMF (peak) = ω_e × ψ_f | — |
 | k_end | — | 3D axial end-effect factor on B_rem-derived flux linkage; computed offline by `scripts/compute_k_end.py` (never applied to a measured ψ_f). Bounds are documented in the motor TOML guide | — |
 
@@ -323,7 +317,9 @@ per-phase power/torque; deliberately not the PM tier's peak convention.
 
 | Term | Meaning |
 |------|---------|
-| cross-validation | Comparing model outputs against measured/published data or each other |
+| cross-validation | Umbrella for the comparison machinery (`phasesweep.validation.crossval`, `phasesweep-crossval`, `tests/crossval/`). Covers the two kinds below, which carry different evidence |
+| validation (against data) | Computed result compared with a measured or published record. Only this kind can yield the verdict "validated", and only with a two-sided (delta or curve) row; bound-only passes read "within bounds only" |
+| model agreement | Two computed results compared with each other (e.g. analytical vs FEM, linear vs nonlinear FEM). Agreement shows consistency, not correctness; verdicts are "models agree" / "models disagree" |
 | ComparisonRow | Single quantity comparison (quantity, values, delta, tolerance, pass/fail) |
 | compare_results | Pairwise comparison function → list of ComparisonRow |
 | compare_all | All-pairs comparison across multiple results |
@@ -347,12 +343,8 @@ glossary.
 
 ## Reference Motors
 
-| Name | Topology | Poles/Slots | n_p | Key validation |
-|------|----------|-------------|-----|----------------|
-| CREATOR Case PMSM | Inrunner | 4p/6s | 2 | Inset-magnet FEM and circuit-tier validation |
-| Belkhadir 22p/24s ER-PMSM | Outrunner | 22p/24s | 11 | Analytical/FEM air-gap-field validation |
-| Awan 2.2-kW IPM | Inrunner (salient) | 6p | 3 | Torque curve, MTPA angle |
-| Zhu & Howe 8-pole | Both | 8p/smooth | 4 | Paper reference geometry (analytical verification) |
+The reference motors, their sources, and the quantities compared are listed
+in the [validation report](validation-report.md).
 
 ## Data & Result Types
 
@@ -364,6 +356,22 @@ glossary.
 | ResultStore | JSONL persistence layer for computed results |
 | config_id | Three-tier hash: Geometry.config_id (geometry fields) → Motor.config_id (geometry.config_id + electrical/material fields) → RunConfig.config_id |
 | run_id | Hash of config_id + model + solver-specific hash_fields |
+
+## Agent Access (MCP)
+
+Tool reference and usage: [mcp.md](mcp.md).
+
+| Term | Meaning |
+|------|---------|
+| MCP | Model Context Protocol; `phasesweep-server` serves it at `/mcp` for AI agents |
+| headline | The 2–5 outputs that summarize one result (`ModelInfo.headline`), each with its stored unit |
+| caveat | `{code, severity, text, basis}` derived at read time from a result's provenance outputs; `basis` names the triggering output |
+| info / warn | Caveat severities; warn means the headline is likely optimistic and should be reported with the caveat |
+| limits | Model-inherent omissions (`ModelInfo.limits`), reported as `limits` info caveats on every OK result |
+| applicability | Whether a model's input validation passes on a given motor (`list_models(motor=)`), with the reason when it does not |
+| dry run | `submit_job(dry_run=True)`: the job's sub-task and cached counts and a run-time estimate, with nothing queued |
+| sweep table | A sweep job read as rows of swept dimensions × headline metrics (`sweep_table`) |
+| Agent tab | Dashboard tab showing the agent's design-space plot, tool calls, and finished jobs |
 
 ## Report Sections
 

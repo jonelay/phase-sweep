@@ -22,7 +22,7 @@
         "tau_rated": {
             "computed_key": "tau_stall",
             "relation": "gte",
-            "semantic_note": "Computed MTPA at MAX_I_S (250 A peak) should reach or exceed the ORNL dynamometer measurement (340 Nm at 250 A DC locked-rotor). The linear model over-predicts by ~166% at this current (constant L_q at 3.55 mH vs saturated ~2.5 mH), so the bound passes by a wide margin — the over-prediction is a documented saturation limitation, not a validation success. ORNL quote: 'A current amplitude of 250A produces about 340 Nm'."
+            "semantic_note": "Computed MTPA at MAX_I_S (250 A peak) should reach or exceed the ORNL dynamometer measurement (340 Nm at 250 A DC locked-rotor). The linear model over-predicts by ~166% at this current (constant L_q at 6.15 mH vs ~3 mH saturated at peak current, Kuptsov Fig. 5), so the bound passes by a wide margin — the over-prediction is a documented saturation limitation, not a validation success. ORNL quote: 'A current amplitude of 250A produces about 340 Nm'."
         }
     }
 }

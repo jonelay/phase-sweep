@@ -209,6 +209,24 @@ class TestDiagnose:
                     metrics={"backemf_fundamental": 101.0})
         assert diagnose([a, b, m]) == "validated"
 
+    def test_bounds_only_is_not_validated(self):
+        """A passing one-sided bound is not validation: 905 N·m >= 340 N·m
+        holds because the model over-predicts."""
+        c = _result(model="stall_torque", metrics={"tau_stall": 904.5})
+        m = _result(model="torque_test", source="published", metrics={
+            "tau_rated": 340.0, "_bound_compare": {"tau_rated": {
+                "computed_key": "tau_stall", "relation": "gte"}}})
+        assert diagnose([c, m]).startswith("within bounds only")
+
+    def test_bound_plus_delta_is_validated(self):
+        c = _result(model="stall_torque",
+                    metrics={"tau_stall": 904.5, "k_T_effective": 3.6})
+        m = _result(model="torque_test", source="published", metrics={
+            "tau_rated": 340.0, "k_T_effective": 3.62,
+            "_bound_compare": {"tau_rated": {
+                "computed_key": "tau_stall", "relation": "gte"}}})
+        assert diagnose([c, m]) == "validated"
+
     def test_models_agree_measured_disagrees(self):
         a = _result(model="analytical", metrics={"backemf_fundamental": 100.0})
         b = _result(model="fem", metrics={"backemf_fundamental": 100.5})
@@ -300,6 +318,21 @@ class TestPerDatasetTolerances:
 # ---------------------------------------------------------------------------
 
 class TestBoundCompare:
+
+    def test_bound_row_carries_semantic_note(self):
+        """The anchor's semantic_note reaches the row: a bound can pass by
+        a wide margin for a known-wrong reason, and the row must say so."""
+        note = "passes only because constant L_q over-predicts torque"
+        measured = _result(
+            model="torque_test", source="published",
+            metrics={"tau_rated": 340.0, "_bound_compare": {"tau_rated": {
+                "computed_key": "tau_stall", "relation": "gte",
+                "semantic_note": note}}},
+        )
+        computed = _result(model="stall_torque", metrics={"tau_stall": 904.5})
+        (row,) = [r for r in compare_results(measured, computed)
+                  if r.comparison_type == "bound"]
+        assert row.passed and row.note == note
 
     def test_bound_gte_passes(self):
         measured = _result(

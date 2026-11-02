@@ -9,7 +9,52 @@ stated development host at release time; they are not test-pinned and will
 vary. Accuracy figures marked "measured, not pinned" were likewise observed
 at release; the tests gate looser committed thresholds, not these values.
 
-## [Unreleased]
+## [0.7.0] - 2026-11-01
+
+No model versions change.
+
+### Added
+- **MCP endpoint**. `phasesweep-server` serves MCP tools at
+  `/mcp` over its job manager and result store; the dashboard's Agent tab
+  shows each request live.
+- **Result headline and caveats**. `ModelInfo` gains
+  `headline`, `units`, and `limits`; `phasesweep.trust` derives
+  `info`/`warn` caveats from provenance outputs the models already emit
+  (e.g. `torque_speed` `envelope_source = "analytical"` → constant-L
+  envelope warning). MCP `get_result` leads with headline and caveats and
+  takes `fields=`; terminal jobs from `get_job`/`submit_job` list
+  per-result headlines and caveat codes; the Agent tab logs how each
+  agent job ended. Read-time only: stored records gain them without a
+  recompute.
+- **Sweep planning and reads for agents**. `submit_job`
+  takes `dry_run=True` (sub-task and cached counts, wall-time estimate
+  from stored run times); the server caps sweep grids
+  (`--max-sweep-points`, default 500); the `sweep_table` MCP tool reads a
+  sweep, running or finished, as swept dimensions × headline metrics.
+  The Agent tab gains a design-space plot of the agent's designs on two
+  chosen quantities, joined in exploration order.
+- **Model applicability per motor**. `list_models(motor=)`
+  (MCP) and `GET /api/models?motor=` report for each model whether it
+  applies to that motor, which required params you must pass, and why
+  not, from the model's own validation. `needs_params` now lists required
+  params only; defaulted ones (`fem` `rotation`, `cogging_torque`
+  `cogging_points`) move to `optional_params`.
+- `fem` results with linear iron (`nonlinear=false`) whose `b_iron_max`
+  exceeds 1.8 T carry a **warn** caveat rather than info: the field
+  solution there is optimistic.
+- MCP `get_job(wait_s=)` (0–60 s) holds the call until the job finishes,
+  replacing a polling loop.
+
+### Changed
+- Server single and validate `fem` jobs default to nonlinear, as sweeps
+  do; bare `fem` submits get new run IDs (cached linear results keep
+  theirs). A linear solve of an inset or bridged rotor is a 400 at
+  submit, and `list_models(motor=)` lists `nonlinear` in `missing_params`
+  for the other FEM models on those rotors.
+- The release no longer ships the CREATOR PMSM transcriptions
+  (`reference_scalars.json`, `mtpa_angles.json`, `torque_rated.json`) or
+  the `B_core` calibration record, which fall under the dataset's
+  CC BY-NC-ND terms; the tests that read them skip when they are absent.
 
 ## [0.6.0] - 2026-10-31
 

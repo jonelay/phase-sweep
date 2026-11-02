@@ -21,13 +21,17 @@ from phasesweep._view_sweep_server import FiniteJSONResponse
 from phasesweep.machines.configs import motor_from_dict
 from phasesweep.registry import MODEL_REGISTRY
 from phasesweep.result_store import _row_run_id, record_is_current
-from phasesweep.server.jobs import JobManager
+from phasesweep.server.jobs import JobManager, designs
 from phasesweep.sweep_types import resolve_model
 from phasesweep.validation.measured import MeasuredResult, measured_run_result, validate_measured
 
 __all__ = [
     "api",
     "cancel_job",
+    "config_detail",
+    "config_raw",
+    "config_summary",
+    "find_result",
     "get_config",
     "get_config_raw",
     "get_job",
@@ -38,9 +42,13 @@ __all__ = [
     "list_jobs",
     "list_models",
     "list_results",
+    "mcp_activity",
+    "mcp_designs",
     "model_defaults",
     "put_config",
+    "result_index",
     "submit_job",
+    "submittable_models",
 ]
 
 log = structlog.get_logger()
@@ -111,7 +119,17 @@ async def list_results(
     source: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    manager = _manager(request)
+    return result_index(_manager(request), motor=motor,
+                        motor_config_id=motor_config_id, model=model,
+                        source=source, limit=limit)
+
+
+def result_index(
+    manager: JobManager, *, motor: str | None = None,
+    motor_config_id: str | None = None, model: str | None = None,
+    source: str | None = None, limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Slim index of current stored results, most recent `limit` last."""
     m = None
     if motor is not None:
         m = manager.motors.get(motor)
@@ -140,8 +158,13 @@ async def list_results(
 
 @api.get("/results/{result_id}")
 async def get_result(request: Request, result_id: str) -> dict[str, Any]:
+    return find_result(_manager(request), result_id)
+
+
+def find_result(manager: JobManager, result_id: str) -> dict[str, Any]:
+    """The current stored record for a run id; 404 if none."""
     found: dict[str, Any] | None = None
-    for d in _manager(request).store.load_all():
+    for d in manager.store.load_all():
         if _row_run_id(d) != result_id:
             continue
         # Same staleness filter as load_slim — this scan bypasses it,
@@ -172,25 +195,134 @@ async def get_validation(request: Request, motor_name: str) -> dict[str, Any]:
     return manager.validation_summary(motor_name)
 
 
-# -- job-type vocabulary ----------------------------------------
+# -- MCP agent monitor ----------------------------------------------------------
+
+@api.get("/mcp/activity")
+async def mcp_activity(request: Request, since: int = 0) -> dict[str, Any]:
+    """MCP requests recorded after `since` (the dashboard's agent monitor
+    polls this). A changed `boot` means the server restarted and the
+    caller's cursor no longer applies."""
+    activity = request.app.state.mcp_activity
+    out: dict[str, Any] = activity.since(since)
+    return out
+
+
+@api.get("/mcp/designs")
+async def mcp_designs(request: Request, version: str | None = None) -> dict[str, Any]:
+    """Designs the MCP agent's jobs have produced (jobs.designs), for the
+    Agent tab's design-space plot. When `version` matches the current
+    one, `designs` is null: the caller's copy is up to date."""
+    out = designs(_manager(request).jobs)
+    if version == out["version"]:
+        return {"version": version, "designs": None}
+    return out
+
+
+# -- job-type vocabulary -------------------------------------------------------
 
 @api.get("/models")
-async def list_models() -> list[dict[str, Any]]:
+async def list_models(request: Request, motor: str | None = None) -> list[dict[str, Any]]:
     """Submittable job types: computed registry keys plus the multi-point
-    orchestrations. Feeds the dashboard submit form."""
-    from phasesweep.server.jobs import _PARAM_GATED_FIELDS, server_unsettable
+    orchestrations. Feeds the dashboard submit form.
+    `motor` adds per-model applicability to that config."""
+    m = None
+    if motor is not None:
+        m = _manager(request).motors.get(motor)
+        if m is None:
+            raise HTTPException(404, f"unknown motor config {motor!r}")
+    return submittable_models(m)
+
+
+def _strip_motor_prefix(msg: str, motor: Any) -> str:
+    """Validate errors start with "Motor '<name>': "; the caller named it."""
+    return msg.removeprefix(f"Motor {motor.name!r}: ")
+
+
+def _applicability(key: str, info: Any, needs: list[str], motor: Any) -> dict[str, Any]:
+    """Whether `key` can run on `motor` as submitted with no params:
+    `applicable` (the model's validate passes), `missing_params` (needed
+    params the server cannot derive for this motor), and `reason` when
+    either blocks a bare submit."""
+    from phasesweep.server.jobs import derive_model_defaults
+
+    if info.validate is not None:
+        try:
+            info.validate(motor)
+        except ValueError as e:
+            return {"applicable": False, "missing_params": [],
+                    "reason": _strip_motor_prefix(str(e), motor)}
+    try:
+        derived = set(derive_model_defaults(motor, key))
+        reason = None
+    except ValueError as e:
+        derived, reason = set(), _strip_motor_prefix(str(e), motor)
+    # sim_plan for the two-mass sim derives from load_mech at submit.
+    if key == "drive_sim_two_mass":
+        derived.add("sim_plan")
+    missing = [p for p in needs if p not in derived]
+    if missing and reason is None:
+        reason = f"pass params {missing}; the server cannot derive them"
+    # fem defaults to nonlinear at submit; the others default linear,
+    # which this rotor rejects (jobs._fem_config_kw).
+    if key != "fem" and "nonlinear" in info.hash_fields:
+        from phasesweep.solver_params import nonlinear_required_reason
+        nl_reason = nonlinear_required_reason(motor.geometry)
+        if nl_reason is not None:
+            missing.append("nonlinear")
+            reason = reason or f"pass params.nonlinear=true ({nl_reason})"
+    return {"applicable": True, "missing_params": missing, "reason": reason}
+
+
+def submittable_models(motor: Any = None) -> list[dict[str, Any]]:
+    """Each submittable model with `needs_params` (params the run requires;
+    the server derives some per motor, see model_defaults) and
+    `optional_params` (accepted, with a default). With `motor`, each entry
+    also carries `applicable`, `missing_params`, and `reason` for it."""
+    from phasesweep.server.jobs import (
+        _CONFIG_PARAM_KEYS,
+        _PARAM_GATED_FIELDS,
+        server_unsettable,
+    )
 
     items: list[dict[str, Any]] = []
     for key, info in MODEL_REGISTRY.items():
         if info.source != "computed" or info.fn is None or server_unsettable(info):
             continue
         d: dict[str, Any] = {"key": key, "cost": info.cost, "kind": "single"}
-        gates = sorted(info.hash_fields & _PARAM_GATED_FIELDS)
-        if gates:
-            d["needs_params"] = gates
+        needs = sorted(info.needs_runtime & _CONFIG_PARAM_KEYS)
+        optional = sorted((info.hash_fields & _PARAM_GATED_FIELDS) - set(needs))
+        if needs:
+            d["needs_params"] = needs
+        if optional:
+            d["optional_params"] = optional
+        if motor is not None:
+            d.update(_applicability(key, info, needs, motor))
         items.append(d)
-    items.append({"key": "sweep", "cost": "varies", "kind": "multi"})
-    items.append({"key": "validate", "cost": "varies", "kind": "multi"})
+    sweep: dict[str, Any] = {"key": "sweep", "cost": "varies", "kind": "multi",
+                             "needs_params": ["axes"], "optional_params": ["model_keys"]}
+    validate: dict[str, Any] = {"key": "validate", "cost": "varies", "kind": "multi",
+                                "optional_params": ["models"]}
+    if motor is not None:
+        from phasesweep.machines.geometry import Geometry
+
+        radial = isinstance(motor.geometry, Geometry)
+        sweep.update(
+            applicable=radial, missing_params=["axes"] if radial else [],
+            reason="pass params.axes" if radial
+            else "sweep needs a radial-flux [geometry] section")
+        # Mirrors the default set in JobManager._validate_subtasks: fast,
+        # applicable, and taking no per-run params (derivable or not).
+        default = [d["key"] for d in items
+                   if d["applicable"] and d["cost"] != "slow"
+                   and not d.get("needs_params") and not d.get("optional_params")]
+        validate.update(
+            applicable=bool(default), missing_params=[],
+            reason=None if default else "no fast model runs on this motor as-is; "
+            "pass params.models")
+        if default:
+            validate["default_models"] = default
+    items.append(sweep)
+    items.append(validate)
     return items
 
 
@@ -238,7 +370,11 @@ def _geometry_topology(geo: Any) -> str | None:
 
 
 def _config_summary(request: Request, name: str) -> dict[str, Any]:
-    m = _manager(request).motors[name]
+    return config_summary(_manager(request), _user_names(request), name)
+
+
+def config_summary(manager: JobManager, user_names: set[str], name: str) -> dict[str, Any]:
+    m = manager.motors[name]
     return {
         "name": name,
         "motor_name": m.name,
@@ -246,13 +382,12 @@ def _config_summary(request: Request, name: str) -> dict[str, Any]:
         "n_p": m.n_p,
         "topology": _geometry_topology(m.geometry),
         "has_geometry": m.geometry is not None,
-        "editable": name in _user_names(request),
+        "editable": name in user_names,
     }
 
 
-def _config_path(request: Request, name: str) -> Path:
-    settings = request.app.state.settings
-    base = (settings.user_configs_dir if name in _user_names(request)
+def _config_path(settings: Any, user_names: set[str], name: str) -> Path:
+    base = (settings.user_configs_dir if name in user_names
             else settings.motors_dir)
     return Path(base) / f"{name}.toml"
 
@@ -265,26 +400,37 @@ async def list_configs(request: Request) -> list[dict[str, Any]]:
 
 @api.get("/configs/{name}")
 async def get_config(request: Request, name: str) -> dict[str, Any]:
-    m = _manager(request).motors.get(name)
+    return config_detail(_manager(request), _user_names(request), name)
+
+
+def config_detail(manager: JobManager, user_names: set[str], name: str) -> dict[str, Any]:
+    m = manager.motors.get(name)
     if m is None:
         raise HTTPException(404, f"unknown motor config {name!r}")
     return {"name": name, "motor_config_id": m.config_id, "motor": m.to_dict(),
-            "editable": name in _user_names(request)}
+            "editable": name in user_names}
 
 
 @api.get("/configs/{name}/raw")
 async def get_config_raw(request: Request, name: str) -> dict[str, Any]:
     """The parsed TOML structure, section layout intact — what the config
     editor round-trips through PUT."""
-    if name not in _manager(request).motors:
+    return config_raw(_manager(request), request.app.state.settings,
+                      _user_names(request), name)
+
+
+def config_raw(
+    manager: JobManager, settings: Any, user_names: set[str], name: str,
+) -> dict[str, Any]:
+    if name not in manager.motors:
         raise HTTPException(404, f"unknown motor config {name!r}")
-    path = _config_path(request, name)
+    path = _config_path(settings, user_names, name)
     try:
         with open(path, "rb") as f:
             raw = tomllib.load(f)
     except FileNotFoundError:
         raise HTTPException(404, f"config file for {name!r} no longer exists") from None
-    return {"name": name, "editable": name in _user_names(request), "raw": raw}
+    return {"name": name, "editable": name in user_names, "raw": raw}
 
 
 @api.put("/configs/{name}")

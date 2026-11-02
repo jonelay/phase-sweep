@@ -1,4 +1,4 @@
-"""phasesweep — PMSM air-gap flux density and drive simulation.
+"""phasesweep — motor design sweeps: analytical, FEM, and drive models.
 
 Public API: motor/geometry types, TOML loaders, validated solver-param
 factories, the model registry, and run/result types. The dict shape of
@@ -32,7 +32,7 @@ from phasesweep.solvers.analytical import AnalyticalParams, prepare_analytical
 from phasesweep.solvers.fem_runner import FemParams, prepare_fem
 from phasesweep.sweep_types import RunConfig, RunResult, compute_run_id
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 _DEBUG_DEPS = ("numpy", "scipy", "ngsolve", "motulator", "matplotlib", "fastapi", "cupy")
 

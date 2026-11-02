@@ -8,11 +8,9 @@ and `slot_opening_ratio` → `slot_opening_width`.
 
 Only `[circuit] n_p` is required; `name` defaults to the filename stem.
 `[geometry]` is optional: datasheet/circuit-only motors omit it and run
-the circuit-tier models (rated/stall torque, torque_speed, drive_sim,
-thermal_duty, iron_loss); the field solvers require it. Everything else
-is optional too — a missing field means "not yet measured/specified",
-and the `prepare_*` solver factories raise a ValueError naming the
-missing fields when a solver actually needs them.
+the circuit-tier models; the field solvers require it. Other fields can be
+omitted until a model needs them: the `prepare_*` solver factories raise a
+ValueError naming missing inputs.
 
 ## Sections
 
@@ -48,30 +46,30 @@ Spec names (preferred):
 | `r_rotor` | m | Rotor iron behind magnets |
 | `r_inner` | m | Shaft OD / hollow-center ID (default 0.0; must be > 0 for outrunner) |
 | `r_ag` | m | Airgap sampling radius (default: mid-gap) |
-| `L_stk` | m | Stack axial length (maps to `Motor.L_stk`) |
+| `L_stk` | m | Stack axial length |
 | `n_slots` | — | Slot count (0 = smooth bore) |
 | `slot_depth` | m | Radial slot depth (legacy alias: `slot_height`) |
 | `slot_width_ratio` | — | Slot body width / slot pitch (default 0.6) |
 | `slot_opening_width` | m | Slot throat width at the bore (Carter input) |
 | `slot_opening_ratio` | — | Convenience: converted to width via slot pitch at the bore; width wins if both given |
-| `alpha_p` | — | Magnet pole-arc / pole-pitch ratio, (0, 1] (maps to `Motor.alpha_p`, default 1.0; a PM rotor without it loads with a warning) |
-| `magnetization` | — | `"radial"` (default) or `"halbach"` — magnetization pattern. Halbach requires `alpha_p = 1.0` |
-| `halbach_segments` | — | Segments per pole (κ_m) for Halbach arrays. Required when `magnetization = "halbach"` |
+| `alpha_p` | — | Magnet pole-arc / pole-pitch ratio, (0, 1] (default 1.0; a PM rotor without it loads with a warning) |
+| `magnetization` | — | `"radial"` (default) or `"halbach"`. Halbach requires `alpha_p = 1.0` |
+| `halbach_segments` | — | Segments per pole (κ_m). Required when `magnetization = "halbach"` |
 | `halbach_angles_deg` | deg | Per-segment local magnetization angles (length = `halbach_segments`). Omit for the ideal Halbach rule |
-| `back_iron_thickness` | m | **Outrunner only** — magnetic back-iron ring inside the rotor wall, splitting it into ring + non-magnetic shell. Must be in (0, wall thickness); setting it on an inrunner raises |
-| `magnet_mount` | — | `"surface"` (default, interpole gaps are air) or `"inset"` (magnets recessed in the rotor; interpole gaps are rotor iron). FEM only, requires `alpha_p < 1` and `nonlinear = true`; the analytical solver rejects inset rotors, and psi_f/B_rem must both be explicit (the radial derivation ignores the interpole iron shunt) |
-| `bridge_thickness` | m | Iron bridge ring between the magnet faces and the airgap (retaining ring cut from the PM annulus). Compatible with any `magnet_mount` or `magnetization` (e.g. Halbach with a retaining sleeve). FEM only, requires `nonlinear = true`; the analytical solver rejects it. Must be in (0, magnet radial thickness); omit for exposed magnet faces |
-| `magnet_overhang` | m | Axial extension of the magnets per side beyond `L_stk` (maps to `Geometry.magnet_overhang`). ≥ 0; `0.0` = measured co-extensive, omit = not measured. Input to the offline 3D wedge k_end solve (`scripts/compute_k_end.py`) — the dominant lever on the end-effect factor. Not used by the 2D solvers |
-| `n_bars` | — | **Squirrel-cage rotor** (induction machines): rotor bar count, ≥ 2. Makes the rotor a cage: no PM annulus (`r_magnet` defaults to `r_rotor`, the rotor surface), inrunner only, `[induction]` required, and the PM-only fields (`magnet_mount`, `bridge_thickness`, `magnet_overhang`) must stay unset. Cross-checked against `[induction] n_bars` when both are given |
-| `bar_shape` | — | `"rectangular"` (default; radial-sided, area exactly `bar_width × bar_height`) or `"round"` (circle of diameter `bar_width`; `bar_height` must be 0) |
+| `back_iron_thickness` | m | **Outrunner only.** Magnetic back-iron ring inside the rotor wall, in (0, wall thickness); the rest of the wall is non-magnetic |
+| `magnet_mount` | — | `"surface"` (default, interpole gaps are air) or `"inset"` (interpole gaps are rotor iron). See *FEM-only rotor features* |
+| `bridge_thickness` | m | Iron bridge ring between the magnet faces and the airgap, in (0, magnet radial thickness). See *FEM-only rotor features* |
+| `magnet_overhang` | m | Axial magnet extension per side beyond `L_stk`, ≥ 0. `0.0` = measured co-extensive, omit = not measured. See *End effects* |
+| `k_end` | — | 3D axial end-effect factor on the winding flux linkage, (0, 1.2]. See *End effects* |
+| `n_bars` | — | **Squirrel-cage rotor**: bar count, ≥ 2. See *Cage rotors* |
+| `bar_shape` | — | `"rectangular"` (default; area `bar_width × bar_height`) or `"round"` (diameter `bar_width`; `bar_height` must be 0) |
 | `bar_width` | m | Arc width at the bar mid-radius (rectangular) or the diameter (round) |
 | `bar_height` | m | Radial extent of a rectangular bar |
-| `bar_bridge_thickness` | m | Iron between the rotor surface and the bar top (default 0 = bar flush with the surface) |
-| `bar_opening_width` | m | Air notch through the bridge at the rotor surface (default 0 = closed slot). Needs a bridge and must be narrower than the bar |
-| `end_ring_axial_length`, `end_ring_radial_height` | m | End-ring section. Not meshed in 2D; input to the end-ring impedance correction. Required by `im_bar_impedance`, `im_fem_harmonic`, and `im_fem_locked_rotor` |
-| `skew_angle` | rad | Total **mechanical** bar-skew angle over the stack (cage rotors only). Omit for unskewed. Turns the `im_fem_*` models into decoupled multi-slice averages; rejected together with `nonlinear = true`. Guarded against degrees-as-radians (max two bar pitches) |
-| `skew_slots` | — | Convenience: skew in **stator slot pitches** (`skew_angle = skew_slots · 2π/n_slots`). Needs `n_slots`; exclusive with `skew_angle` |
-| `k_end` | — | 3D axial end-effect factor on the winding flux linkage (maps to `Motor.k_end`), accepted in (0, 1.2]. Values above 1 are possible under magnet overhang. A **computed** value from `scripts/compute_k_end.py` — commit its provenance record (`data/<motor>/k_end.record.json`) alongside. Applied by the `analytical` model to the B_rem-derived `flux_linkage_peak`/`backemf_fundamental` only (never when psi_f is the input — a measured psi_f already includes end effects) |
+| `bar_bridge_thickness` | m | Iron between the rotor surface and the bar top (default 0 = flush) |
+| `bar_opening_width` | m | Air notch through the bridge at the rotor surface (default 0 = closed slot). Needs a bridge; narrower than the bar |
+| `end_ring_axial_length`, `end_ring_radial_height` | m | End-ring section (not meshed; end-ring impedance input). Required by the `im_bar_impedance` and `im_fem_*` models |
+| `skew_angle` | rad | Total **mechanical** bar skew over the stack (cage rotors only). See *Cage rotors* |
+| `skew_slots` | — | Skew in **stator slot pitches** (`skew_angle = skew_slots · 2π/n_slots`). Needs `n_slots`; exclusive with `skew_angle` |
 
 Legacy diameter names are also accepted: `stator_od`, `stator_id`,
 `rotor_od`, `magnet_thickness` (halved/derived to radii). One of
@@ -79,12 +77,33 @@ Legacy diameter names are also accepted: `stator_od`, `stator_id`,
 
 Radii ordering is validated at load:
 inrunner `r_outer > r_stator > r_magnet > r_rotor >= r_inner >= 0`;
-outrunner reverses the middle three. A cage rotor (`n_bars > 0`) has
-`r_magnet == r_rotor` instead. The cage cross-section meshes with one
-region per bar (`bar0`…) through `fem_mesh.get_or_build_cage_mesh`,
-in a cache namespace disjoint from the PM meshes; `im_bar_impedance`,
-`im_fem_harmonic`, and `im_fem_locked_rotor` consume it. See `data/creator_case_im/creator_case_im.toml` for a
-transcribed example.
+outrunner reverses the middle three.
+
+**FEM-only rotor features.** `magnet_mount = "inset"` and
+`bridge_thickness` need the FEM model with `nonlinear = true` (the
+interpole iron and the bridge saturate by design); the analytical solver
+rejects both. Inset also requires `alpha_p < 1` and explicit `psi_f` and
+`B_rem`, because the radial derivation between them ignores the interpole
+iron shunt. A bridge composes with any `magnet_mount` or `magnetization`.
+
+**End effects.** `magnet_overhang` is the main input to the offline 3D
+wedge solve (`scripts/compute_k_end.py`) and is not read by the 2D
+solvers. `k_end` is that solve's computed output; commit its
+provenance record (`data/<motor>/k_end.record.json`) alongside. The
+`analytical` model applies it to the `B_rem`-derived `flux_linkage_peak`
+and `backemf_fundamental` only, never to a supplied `psi_f` (a measured
+flux linkage already includes end effects). Values above 1 occur under
+magnet overhang.
+
+**Cage rotors.** `n_bars > 0` makes the rotor a cage: no PM annulus
+(`r_magnet` defaults to `r_rotor`), inrunner only, `[induction]` required,
+and the PM-only fields (`magnet_mount`, `bridge_thickness`,
+`magnet_overhang`) must stay unset. It is cross-checked against
+`[induction] n_bars` when both are given. `skew_angle` turns the
+`im_fem_*` models into decoupled multi-slice averages, is rejected
+together with `nonlinear = true`, and is capped at two bar pitches to
+catch degrees given as radians. See
+`data/creator_case_im/creator_case_im.toml` for a transcribed example.
 
 ### `[geometry]` — axial topology
 
@@ -133,7 +152,7 @@ example.
 | `mu_r_pm` | — | 1.05 | Magnet recoil permeability |
 | `alpha_Br` | 1/K | — | Fractional remanence temperature coefficient, validated to (−0.01, 0); applied against `[thermal] magnet_temp` |
 | `B_knee` | T | — | Demagnetization knee at the 20 °C reference (`demag_screen`) |
-| `alpha_B_knee` | T/K | — | Knee temperature slope (absolute, not fractional — the knee can cross zero). Required together with `alpha_Br` when `magnet_temp` is set |
+| `alpha_B_knee` | T/K | — | Knee temperature slope (absolute, not fractional; the knee can cross zero). Required together with `alpha_Br` when `magnet_temp` is set |
 | `magnet_type`, `steel_grade`, `rotor_yoke_material` | str | — | Descriptive material labels; accepted, not read |
 
 ### `[thermal]` — optional
@@ -145,8 +164,8 @@ example.
 | `r_th` | K/W | Winding-to-ambient thermal resistance |
 | `insulation_class` | str | Free-form label (e.g. `"F"`); not parsed into a limit |
 | `thermal_time_constant` | s | Winding thermal time constant for the transient duty march |
-| `magnet_temp` | °C | Magnet operating temperature; every circuit model derates `psi_f` (and the `[flux_map]` surface) to it, `demag_screen` also `B_knee`. The field solvers (analytical, FEM) do not derate: they solve at the 20 °C `B_rem`, although `magnet_temp` still enters their run IDs. Requires `alpha_Br` |
-| `magnet_temp_max` | °C | Magnet grade maximum operating temperature; a limit only (`motor_thermal` headroom), never a derating temperature. `magnet_temp` above it is allowed: the other circuit models derate to `magnet_temp` and do not check the limit; `motor_thermal` ignores `magnet_temp` (it solves the magnet node) and reports headroom against the solved temperature |
+| `magnet_temp` | °C | Magnet operating temperature; every circuit model derates `psi_f` (and the `[flux_map]` surface) to it, `demag_screen` also `B_knee`. Requires `alpha_Br`. The field solvers do not derate (they solve at the 20 °C `B_rem`), although it still enters their run IDs |
+| `magnet_temp_max` | °C | Magnet grade maximum operating temperature: a limit for `motor_thermal` headroom, never a derating temperature. `motor_thermal` solves the magnet node itself and ignores `magnet_temp`; the other circuit models derate to `magnet_temp` and do not check this limit |
 | `winding_temp_limit_basis`, `magnet_temp_max_basis` | str | How the bounded temperature is measured: `"thermometer"`, `"resistance"`, `"ETD"` (IEC 60034-1) or `"hot_spot"`. Requires the limit |
 | `winding_temp_limit_source`, `magnet_temp_max_source` | str | `"published"`, `"measured"`, `"computed"`, `"fitted"` or `"assumed"`. Requires the limit. `TempLimit.note` has no TOML field: it is set only on a per-run override |
 
@@ -154,7 +173,7 @@ example.
 
 Per-kg Steinmetz coefficients for the lumped two-term Bertotti model,
 plus the core mass and the single peak flux density the whole mass is
-assumed to cycle at. All five are needed together — `prepare_iron_loss`
+assumed to cycle at. All five are needed together; `prepare_iron_loss`
 names the missing ones. Fit `k_h`/`k_e`/`alpha_fe` from a
 multi-frequency specific-loss table with `phasesweep.models.iron_loss.fit_bertotti`.
 
@@ -166,13 +185,12 @@ multi-frequency specific-loss table with `phasesweep.models.iron_loss.fit_bertot
 | `m_core` | kg | Core mass cycling at `B_core` |
 | `B_core` | T (peak) | Effective lumped core flux density |
 
-`B_core` is an *effective* lump, not a field value predicted by the geometry.
-Real machines have different flux densities in the teeth and yoke, which this
-single-B model cannot represent. `B_core` may be estimated from flux and
-geometry or calibrated against a measured loss curve; record which method was
-used because they support different claims. `motors/creator_case_pmsm.toml`
-shows the calibrated case. `scripts/calibrate_creator_b_core.py` performs the
-fit and writes a reproducible calibration record beside the dataset.
+`B_core` is an effective model input. The single-B model cannot represent
+different flux densities in the teeth and yoke. Record whether `B_core` was
+estimated from flux and geometry or fitted to a measured loss curve.
+`motors/creator_case_pmsm.toml` shows the calibrated case.
+`scripts/calibrate_creator_b_core.py` performs the fit and writes a
+reproducible calibration record beside the dataset.
 `data/creator_case_im/creator_case_im.toml` shows the derived case.
 
 For an induction machine the block is the **stator** core: `iron_loss` runs
@@ -188,9 +206,9 @@ budget), so populating this section changes that model's output too.
 
 Setting this section makes the motor an induction machine: the
 synchronous d-q fields (`psi_f`, `B_rem`, `L_d`, `L_q`) and `[flux_map]`
-must then be absent (the loader raises on the contradiction), the `im_*` models
-become available, and every synchronous-machine model rejects the motor
-loudly. All rotor quantities are referred to the stator.
+must then be absent (the loader raises on the contradiction), the `im_*`
+models become available, and every synchronous-machine model rejects the
+motor. All rotor quantities are referred to the stator.
 
 | Field | Units | Notes |
 |-------|-------|-------|
@@ -202,7 +220,7 @@ loudly. All rotor quantities are referred to the stator.
 | `sigma_bar` | S/m | Cage bar conductivity at the reference temperature (the harmonic FEM tier's bar material; the circuit tier does not read it) |
 | `f_rated` | Hz | Rated supply frequency |
 | `s_rated` | — | Rated slip, (0, 1) |
-| `V_LL_rated` | V (RMS, line-line) | Rated supply voltage. Explicitly line-line RMS — IM datasheet voltage conventions are the canonical trap |
+| `V_LL_rated` | V (RMS, line-line) | Rated supply voltage, line-line RMS. Check the datasheet's convention before transcribing |
 | `design_letter` | — | NEMA design letter `"A"`/`"B"`/`"C"`/`"D"` (documentation / envelope priors) |
 | `R_2_vs_f` | [[Hz, Ω], …] | Deep-bar table: rotor resistance vs **rotor** frequency `s·f`. The scalar `R_2` anchors f = 0; interpolation clamps past the last row |
 | `L_sigma_s_vs_f` | [[Hz, H], …] | Stator leakage vs **supply** frequency, same anchoring |
@@ -233,7 +251,7 @@ replaces them.
 
 ### `[flux_map]` — optional (saturated synchronous machines)
 
-Tabulated ψ_d(i_d, i_q) and ψ_q(i_d, i_q) surface — the full nonlinear
+Tabulated ψ_d(i_d, i_q) and ψ_q(i_d, i_q) surface: the full nonlinear
 flux linkage that the constant `psi_f`/`L_d`/`L_q` triple linearizes.
 Coexists with those `[circuit]` fields (they remain the linearized
 operating point) but not with `[induction]`. When present,
@@ -243,13 +261,13 @@ surface (`mtpa_source = "flux_map"`) instead of the Morimoto quadratic;
 field-weakening search on the surface (`envelope_source = "flux_map"`),
 `operating_point` solves its torque demand on it (`op_source =
 "flux_map"`), and `drive_sim` builds motulator's saturated machine model from it
-(`machine_model = "flux_map"`) — plant and controller both see the
-nonlinear surface; `L_d`/`L_q` then only set the timing plan. Each of
-these falls back to the constant-L path when the grid does not cover the
-drive current limit. `L_d`/`L_q` then only set the timing plan and the
-SynRM/reverse-salient guards; `drive_sim` additionally rejects surfaces
-that are non-salient or reverse-salient at the current limit (motulator's
-MTPA search cannot bracket them). With `[thermal] magnet_temp` set, every
+(`machine_model = "flux_map"`); plant and controller both see the
+nonlinear surface. Each of these falls back to the constant-L path when
+the grid does not cover the drive current limit. With a map in use,
+`L_d`/`L_q` only set the timing plan and the SynRM/reverse-salient
+guards; `drive_sim` additionally rejects surfaces that are non-salient or
+reverse-salient at the current limit (motulator's MTPA search cannot
+bracket them). With `[thermal] magnet_temp` set, every
 consumer sees the map shifted to that temperature (ψ_d nodes moved by
 ψ_f · `alpha_Br` · (T − `magnet_temp_ref_C`), ψ_q unchanged). Without
 a `psi_f`, the scalar models take the map origin ψ_d(0, 0) referred to
@@ -264,7 +282,7 @@ not the 20 °C value. All values are peak.
 | `i_q_A` | A (peak) | q-axis grid, strictly increasing, first value ≥ 0 (motoring convention) |
 | `psi_d_Wb` | [[Wb, …], …] | ψ_d map, layout `[i_q_idx][i_d_idx]` (one row per `i_q` value) |
 | `psi_q_Wb` | [[Wb, …], …] | ψ_q map, same layout |
-| `magnet_temp_ref_C` | °C | optional — magnet temperature the map was extracted at; default 20 °C (the `alpha_Br` scalar-derating reference). Read by every map consumer when `magnet_temp` is set; unset maps keep their `config_id` |
+| `magnet_temp_ref_C` | °C | optional: magnet temperature the map was extracted at; default 20 °C (the `alpha_Br` scalar-derating reference). Read by every map consumer when `magnet_temp` is set; unset maps keep their `config_id` |
 
 The origin (i_d = 0, i_q = 0) should be a grid node so the map's own
 ψ_f = ψ_d(0, 0) is defined; with `psi_f` also set, the two must agree
@@ -277,14 +295,14 @@ leave the grid stay bounded. See `motors/bmw_i3.toml` for a 7×7 example.
 
 ### `[thermal_network]` — optional (required by `motor_thermal`)
 
-Three-node lumped thermal network — winding W, iron Fe, magnet/rotor M —
+Three-node lumped thermal network (winding W, iron Fe, magnet/rotor M)
 with the coolant as sink. Conductances in W/K, capacitances in J/K, all
 six required and > 0 (a connected network with finite time constants).
 The sink temperature is not a machine property: `motor_thermal` reads it
 from `RunConfig.T_coolant` beside the `w_mech` / `tau_ref` demand. At
 steady state only `G_WFe` and `G_FeS` matter (`T_M = T_Fe`); `G_FeM` and
 the capacitances shape the transient functions. Record where each value
-came from — a fitted `G_FeS` absorbs every loss the model does not carry.
+came from: a fitted `G_FeS` absorbs every loss the model does not carry.
 
 | Field | Units | Notes |
 |-------|-------|-------|
@@ -296,7 +314,7 @@ came from — a fitted `G_FeS` absorbs every loss the model does not carry.
 
 ### `[drive]` — optional
 
-All four default to unset — there are no fallback bus/current/speed
+All four default to unset; there are no fallback bus/current/speed
 values. A solver that needs one raises a `ValueError` naming the motor,
 the model, and the missing field.
 
@@ -324,9 +342,9 @@ top-level table name is an error; a near-miss of a loader section
 
 ## `psi_f`/`B_rem` authority
 
-`psi_f` (circuit tier) and `B_rem` (geometry/materials tier) encode the
-same magnet through different models, so supplying both couples two
-sources of truth. Choose one as authoritative by design intent:
+`psi_f` (circuit tier) and `B_rem` (geometry/materials tier) describe the
+same magnet through different models. Choose the authoritative input
+according to the evidence available:
 
 - **Geometry-led** (a design study, no bench data): supply `B_rem` and
   omit `psi_f`; the solver factories derive flux linkage from magnet,

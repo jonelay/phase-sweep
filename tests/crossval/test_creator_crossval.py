@@ -16,7 +16,7 @@ from phasesweep.registry import MODEL_REGISTRY
 from phasesweep.sweep_types import RunConfig, RunResult
 from phasesweep.validation.crossval import compare_results
 from phasesweep.validation.measured import import_measured
-from tests.conftest import CREATOR_CSV_SKIP, REPO_ROOT
+from tests.conftest import CREATOR_CSV_SKIP, REPO_ROOT, creator_file
 
 MOTOR_TOML = REPO_ROOT / "motors/creator_case_pmsm.toml"
 MEASURED_JSON = REPO_ROOT / "data/creator_case_pmsm/backemf_measured.json"
@@ -77,7 +77,7 @@ class TestCreatorTorqueBound:
 
     def test_import_torque_rated(self, creator, tmp_path):
         result = import_measured(
-            REPO_ROOT / "data/creator_case_pmsm/torque_rated.json",
+            creator_file("torque_rated.json"),
             creator, tmp_path,
         )
         assert result.source == "published"
@@ -85,7 +85,7 @@ class TestCreatorTorqueBound:
 
     def test_bound_check_rated_gte_published(self, creator, rated_result, tmp_path):
         measured = import_measured(
-            REPO_ROOT / "data/creator_case_pmsm/torque_rated.json",
+            creator_file("torque_rated.json"),
             creator, tmp_path,
         )
         rows = compare_results(measured, rated_result)
@@ -105,14 +105,14 @@ class TestCreatorMTPACurve:
 
     def test_import_mtpa_angles(self, creator, tmp_path):
         result = import_measured(
-            REPO_ROOT / "data/creator_case_pmsm/mtpa_angles.json",
+            creator_file("mtpa_angles.json"),
             creator, tmp_path,
         )
         assert "_curve_compare" in result.metrics
 
     def test_curve_compare_mtpa_angles(self, creator, rated_result, tmp_path):
         measured = import_measured(
-            REPO_ROOT / "data/creator_case_pmsm/mtpa_angles.json",
+            creator_file("mtpa_angles.json"),
             creator, tmp_path,
         )
         rows = compare_results(measured, rated_result)

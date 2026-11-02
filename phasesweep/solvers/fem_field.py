@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from ngsolve.comp import FESpace, LinearForm
 
 from phasesweep.machines.geometry import Geometry
+from phasesweep.solver_params import B_IRON_SATURATION_T, nonlinear_required_reason
 from phasesweep.solvers.fem_materials import MU0, bh_nu, bh_nu_prime
 from phasesweep.solvers.fem_mesh import (
     _MIN_ARC_GAP_M,
@@ -474,7 +475,7 @@ def _check_iron_saturation(
     iron_regions: set[str],
     info: dict[str, float] | None,
 ) -> None:
-    """Record peak |B| in iron into ``info``; warn above 1.8 T."""
+    """Record peak |B| in iron into ``info``; warn above B_IRON_SATURATION_T."""
     from ngsolve import L2, GridFunction, grad, sqrt
 
     B_mag_check = sqrt(grad(gfu)[0]**2 + grad(gfu)[1]**2)
@@ -491,10 +492,10 @@ def _check_iron_saturation(
     b_iron_max = float(np.max(B_iron)) if len(B_iron) > 0 else 0.0
     if info is not None:
         info["b_iron_max"] = b_iron_max
-    if b_iron_max > 1.8:
+    if b_iron_max > B_IRON_SATURATION_T:
         logging.warning(
-            "peak |B| in stator iron = %.2f T (> 1.8 T saturation threshold)",
-            b_iron_max,
+            "peak |B| in stator iron = %.2f T (> %.1f T saturation threshold)",
+            b_iron_max, B_IRON_SATURATION_T,
         )
 
 
@@ -688,18 +689,10 @@ def solve_field_fem(
 
     _is_inset = geo.magnet_mount == "inset"
     _has_bridge = geo.bridge_thickness is not None
-    if _is_inset and not nonlinear:
-        raise ValueError(
-            "magnet_mount='inset' requires nonlinear=True: the interpole "
-            "iron (and bridge ring, when set) saturates by design — a "
-            "linear solve grossly overestimates the leakage shunt"
-        )
-    if _has_bridge and not _is_inset and not nonlinear:
-        raise ValueError(
-            "bridge_thickness requires nonlinear=True: the iron bridge "
-            "ring saturates by design — a linear solve grossly "
-            "overestimates the shunt flux through it"
-        )
+    if not nonlinear:
+        reason = nonlinear_required_reason(geo)
+        if reason is not None:
+            raise ValueError(reason)
 
     # Determine if discrete arcs will actually be built (same threshold as
     # _build_motor_geometry). A sub-threshold gap would collapse the arcs to

@@ -68,7 +68,7 @@ NOLOAD_MAX_KW = 1.0
 # (Motor-CAD hot spot, not a measurement): R_WFe = 0.0235 K/W.
 R_WFE_K_PER_W = 0.0235
 # Air gap, Becker & Kaye (1962) Taylor-Couette correlation at 7000 rpm
-# (docs/references.md): gap d = 0.7 mm, r = 89.3 mm, L = 132.3 mm, air
+# (data/bmw_i3/README.md): gap d = 0.7 mm, r = 89.3 mm, L = 132.3 mm, air
 # at ~80 degC (nu = 2.1e-5 m2/s, k = 0.030 W/mK). Surface speed
 # w r = 65.5 m/s, Re = w r d / nu = 2.2e3, Ta = Re^2 d / r = 3.7e4,
 # Nu = 0.409 Ta^0.241 = 5.2 with Nu = h (2 d) / k -> h = 110 W/m2K over

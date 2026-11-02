@@ -261,6 +261,9 @@ def _resolve_bound_compare(
             tol_pct=0.0,
             passed=passed,
             comparison_type="bound",
+            # A bound can pass by a wide margin for a known-wrong reason
+            # (e.g. a constant-L over-prediction); the anchor says which.
+            note=ref.semantic_note,
         ))
     return rows
 
@@ -474,12 +477,14 @@ def diagnose(
             models_agree = False
 
     model_vs_meas: dict[str, bool] = {}
+    two_sided = False  # any delta/curve row, i.e. more than a one-sided bound
     for c in computed:
         rows = []
         for m in measured:
             rows.extend(compare_results(c, m, tolerances))
         if rows:
             model_vs_meas[c.model] = all(r.passed for r in rows)
+            two_sided |= any(r.comparison_type in ("delta", "curve") for r in rows)
 
     # No usable computed-vs-measured comparison: diagnose computed-only.
     if not model_vs_meas:
@@ -491,6 +496,8 @@ def diagnose(
     all_match = all(model_vs_meas.values())
 
     if models_agree and all_match:
+        if not two_sided:
+            return "within bounds only — one-sided checks pass; not a validation"
         return "validated"
     if models_agree and not any_match:
         return "models agree but disagree with measured — check motor config or measurement"

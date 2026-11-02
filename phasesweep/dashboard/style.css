@@ -563,3 +563,63 @@
   gap: 4px;
   padding: 2px 0;
 }
+
+/* -- agent activity panel (MCP monitor) ---------------------------------------- */
+
+.agent-status { color: var(--vs-text-muted); font-size: 12px; margin-bottom: 6px; }
+
+.agent-list { list-style: none; margin: 0; padding: 0; }
+
+.agent-row {
+  padding: 4px 6px;
+  border-top: 1px solid var(--vs-hairline);
+  border-left: 3px solid transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.agent-row[data-ok="false"] { border-left-color: var(--vs-status-critical); }
+.agent-row.fresh { animation: agent-fresh 1.6s ease-out; }
+@keyframes agent-fresh { from { background: var(--vs-bg); } to { background: transparent; } }
+
+.agent-row .head { display: flex; align-items: baseline; gap: 8px; }
+.agent-row .time { color: var(--vs-text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.agent-row .tool { font-weight: 600; }
+.agent-row .ms { margin-left: auto; color: var(--vs-text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.agent-row .detail code {
+  display: block;
+  font-size: 12px;
+  color: var(--vs-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-row .detail { font-size: 12px; color: var(--vs-text-2); }
+
+.agent-row .outcome { font-size: 12px; color: var(--vs-text-muted); }
+.agent-row .outcome.error { color: var(--vs-status-critical); white-space: pre-wrap; }
+.agent-row .outcome.link { cursor: pointer; text-decoration: underline dotted; }
+.agent-row .outcome.link:hover { color: var(--vs-text-2); }
+
+/* job completion rows: headline metrics + caveat badge */
+.agent-row[data-warn="true"] { border-left-color: var(--vs-status-warning); }
+.agent-row .metrics { font-size: 12px; color: var(--vs-text-2); font-variant-numeric: tabular-nums; }
+.agent-row .caveat-badge {
+  font-size: 11px;
+  padding: 0 5px;
+  border-radius: 8px;
+  border: 1px solid var(--vs-hairline);
+  color: var(--vs-text-muted);
+  cursor: help;
+}
+.agent-row .caveat-badge[data-warn="true"] {
+  border-color: var(--vs-status-warning);
+  color: var(--vs-status-warning);
+}
+
+/* -- design-space plot (agent tab) --------------------------------------------- */
+
+.design-space-bar { display: flex; gap: 12px; align-items: center; font-size: 12px; margin-bottom: 4px; }
+.design-space-bar label { display: flex; gap: 4px; align-items: center; color: var(--vs-text-muted); }
+.design-space-bar select { max-width: 260px; }

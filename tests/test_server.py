@@ -409,6 +409,21 @@ def test_submit_bad_param_shapes_are_400(client):
         {"field": "r_outer", "start": 0.9, "stop": 1.1, "steps": 2}]}, expect=400)
 
 
+@pytest.mark.parametrize("axis", [
+    {"name": "airgap", "start": 0.001, "stop": 0.002, "steps": 3},
+    "airgap",
+])
+def test_bad_sweep_axis_error_states_whole_format(client, axis):
+    """One error must carry the full axis shape. Naming only the first bad
+    keyword cost a live agent 14 guesses at the field names."""
+    r = client.post("/api/jobs", json={"motor": "test_inrunner", "model": "sweep",
+                                       "params": {"axes": [axis]}})
+    assert r.status_code == 400, r.text
+    detail = r.json()["detail"]
+    for word in ("field", "start", "stop", "steps", "airgap", "in m"):
+        assert word in detail, detail
+
+
 def test_submit_string_params_are_typed(client):
     """Query/form strings are parsed into the RunConfig type: "false"
     must not hash as a truthy string, garbage must be a 400."""
@@ -745,21 +760,64 @@ def test_cancelled_subtasks_persist_no_rows(workspace, monkeypatch):
 def test_sweep_forces_nonlinear_for_fem_only(workspace):
     """Server sweeps mirror geo_parallel.run_sweep: nonlinear defaults on
     for fem only; cogging_torque hashes nonlinear, so forcing it there
-    split one grid into two run-id sets."""
+    split one grid into two run-id sets. On creator's inset rotor that
+    unforced linear default is rejected at submit, not at run time."""
     motors = load_motor_configs(workspace["motors"])
     manager = JobManager(motors, ResultStore(workspace["output"]), workers=1)
     axes = [{"field": "r_outer", "start": 0.9, "stop": 1.1, "steps": 2}]
     motor = motors["test_inrunner"]
     fem = manager._sweep_subtasks(motor, {"model_keys": ["fem"], "axes": axes})
     assert all(st.config.nonlinear for st in fem)
-    from phasesweep import load_motor
-    from tests.conftest import REPO_ROOT
-    cog_motor = load_motor(REPO_ROOT / "motors/creator_case_pmsm.toml")
-    cog = manager._sweep_subtasks(cog_motor, {
+    cog_motor = _repo_motor("creator_case_pmsm")
+    cog_params = {
         "model_keys": ["cogging_torque"],
         "axes": [{"field": "r_outer", "start": cog_motor.geometry.r_outer,
-                  "stop": cog_motor.geometry.r_outer * 1.02, "steps": 2}]})
-    assert cog and not any(st.config.nonlinear for st in cog)
+                  "stop": cog_motor.geometry.r_outer * 1.02, "steps": 2}]}
+    with pytest.raises(ValueError, match="cogging_torque: magnet_mount='inset'"):
+        manager._sweep_subtasks(cog_motor, cog_params)
+    cog = manager._sweep_subtasks(cog_motor, {**cog_params, "nonlinear": True})
+    assert cog and all(st.config.nonlinear for st in cog)
+
+
+def _repo_motor(name: str):
+    from phasesweep import load_motor
+    from tests.conftest import REPO_ROOT
+    return load_motor(REPO_ROOT / f"motors/{name}.toml")
+
+
+def test_single_fem_defaults_nonlinear(workspace):
+    """Single and validate fem jobs default to nonlinear like sweeps; an
+    explicit nonlinear=false still runs linear where the rotor allows it."""
+    motors = load_motor_configs(workspace["motors"])
+    manager = JobManager(motors, ResultStore(workspace["output"]), workers=1)
+    motor = motors["test_inrunner"]
+    [st] = manager._build_subtasks("fem", motor, {})
+    assert st.config.nonlinear is True
+    [st] = manager._build_subtasks("fem", motor, {"nonlinear": False})
+    assert st.config.nonlinear is False
+    [st] = manager._build_subtasks("validate", motor, {"models": ["fem"]})
+    assert st.config.nonlinear is True
+
+
+def test_linear_fem_on_inset_rotor_rejected_at_submit(workspace):
+    """bmw_i3 is inset: bare fem now runs nonlinear, and a linear request
+    is a submit-time error instead of a run-time failure in fem_field."""
+    manager = JobManager({}, ResultStore(workspace["output"]), workers=1)
+    motor = _repo_motor("bmw_i3")
+    [st] = manager._build_subtasks("fem", motor, {})
+    assert st.config.nonlinear is True
+    with pytest.raises(ValueError, match="pass params.nonlinear=true"):
+        manager._build_subtasks("fem", motor, {"nonlinear": False})
+
+
+def test_applicability_flags_nonlinear_on_inset_rotor():
+    from phasesweep.server.routes import submittable_models
+    by_key = {m["key"]: m for m in submittable_models(_repo_motor("creator_case_pmsm"))}
+    assert "nonlinear" not in by_key["fem"]["missing_params"]
+    cog = by_key["cogging_torque"]
+    assert cog["applicable"] is True
+    assert "nonlinear" in cog["missing_params"]
+    assert "nonlinear=true" in cog["reason"]
 
 
 # -- WebSocket ------------------------------------------------------------------
@@ -943,6 +1001,45 @@ def test_measured_import_string_value_rejected_before_persist(client):
     r = client.post("/api/measured/test_inrunner", json=bad)
     assert r.status_code == 400, r.text
     assert client.get("/api/results", params={"source": "measured"}).json() == []
+
+
+def test_measured_caveat_on_config_results_not_sweep_points(client):
+    """A computed result on a config whose motor has measured records points
+    at validation_summary; a sweep point keeps the motor name but is a
+    different design, so it must not claim those measurements."""
+    assert client.post("/api/measured/test_inrunner",
+                       json=dict(MEASURED_JSON)).status_code == 201
+
+    single = wait_job(client, submit(client, "analytical")["id"])
+    (st,) = single["subtasks"]
+    codes = {c["code"]: c for c in st["caveats"]}
+    assert "motor='test_inrunner'" in codes["measured_data_available"]["text"]
+
+    sweep = wait_job(client, submit(client, "sweep", params={
+        "model_keys": ["analytical"],
+        "axes": [{"field": "r_outer", "start": 0.9, "stop": 1.1, "steps": 2}]})["id"])
+    assert sweep["subtasks"]
+    for st in sweep["subtasks"]:
+        assert "measured_data_available" not in {c["code"] for c in st["caveats"] or []}
+
+
+def test_validation_summary_bound_only_is_not_validated(workspace):
+    """Prius 2004: constant-L stall torque (~905 N·m) passes the ORNL
+    340 N·m >= bound only because it over-predicts. The summary must carry
+    the anchor's note and must not say 'validated'."""
+    import json
+    import shutil
+    from pathlib import Path
+    repo = Path(__file__).resolve().parent.parent
+    shutil.copy(repo / "motors" / "prius_2004.toml", workspace["motors"])
+    ref = json.loads((repo / "data/prius_2004/torque_rated.json").read_text())
+    with make_client(workspace) as c:
+        assert c.post("/api/measured/prius_2004", json=ref).status_code == 201
+        wait_job(c, submit(c, "stall_torque", motor="prius_2004")["id"])
+        s = c.get("/api/validation/prius_2004").json()
+    (row,) = [r for r in s["rows"] if r["comparison_type"] == "bound"]
+    assert row["passed"] and "over-predicts" in row["note"]
+    assert s["diagnosis"].startswith("within bounds only")
 
 
 # tau_mtpa = 1.5 * n_p * psi_f * I_rated = 1.5*2*0.1*5 = 1.5 N·m
@@ -1131,6 +1228,46 @@ def test_models_endpoint(client):
     # nor models needing RunConfig fields no job param can set
     assert "operating_point" not in by_key
     assert "motor_thermal" not in by_key
+    # needs_params is required params only; defaulted ones are optional
+    assert "needs_params" not in by_key["fem"]
+    assert by_key["fem"]["optional_params"] == ["rotation"]
+    assert by_key["drive_sim"]["needs_params"] == ["sim_plan"]
+    assert by_key["sweep"]["needs_params"] == ["axes"]
+
+
+def test_models_endpoint_motor_applicability(client):
+    by_key = {m["key"]: m for m in
+              client.get("/api/models", params={"motor": "test_inrunner"}).json()}
+    for m in by_key.values():
+        assert {"applicable", "missing_params", "reason"} <= set(m)
+        blocked = not m["applicable"] or m["missing_params"]
+        assert (m["reason"] is not None) == bool(blocked), m
+    assert by_key["analytical"]["applicable"] is True
+    assert by_key["analytical"]["reason"] is None
+    # radial motor: axial model rejected, with the validate message
+    # minus the redundant "Motor '<name>': " prefix
+    axial = by_key["analytical_axial"]
+    assert axial["applicable"] is False
+    assert "AxialFluxGeometry" in axial["reason"]
+    assert not axial["reason"].startswith("Motor ")
+    # load_mech has no motor-derived default; sim_plan derives from it
+    two_mass = by_key["drive_sim_two_mass"]
+    if two_mass["applicable"]:
+        assert two_mass["missing_params"] == ["load_mech"]
+    assert by_key["sweep"]["missing_params"] == ["axes"]
+
+
+def test_models_endpoint_validate_default_matches_job(client):
+    by_key = {m["key"]: m for m in
+              client.get("/api/models", params={"motor": "test_inrunner"}).json()}
+    job = submit(client, "validate")
+    assert set(by_key["validate"]["default_models"]) == {
+        st["model"] for st in job["subtasks"]}
+    wait_job(client, job["id"])
+
+
+def test_models_endpoint_unknown_motor(client):
+    assert client.get("/api/models", params={"motor": "nope"}).status_code == 404
 
 
 @pytest.mark.parametrize("model", ["operating_point", "motor_thermal"])

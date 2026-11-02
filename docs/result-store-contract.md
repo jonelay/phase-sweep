@@ -14,10 +14,10 @@ A stored result carries a model-code version stamp, written unconditionally
 at save time. A result serves only when its stamp equals the live model
 version for that model key.
 
-**Missing stamp is stale.** A record with no version stamp is treated
-identically to a stamp mismatch — it represents unknown-vintage physics and
-must re-run rather than serve. Pre-stamp stores therefore show empty
-histories and recompute on first access under a stamped registry.
+**Missing stamp is stale.** A record with no version stamp is treated like a
+stamp mismatch because the model version that produced it is unknown. The
+model must run again rather than serve that record. Pre-stamp stores therefore
+show empty histories and recompute on first access under a stamped registry.
 
 **Computed-only.** The staleness check applies exclusively to records with
 `source == "computed"`. Measured and published results are exempt: they
@@ -104,14 +104,13 @@ readers must key by `run_id` when present and recompute it from `config`
 otherwise. `source` is a free string, not an enumeration — stores hold
 provenance-qualified values such as `"published (ANSYS FEM)"`.
 
-`RunConfigDict` carries the run-time demand of the `operating_point`
-model as two optional keys, `w_mech` (mechanical rad/s) and `tau_ref`
-(N·m), and the `motor_thermal` sink temperature as a third, `T_coolant`
-(°C). Like `slip`, they are written only when set and enter the run id
-only then, so rows of every other model are unaffected. `MotorDict`
-gained the compound `thermal_network` key the same way: absent unless
-the motor carries a `[thermal_network]` block, and a motor that gains
-the block changes its `config_id` (every model's run id for that motor).
+Run-time demands are optional `RunConfigDict` keys written only when
+set: `slip`, `w_mech` (mechanical rad/s), `tau_ref` (N·m) and
+`T_coolant` (°C). Each enters the run id only when present, so rows of
+models that do not read it are unaffected. Compound motor blocks
+(`thermal_network`, `flux_map`, `induction`) appear in `MotorDict` only
+when the motor carries them, and adding one changes the motor's
+`config_id` and therefore every run id for that motor.
 
 A model's `produces` set is its metric contract: within a model version
 it may only grow, and renaming a key or changing its unit is a version
@@ -125,8 +124,5 @@ Real rows are pinned in `phasesweep/_vectors/record_vectors.json`
 `scripts/gen_record_vectors.py`). A consumer that reads phase-sweep rows
 as dicts declares the keys it touches and checks them against these
 shapes, for example as `MOTOR_FIELDS_READ` and `RECORD_FIELDS_READ`
-constants.
-
-## References
-
-- `sweepstore` — `version_current`, `record_is_current`, `attached`
+constants. The reference predicates are `version_current`,
+`record_is_current` and `attached` in `sweepstore`.

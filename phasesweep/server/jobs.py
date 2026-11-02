@@ -34,12 +34,21 @@ except ImportError as e:
     raise ImportError(f"phasesweep.server needs {e.name}; {install_hint('server')}") from None
 
 from phasesweep._view_sweep_server.protocol import JobStatus, ServerMsg
-from phasesweep.geo_parallel import SweepAxis, apply_sweep_point, execute_parallel, generate_grid
+from phasesweep.geo_parallel import (
+    _AXIS_FIELDS,
+    _STRATEGIES,
+    SweepAxis,
+    apply_sweep_point,
+    axis_value,
+    execute_parallel,
+    generate_grid,
+)
 from phasesweep.machines.geometry import Geometry
 from phasesweep.machines.motor import Motor
 from phasesweep.registry import MODEL_REGISTRY, ModelInfo
 from phasesweep.result_store import ResultStore
 from phasesweep.sweep_types import RunConfig, RunResult, compute_run_id
+from phasesweep.trust import Caveat
 
 __all__ = [
     "Job",
@@ -47,6 +56,8 @@ __all__ = [
     "SubTask",
     "SubTaskStatus",
     "derive_model_defaults",
+    "designs",
+    "sweep_table",
 ]
 
 log = structlog.get_logger()
@@ -71,7 +82,17 @@ _PARAM_GATED_FIELDS = frozenset({
     "rotation", "cogging_points",
 })
 
+# The whole axis shape in one message: a caller (often an agent) that gets
+# only the first bad keyword back guesses again for each field.
+_AXIS_FORMAT = (
+    "each axis is {field, start, stop, steps[, strategy]} with field one of "
+    f"{', '.join(_AXIS_FIELDS)}; start and stop are absolute lengths in m; "
+    f"steps >= 2; strategy one of {', '.join(_STRATEGIES)} (default "
+    f"{_STRATEGIES[0]})"
+)
+
 _TERMINAL: frozenset[JobStatus] = frozenset({"completed", "failed", "cancelled"})
+_TERMINAL_EVENTS = frozenset({"job_complete", "job_failed", "job_cancelled"})
 
 
 def _rated_duty_torque(motor: Motor) -> float:
@@ -284,6 +305,25 @@ def _check_cogging_j_s(model_key: str, params: dict[str, Any]) -> None:
         )
 
 
+def _fem_config_kw(model_key: str, motor: Motor, kw: dict[str, Any]) -> dict[str, Any]:
+    """Default `fem` to nonlinear (as geo_parallel.run_sweep does) and
+    reject a linear solve the motor's rotor cannot take, before it queues.
+
+    Only `fem` defaults on: other models that hash `nonlinear` keep their
+    run IDs, so a linear default on an inset/bridged rotor is rejected
+    here rather than failing at run time.
+    """
+    if model_key == "fem":
+        kw.setdefault("nonlinear", True)
+    if "nonlinear" in MODEL_REGISTRY[model_key].hash_fields and not kw.get(
+            "nonlinear", RunConfig.nonlinear):
+        from phasesweep.solver_params import nonlinear_required_reason
+        reason = nonlinear_required_reason(motor.geometry)
+        if reason is not None:
+            raise ValueError(f"{model_key}: {reason}; pass params.nonlinear=true")
+    return kw
+
+
 def _computed_info(model_key: str) -> ModelInfo:
     info = MODEL_REGISTRY.get(model_key)
     if info is None or info.source != "computed" or info.fn is None:
@@ -308,6 +348,28 @@ class SubTask:
     status: SubTaskStatus = "pending"
     error_msg: str | None = None
     elapsed_s: float = 0.0
+    # Set once the sub-task has an OK result (run or cached): the model's
+    # headline metrics and trust caveats (phasesweep.trust).
+    headline: list[dict[str, Any]] | None = None
+    caveats: list[dict[str, str]] | None = None
+
+    def assess(self, metrics: dict[str, Any] | None, extra: Caveat | None = None) -> None:
+        """Fill headline/caveats from this sub-task's OK metrics; `extra`
+        is a store-derived caveat (JobManager.measured_caveat)."""
+        from phasesweep.trust import RULES, assess, headline
+        cfg = {r.key: getattr(self.config, r.key, None) for r in RULES if r.on_config}
+        self.headline = headline(self.model, metrics)
+        cav = assess(self.model, "OK", metrics, cfg) + ([extra] if extra else [])
+        self.caveats = [c.to_dict() for c in cav]
+
+    def outcome(self) -> dict[str, Any]:
+        """result_id + headline + caveat codes, for job summaries.
+        `cached` marks a result served from an earlier run."""
+        return {"result_id": self.run_id, "model": self.model,
+                "cached": self.status == "cached",
+                "headline": self.headline or [],
+                "caveat_codes": [c["code"] for c in self.caveats or []
+                                 if c["code"] != "limits"]}
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -320,6 +382,9 @@ class SubTask:
             d["point_idx"] = self.point_idx
         if self.error_msg is not None:
             d["error_msg"] = self.error_msg
+        if self.headline is not None:
+            d["headline"] = self.headline
+            d["caveats"] = self.caveats
         return d
 
 
@@ -333,6 +398,8 @@ class Job:
     status: JobStatus = "pending"
     error: str | None = None
     summary: dict[str, Any] | None = None
+    # Who submitted it ("mcp" for agent jobs; None for the dashboard/REST).
+    origin: str | None = None
     created_at: str = field(default_factory=_now)
     started_at: str | None = None
     finished_at: str | None = None
@@ -350,6 +417,11 @@ class Job:
     @property
     def result_ids(self) -> list[str]:
         return [st.run_id for st in self.subtasks if st.status in ("OK", "cached")]
+
+    def outcomes(self, limit: int) -> list[dict[str, Any]]:
+        """Headline + caveat codes of the first `limit` OK results."""
+        ok = (st for st in self.subtasks if st.status in ("OK", "cached"))
+        return [st.outcome() for st, _ in zip(ok, range(limit), strict=False)]
 
     def to_dict(self, include_subtasks: bool = True) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -372,6 +444,128 @@ class Job:
         return d
 
 
+_SWEEP_FIELDS = ("r_outer", "L_stk", "airgap", "back_iron_thickness")
+_DONE: frozenset[SubTaskStatus] = frozenset({"OK", "cached"})
+
+
+def _subtask_note(st: SubTask) -> list[str]:
+    """`model:status` for an unfinished or failed sub-task, else
+    `model:code` per non-limit caveat."""
+    if st.status not in _DONE:
+        return [f"{st.model}:{st.status}"]
+    return [f"{st.model}:{c['code']}" for c in st.caveats or [] if c["code"] != "limits"]
+
+
+def _round_m(v: float | None) -> float | None:
+    """A length in m to nm resolution: the grid's linspace arithmetic
+    leaves float noise (0.0006000000000000033) that is not a design
+    value."""
+    return None if v is None else round(v, 9)
+
+
+def sweep_table(
+    job: Job, *, sort_by: str | None = None, descending: bool = True,
+    offset: int = 0, limit: int = 200,
+) -> dict[str, Any]:
+    """One row per sweep point: the axis values realized on that point's
+    motor (m), then each model's headline values, then notes (failed or
+    pending sub-tasks and caveat codes). Built from the in-memory job,
+    so it is available while the sweep runs; unfinished cells are None.
+    Notes on every row move to `common_notes`; `note_severity` maps
+    caveat notes to info|warn.
+    Raises ValueError for a job that is not a sweep or an unknown
+    `sort_by` column."""
+    if job.job_type != "sweep":
+        raise ValueError(f"job {job.id} is a {job.job_type!r} job, not a sweep; "
+                         "read its results from get_job")
+    fields = [a["field"] for a in job.params.get("axes") or []]
+    models = list(dict.fromkeys(st.model for st in job.subtasks))
+    metric_cols = [(m, h) for m in models for h in MODEL_REGISTRY[m].headline]
+    columns = ["point", *fields, *(f"{m}.{h}" for m, h in metric_cols), "notes"]
+    units = {f: "m" for f in fields} | {
+        f"{m}.{h}": MODEL_REGISTRY[m].units.get(h, "") for m, h in metric_cols}
+
+    by_point: dict[int, list[SubTask]] = {}
+    for st in job.subtasks:
+        by_point.setdefault(st.point_idx if st.point_idx is not None else -1, []).append(st)
+    rows: list[list[Any]] = []
+    for idx, sts in by_point.items():
+        motor = sts[0].config.motor
+        vals: dict[tuple[str, str], Any] = {}
+        notes: list[str] = []
+        for st in sts:
+            for h in st.headline or []:
+                vals[(st.model, h["key"])] = h["value"]
+            notes += _subtask_note(st)
+        rows.append([idx, *(_round_m(axis_value(motor, f)) for f in fields),
+                     *(vals.get(c) for c in metric_cols), notes])
+
+    # A note on every row says nothing per row: report it once.
+    common = (set.intersection(*(set(r[-1]) for r in rows)) if rows else set())
+    for r in rows:
+        r[-1] = [n for n in r[-1] if n not in common]
+    severity = {f"{st.model}:{c['code']}": c["severity"]
+                for st in job.subtasks for c in st.caveats or []}
+
+    if sort_by is not None:
+        if sort_by not in columns[:-1]:
+            raise ValueError(f"unknown sort_by {sort_by!r}; columns: {columns[:-1]}")
+        i = columns.index(sort_by)
+        present = [r for r in rows if isinstance(r[i], (int, float))]
+        absent = [r for r in rows if not isinstance(r[i], (int, float))]
+        rows = sorted(present, key=lambda r: r[i], reverse=descending) + absent
+    page = rows[offset: offset + limit]
+    return {
+        "job_id": job.id, "status": job.status,
+        "completed": job.completed_count, "total": job.total,
+        "columns": columns, "units": units,
+        "common_notes": sorted(common),
+        "note_severity": {n: s for n, s in severity.items()
+                          if n in common or any(n in r[-1] for r in page)},
+        "rows": page,
+        "n_rows": len(rows), "offset": offset,
+        "truncated": offset + len(page) < len(rows),
+    }
+
+
+def designs(jobs: dict[str, Job], origin: str = "mcp") -> dict[str, Any]:
+    """Every design the `origin` jobs have produced results for, in the
+    order first reached. A design is one motor configuration
+    (`Motor.config_id`): its sweep-axis dimensions plus the headline
+    values of every model run on it, keyed `model.key`. `version`
+    changes whenever a sub-task of those jobs finishes."""
+    out: dict[str, dict[str, Any]] = {}
+    units: dict[str, str] = dict.fromkeys(_SWEEP_FIELDS, "m")
+    n_jobs = done = 0
+    for job in jobs.values():
+        if job.origin != origin:
+            continue
+        n_jobs += 1
+        done += job.completed_count
+        for st in job.subtasks:
+            if st.status not in _DONE or st.headline is None:
+                continue
+            motor = st.config.motor
+            d = out.get(motor.config_id)
+            if d is None:
+                d = out[motor.config_id] = {
+                    "id": motor.config_id, "order": len(out), "motor": motor.name,
+                    "job_id": job.id, "point_idx": st.point_idx,
+                    "values": {f: _round_m(axis_value(motor, f)) for f in _SWEEP_FIELDS},
+                    "result_ids": {}, "caveats": [], "warn": False,
+                }
+            d["result_ids"][st.model] = st.run_id
+            for h in st.headline:
+                col = f"{st.model}.{h['key']}"
+                d["values"][col] = h["value"]
+                units[col] = h["unit"]
+            for c in st.caveats or []:
+                if c["code"] != "limits":
+                    d["caveats"].append(f"{st.model}:{c['code']}")
+                    d["warn"] = d["warn"] or c["severity"] == "warn"
+    return {"version": f"{n_jobs}:{done}", "units": units, "designs": list(out.values())}
+
+
 class JobManager:
     """In-memory job registry + serial async runner."""
 
@@ -384,8 +578,10 @@ class JobManager:
         subtask_timeout_s: float = 600.0,
         mesh_cache_dir: str | None = None,
         batch_size: int = 128,
+        max_sweep_points: int = 500,
     ) -> None:
         self.motors = motors
+        self.max_sweep_points = max_sweep_points
         self.store = store
         self.workers = workers
         self.subtask_timeout_s = subtask_timeout_s
@@ -398,6 +594,40 @@ class JobManager:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._runner: asyncio.Task[None] | None = None
         self._dispatcher: asyncio.Task[None] | None = None
+        self._terminal_listeners: list[Callable[[Job], None]] = []
+        # Motor name -> run ids of current measured/published records; built
+        # on first use, then kept current by save_result.
+        self._measured_ids: dict[str, set[str]] | None = None
+
+    # -- measured-data caveat -------------------------------------------------
+
+    def _measured_index(self) -> dict[str, set[str]]:
+        with self._save_lock:
+            if self._measured_ids is None:
+                idx: dict[str, set[str]] = {}
+                for rid, s in self.store.load_slim().items():
+                    if s.source != "computed":
+                        idx.setdefault(s.motor_name, set()).add(rid)
+                self._measured_ids = idx
+            return self._measured_ids
+
+    def measured_caveat(self, motor_name: str, motor_config_id: str) -> Caveat | None:
+        """The measured_data_available caveat for an OK computed result, or
+        None. Only for a result on a loaded config itself (validation_summary
+        matches computed results by config_id), so a sweep point that keeps
+        the base motor's name does not claim the base motor's measurements."""
+        from phasesweep.trust import measured_available
+
+        n = len(self._measured_index().get(motor_name, ()))
+        if not n:
+            return None
+        key = next((k for k, m in self.motors.items()
+                    if m.name == motor_name and m.config_id == motor_config_id), None)
+        return None if key is None else measured_available(n, key, motor_name)
+
+    def _st_measured(self, st: SubTask) -> Caveat | None:
+        m = st.config.motor
+        return self.measured_caveat(m.name, m.config_id)
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -429,22 +659,16 @@ class JobManager:
 
     def submit(
         self, job_type: str, motor_name: str, params: dict[str, Any] | None = None,
+        *, origin: str | None = None,
     ) -> Job:
         """Build and enqueue a job. Raises KeyError for an unknown motor,
         ValueError for a bad job type or params. Full cache hits complete
         immediately without touching the queue."""
-        # Typed once up front so the submit-time checks (_check_cogging_j_s,
-        # _auto_derive_params) compare numbers, not strings.
-        params = {k: (_coerce_param(k, v) if k in _SCALAR_CONFIG_KEYS else v)
-                  for k, v in (params or {}).items()}
-        motor = self.motors[motor_name]
-        unique: dict[str, SubTask] = {}
-        for st in self._build_subtasks(job_type, motor, params):
-            unique.setdefault(st.run_id, st)
-        subtasks = list(unique.values())
+        params, subtasks = self._prepare(job_type, motor_name, params)
         job = Job(
             id=uuid.uuid4().hex[:12], job_type=job_type,
             motor_name=motor_name, params=params, subtasks=subtasks,
+            origin=origin,
         )
         self.jobs[job.id] = job
         log.info("job_submitted", job_id=job.id, job_type=job_type,
@@ -462,6 +686,71 @@ class JobManager:
         else:
             self._queue.put_nowait(job)
         return job
+
+    def _prepare(
+        self, job_type: str, motor_name: str, params: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], list[SubTask]]:
+        """Typed params and de-duplicated sub-tasks, shared by submit and
+        plan. Raises as submit does."""
+        # Typed once up front so the submit-time checks (_check_cogging_j_s,
+        # _auto_derive_params) compare numbers, not strings.
+        params = {k: (_coerce_param(k, v) if k in _SCALAR_CONFIG_KEYS else v)
+                  for k, v in (params or {}).items()}
+        motor = self.motors[motor_name]
+        unique: dict[str, SubTask] = {}
+        for st in self._build_subtasks(job_type, motor, params):
+            unique.setdefault(st.run_id, st)
+        return params, list(unique.values())
+
+    def plan(
+        self, job_type: str, motor_name: str, params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Dry run: what `submit` would queue, without queueing it.
+
+        Sub-task counts per model, how many the store already holds, and
+        a wall-time estimate: per model, pending count × the median
+        elapsed_s of that model's current stored OK runs, summed and
+        divided by the worker count, but never less than the longest
+        pending model's median (one sub-task is not split). A model with no stored runs has no
+        estimate (`median_s` None) and makes the total a lower bound."""
+        _, subtasks = self._prepare(job_type, motor_name, params)
+        slim = self.store.load_slim()
+        samples: dict[str, list[float]] = {}
+        for s in slim.values():
+            if s.status == "OK" and s.source == "computed" and s.elapsed_s > 0:
+                samples.setdefault(s.model, []).append(s.elapsed_s)
+        per_model: dict[str, dict[str, Any]] = {}
+        for st in subtasks:
+            row = per_model.setdefault(st.model, {"subtasks": 0, "cached": 0})
+            row["subtasks"] += 1
+            hit = slim.get(st.run_id)
+            if hit is not None and hit.status == "OK":
+                row["cached"] += 1
+        busy_s = longest_s = 0.0
+        complete = True
+        for model, row in per_model.items():
+            pending = row["subtasks"] - row["cached"]
+            got = sorted(samples.get(model, []))
+            row["cost"] = MODEL_REGISTRY[model].cost
+            row["samples"] = len(got)
+            row["median_s"] = got[len(got) // 2] if got else None
+            if pending and row["median_s"] is None:
+                complete = False
+            elif pending:
+                busy_s += pending * row["median_s"]
+                longest_s = max(longest_s, row["median_s"])
+        total = len(subtasks)
+        cached = sum(r["cached"] for r in per_model.values())
+        return {
+            "dry_run": True, "job_type": job_type, "motor": motor_name,
+            "subtasks": total, "cached": cached, "pending": total - cached,
+            "points": len({st.point_idx for st in subtasks}) if job_type == "sweep" else None,
+            "models": per_model, "workers": self.workers,
+            # workers share the load, but no sub-task runs faster than itself
+            "estimate_s": round(max(busy_s / self.workers, longest_s), 2),
+            "estimate_complete": complete,
+            "max_sweep_points": self.max_sweep_points,
+        }
 
     def cancel(self, job_id: str) -> Job:
         """Cancel a job. Terminal jobs are a no-op; a pending
@@ -503,7 +792,8 @@ class JobManager:
             info.validate(motor)
         _check_cogging_j_s(job_type, params)
         _auto_derive_params(params, job_type, motor)
-        config = RunConfig(motor=motor, model=job_type, **_build_config_kw(params))
+        kw = _fem_config_kw(job_type, motor, _build_config_kw(params))
+        config = RunConfig(motor=motor, model=job_type, **kw)
         return [SubTask(run_id=compute_run_id(config), config=config, model=job_type)]
 
     def _sweep_subtasks(self, motor: Motor, params: dict[str, Any]) -> list[SubTask]:
@@ -521,12 +811,18 @@ class JobManager:
             _check_cogging_j_s(mk, params)
         raw_axes = params.get("axes")
         if not raw_axes:
-            raise ValueError("sweep requires params.axes (list of "
-                             "{field, start, stop, steps[, strategy]})")
+            raise ValueError(f"sweep requires params.axes: {_AXIS_FORMAT}")
         try:
             axes = [SweepAxis(**a) for a in raw_axes]
         except TypeError as e:
-            raise ValueError(f"bad sweep axis: {e}") from e
+            raise ValueError(f"bad sweep axis ({e}); {_AXIS_FORMAT}") from e
+        # Checked on the full product before the grid is built (invalid
+        # combinations are dropped later, so this is an upper bound).
+        n_grid = math.prod(a.steps for a in axes)
+        if n_grid > self.max_sweep_points:
+            raise ValueError(
+                f"sweep grid has {n_grid} points; this server allows "
+                f"{self.max_sweep_points} (--max-sweep-points)")
 
         points = generate_grid(motor.geometry, axes, base_L_stk=motor.L_stk)
         if not points:
@@ -538,9 +834,7 @@ class JobManager:
         for i, pt in enumerate(points):
             m = apply_sweep_point(motor, pt)
             for mk in model_keys:
-                kw = _kw_for_model(base_kw, mk)
-                if mk == "fem":
-                    kw.setdefault("nonlinear", True)  # mirrors geo_parallel.run_sweep
+                kw = _fem_config_kw(mk, m, _kw_for_model(base_kw, mk))
                 config = RunConfig(motor=m, model=mk, **kw)
                 subtasks.append(SubTask(
                     run_id=compute_run_id(config), config=config,
@@ -585,7 +879,7 @@ class JobManager:
         base_kw = _build_config_kw(params)
         subtasks = []
         for mk in models:
-            kw = _kw_for_model(base_kw, mk)
+            kw = _fem_config_kw(mk, motor, _kw_for_model(base_kw, mk))
             config = RunConfig(motor=motor, model=mk, **kw)
             subtasks.append(SubTask(
                 run_id=compute_run_id(config), config=config, model=mk))
@@ -675,6 +969,7 @@ class JobManager:
                     ))
                     if st.status == "OK":
                         latest = st.run_id
+                        st.assess(result.get("metrics"), self._st_measured(st))
                 self._emit_threadsafe({
                     "type": "job_progress", "job_id": job.id,
                     "completed": job.completed_count, "total": job.total,
@@ -763,6 +1058,7 @@ class JobManager:
             hit = slim.get(st.run_id)
             if hit is not None and hit.status == "OK":
                 st.status = "cached"
+                st.assess(hit.metrics, self._st_measured(st))
 
     def _finish_cancelled(self, job: Job) -> None:
         for st in job.subtasks:
@@ -814,12 +1110,30 @@ class JobManager:
     def save_result(self, result: RunResult) -> str:
         """Single choke point for store writes (single-writer discipline);
         also used by the measured-import route. Returns the run_id."""
+        run_id = compute_run_id(result.config)
         with self._save_lock:
             self.store.save(result)
-        return compute_run_id(result.config)
+            if result.source != "computed" and self._measured_ids is not None:
+                self._measured_ids.setdefault(result.config.motor.name, set()).add(run_id)
+        return run_id
+
+    def on_terminal(self, listener: Callable[[Job], None]) -> None:
+        """Call `listener(job)` once per job as it reaches completed,
+        failed, or cancelled. Listener errors are logged, not raised."""
+        self._terminal_listeners.append(listener)
 
     def _emit(self, msg: ServerMsg) -> None:
         self._events.put_nowait(msg)
+        if msg["type"] not in _TERMINAL_EVENTS:
+            return
+        job = self.jobs.get(msg["job_id"])
+        if job is None:
+            return
+        for listener in self._terminal_listeners:
+            try:
+                listener(job)
+            except Exception as e:
+                log.error("terminal_listener_failed", job_id=job.id, error=str(e))
 
     def _emit_threadsafe(self, msg: ServerMsg) -> None:
         if self._loop is None:

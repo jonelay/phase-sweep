@@ -19,6 +19,8 @@ import modelComparisonPanel from "./panels/model_comparison.js";
 import validationSummaryPanel from "./panels/validation_summary.js";
 import nameplatePanel from "./panels/nameplate.js";
 import configEditorPanel from "./config-editor.js";
+import designSpacePanel from "./panels/design_space.js";
+import mcpActivityPanel from "./panels/mcp_activity.js";
 import { initTheme, loadPalette, bindThemeToggle, bindSelect } from "/view-sweep/js/theme.js";
 import { createPlot, loadPlotSpec } from "/view-sweep/js/plot.js";
 import { chip } from "/view-sweep/js/widgets.js";
@@ -42,6 +44,8 @@ const REGISTRY = [
   { panel: modelComparisonPanel, slot: "validation" },
   { panel: validationSummaryPanel, slot: "validation" },
   { panel: configEditorPanel, slot: "editor" },
+  { panel: designSpacePanel, slot: "agent" },
+  { panel: mcpActivityPanel, slot: "agent" },
 ];
 
 const TABS = [
@@ -49,6 +53,7 @@ const TABS = [
   { id: "sweep", label: "Sweep" },
   { id: "validation", label: "Validation" },
   { id: "editor", label: "Editor" },
+  { id: "agent", label: "Agent" },
 ];
 
 const MAX_COMPLETE_FETCHES = 12; // cap result fetches on job_complete of a big sweep
@@ -358,6 +363,23 @@ const app = {
       app.watchJob(job.id);
     }
     return job;
+  },
+  // a job submitted elsewhere (an MCP agent): show its card and stream
+  // its progress, exactly as if this page had submitted it
+  adoptJob(job) {
+    jobsPanel.update({ kind: "job", job });
+    if (job.status !== "pending" && job.status !== "running") return;
+    app.watchJob(job.id);
+    // it may have finished before the subscribe landed: re-check once and
+    // replay the terminal message the WS would have sent
+    api.get(`/api/jobs/${job.id}`).then((j) => {
+      if (!activeJobs.has(j.id)) return; // the WS already delivered it
+      const msg = j.status === "completed"
+        ? { type: "job_complete", job_id: j.id, result_ids: j.result_ids }
+        : j.status === "failed" ? { type: "job_failed", job_id: j.id, error: j.error ?? "" }
+          : j.status === "cancelled" ? { type: "job_cancelled", job_id: j.id } : null;
+      if (msg) handleWsMessage(msg);
+    }).catch(() => {});
   },
   reloadConfigs: loadConfigs,
   toast,

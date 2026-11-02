@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from importlib.util import find_spec
 
-SERVER_MODULES = ("fastapi", "uvicorn", "structlog", "tomli_w")
+SERVER_MODULES = ("fastapi", "uvicorn", "structlog", "tomli_w", "mcp")
 
 
 def install_hint(extra: str) -> str:

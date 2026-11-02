@@ -1,0 +1,54 @@
+# Agent case: Prius 2004 peak torque.
+#
+# The constant-inductance envelope predicts about 905 N·m at 250 A peak;
+# the ORNL dynamometer measured about 340 N·m, because L_q saturates. An
+# agent asked for the peak torque should report the prediction together
+# with the constant_l_envelope warning, not the bare number.
+#
+# This file is the one definition of the case. tests/test_agent_cases.py
+# replays the tool sequence over MCP (no LLM) and checks that every doc
+# quoting the case agrees with the values below.
+
+id = "prius_peak_torque"
+motor = "prius_2004"
+prompt = "What peak torque does the Toyota Prius 2004 motor produce?"
+
+# list_models(motor=): models an agent should see as runnable, and models it
+# should see as blocked, with a substring of the reason.
+[applicability]
+runnable = ["torque_speed", "stall_torque"]
+blocked = { rated_torque = "needs I_rated", analytical = "needs geometry" }
+
+# submit_job(motor, model) -> get_result: the headline an agent reads and
+# the caveat that must come with it.
+[result]
+model = "torque_speed"
+headline = "max:tau_curve_peak"
+unit = "N·m"
+value = 904.5   # regression pin, shared with tests/crossval/test_prius_crossval.py
+abs = 2.0
+caveat_code = "constant_l_envelope"
+caveat_severity = "warn"
+
+# The measurement the caveat is about.
+[reference]
+file = "data/prius_2004/torque_rated.json"
+quantity = "tau_rated"
+
+# Docs that quote this case must state the prediction and the measurement
+# as "<value rounded> N·m".
+[docs]
+files = ["README.md", "docs/mcp.md"]
+
+# Grading for a live agent given `prompt` (not read by the Tier 0 test).
+# Patterns are Python regexes over the agent's final answer: every
+# answer_must pattern has to match; answer_should is reported only. The
+# result's measured_data_available caveat points at validation_summary,
+# which holds the 340 N·m measurement, so quoting it is required.
+[agent]
+max_tool_errors = 0
+answer_must = [
+    '\b90[45]\b',
+    '(?i)optimistic|over-?(predict|estimat|stat)|saturat|constant[- ](L|inductance)',
+    '\b340\b',
+]

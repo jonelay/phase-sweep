@@ -156,6 +156,34 @@ rectangular pockets forming a V:
 Yoke above outer pocket to air gap: 89.3 − 87.5 = 1.8 mm (thin,
 saturates at load). Yoke between pockets: 84.3 − 78.9 = 5.4 mm.
 
+## Thermal-network derivations
+
+The `[thermal_network]` block in `motors/bmw_i3.toml` takes two of its
+conductances from the literature; the derivations are recorded here so the
+TOML comments can stay short.
+
+**R_WFe from Tikadar et al. (2020).** Their coupled Motor-CAD + Fluent
+model (coolant 70 °C, jacket h = 1000–9000 W/m²K, liner 0.3 mm, air gap
+0.5 mm) gives losses vs torque at four speeds (Fig. 4) and the winding
+hot spot vs torque at h = 5000 W/m²K (Fig. 5). Two points at 4500 rpm —
+(35 N·m: p_cu ≈ 0.1 kW, p_fe ≈ 0.8 kW, T_max ≈ 75 °C) and (250 N·m:
+p_cu ≈ 3.7 kW, p_fe ≈ 2.05 kW, T_max ≈ 174 °C) — solve the two-resistance
+form to R_WFe = 0.0235 K/W and R_FeS = 0.0029 K/W. These are a numerical
+model's hot spot at an assumed h, not a measurement or a lumped mean.
+R_WFe is used as `1/G_WFe`; R_FeS is only a consistency check on the
+measured-fit `G_FeS` (`scripts/fit_i3_thermal_network.py`). The paper
+also states that rotor core and magnet loss are a small share, which is
+why the magnet node carries no source.
+
+**G_FeM from Becker & Kaye (1962).** Taylor–Couette correlation for the
+rotor–stator gap: Nu = 2 for Ta < 1700, Nu = 0.128 Ta^0.367 for
+1700 < Ta < 10⁴, Nu = 0.409 Ta^0.241 above, with Nu = h·2δ/k and
+Ta = Re_δ²·δ/r, Re_δ = ω r δ/ν. At 7000 rpm (δ = 0.7 mm, r = 89.3 mm,
+L = 132.3 mm, air at ~80 °C: ν = 2.1×10⁻⁵ m²/s, k = 0.030 W/mK):
+ω r = 65.5 m/s, Re_δ ≈ 2.2×10³, Ta ≈ 3.7×10⁴, Nu ≈ 5.2, h ≈ 110 W/m²K
+over 2π r L = 0.0742 m² gives G_FeM ≈ 8.2 W/K. Invisible at steady state
+(`T_M = T_Fe`), so a literature estimate is recorded rather than fitted.
+
 ## What is NOT published
 
 - Back-EMF waveform: not published as data or graph by any source.

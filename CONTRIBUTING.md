@@ -84,7 +84,8 @@ uv run ruff check --fix phasesweep/ scripts/ tests/
 2. Fork the repo and create a branch from `main`.
 3. Make your changes, add or update tests as needed.
 4. Ensure `uv run ruff check phasesweep/ scripts/ tests/`,
-   `uv run mypy`, and `uv run pytest` all pass.
+   `uv run mypy`, and the core test lane pass. Run the full suite as
+   well when you touch solver or FEM code.
 5. Open a pull request against `main`.
 
 Keep PRs focused — one logical change per PR.
@@ -102,13 +103,10 @@ Assisted-by: <tool>
 
 ## Scope
 
-phase-sweep is a PMSM and induction-machine simulation toolkit for stator/rotor
-design exploration — field solvers (analytical and 2D FEM), induction
-equivalent-circuit and FEM models, drive simulation,
-thermal-duty screening, torque and iron-loss models, sensitivity sweeps,
-and a cross-validation CLI. Contributions that extend these capabilities
-— bug fixes, new validation anchors, documentation improvements, and
-performance work — are welcome.
+phase-sweep runs analytical, FEM, and drive models of PMSM and induction
+machines for design sweeps; the [README](README.md) lists what it
+covers. Bug fixes, new validation anchors, documentation improvements, and
+performance work within that scope are welcome.
 
 Large-scope additions (new solver backends, integration with other
 tools) should start as an issue discussion before any code is written.

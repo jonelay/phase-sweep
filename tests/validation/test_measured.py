@@ -16,7 +16,7 @@ from phasesweep.validation.measured import (
     import_measured,
     validate_measured,
 )
-from tests.conftest import REPO_ROOT
+from tests.conftest import REPO_ROOT, creator_file
 from tests.conftest import make_motor as _make_motor
 
 
@@ -417,14 +417,14 @@ class TestImportWithMetadata:
 class TestDataFixtures:
 
     def test_creator_torque_rated(self):
-        raw = json.loads((REPO_ROOT / "data/creator_case_pmsm/torque_rated.json").read_text())
+        raw = json.loads(creator_file("torque_rated.json").read_text())
         data = MeasuredResult.from_dict(raw)
         validate_measured(data)
         assert data.quantities["tau_rated"] == 0.10
         assert "tau_rated" in data.bound_compare
 
     def test_creator_mtpa_angles(self):
-        raw = json.loads((REPO_ROOT / "data/creator_case_pmsm/mtpa_angles.json").read_text())
+        raw = json.loads(creator_file("mtpa_angles.json").read_text())
         data = MeasuredResult.from_dict(raw)
         validate_measured(data)
         assert "gamma_opt_at_0p15" in data.curve_compare

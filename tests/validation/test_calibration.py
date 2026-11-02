@@ -37,7 +37,7 @@ from phasesweep.validation.measured import (
     measured_run_result,
     validate_measured,
 )
-from tests.conftest import NOT_MOTOR_TOMLS, REPO_ROOT
+from tests.conftest import NOT_MOTOR_TOMLS, REPO_ROOT, creator_file
 
 OUTRUNNER_TOML = REPO_ROOT / "motors/outrunner_14mm_steel.toml"
 BACKEMF_JSON = REPO_ROOT / "data/outrunner_14mm_steel/backemf_measured.json"
@@ -242,7 +242,7 @@ class TestCreatorBCore:
         is pinned too, not just `final`: it carries the fem flux snapshot, so
         a fem bump that moves the airgap field fails here rather than leaving
         a stale starting point in a committed provenance artifact."""
-        path = REPO_ROOT / "data/creator_case_pmsm/b_core_calibration.record.json"
+        path = creator_file("b_core_calibration.record.json")
         rec = json.loads(path.read_text())
         assert rec["params"][0]["final"] == pytest.approx(
             result.record.params[0].final, rel=1e-9)

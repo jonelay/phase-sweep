@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "phasesweep"
-version = "0.6.0"
-description = "PMSM and induction-machine simulation for stator/rotor design exploration"
+version = "0.7.0"
+description = "Motor design sweeps: analytical, FEM, and drive models"
 requires-python = ">=3.12"
 authors = [{name = "Jone Lay", email = "jlay.dev@pm.me"}]
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
-keywords = ["motor", "pmsm", "bldc", "induction-motor", "fem", "simulation"]
+keywords = ["motor", "pmsm", "bldc", "induction-motor", "fem", "simulation", "mcp", "ai-agents"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -37,6 +37,7 @@ server = [
     "uvicorn[standard]",
     "structlog",
     "tomli-w",
+    "mcp>=2.3",
 ]
 all = ["phasesweep[fem,sim,viz,server]"]
 gpu = ["cupy-cuda12x"]

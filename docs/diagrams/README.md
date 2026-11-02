@@ -13,10 +13,10 @@ factual diagram element is mapped to a source in the claim tables below.
 | `Geometry` sub-block | Geometry as Motor sub-object | `phasesweep/machines/geometry.py` |
 | `RunConfig` block | Motor + model key + solver params; "how to run the analysis" | `phasesweep/sweep_types.py` |
 | `prepare_*()` edge | factories validate completeness and derive psi_f <-> B_rem at the solver boundary; "if you hold a params object, the Motor is ready for that solver" | `phasesweep/solver_params.py` |
-| `*Params` block | frozen validated dataclasses AnalyticalParams … DemagScreenParams (9) | `phasesweep/solver_params.py` |
+| `*Params` block | one frozen validated dataclass per model, co-located with its run function | `phasesweep/solver_params.py` |
 | `MODEL_REGISTRY` hub | plain dict of ModelInfo; no Protocol/ABC/plugin system | `phasesweep/registry.py` |
-| computed model row | analytical, fem, drive_sim, rated_torque, stall_torque, thermal_duty, torque_speed, iron_loss, demag_screen | `phasesweep/registry.py` |
-| measured-source row | backemf_capture, inductance_test, resistance_test, torque_test, airgap_flux_test, iron_loss_test | `phasesweep/registry.py` |
+| computed model row | the registry's `source == "computed"` entries (the diagram shows a representative subset, not the full list) | `phasesweep/registry.py` |
+| measured-source row | the registry's measured record types (`*_capture`, `*_test`) | `phasesweep/registry.py` |
 | measured import edge | CLI `phasesweep-import` and `POST /api/measured/{motor_name}`; source = measured/published | `phasesweep/validation/` |
 | `metrics dict` edge | `fn: RunConfig -> dict` of the model's `produces` quantities | `phasesweep/registry.py` |
 | `ResultStore` block | every record carries motor_config_id, model, source | `phasesweep/result_store.py` |

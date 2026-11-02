@@ -18,6 +18,10 @@ def main() -> None:
                              "rebinding; it is not access control. Binding a "
                              "non-loopback address such as 0.0.0.0 exposes the "
                              "unauthenticated server to every client that can reach it")
+    parser.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                        help="extra hostname accepted in Host and Origin headers, e.g. "
+                             "the public name a reverse proxy forwards; repeatable. "
+                             "Like --host, this is not access control")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--motors-dir", type=Path, default=Path("motors"))
     parser.add_argument("--user-configs-dir", type=Path, default=Path("user_configs"),
@@ -27,6 +31,8 @@ def main() -> None:
                         help="worker processes for job execution")
     parser.add_argument("--subtask-timeout", type=float, default=600.0,
                         help="per-sub-task timeout budget in seconds")
+    parser.add_argument("--max-sweep-points", type=int, default=500,
+                        help="largest sweep grid (product of axis steps) a job may request")
     parser.add_argument("--mesh-cache-dir", default=None,
                         help="FEM mesh disk cache directory")
     parser.add_argument("--log-json", action="store_true",
@@ -47,9 +53,10 @@ def main() -> None:
         output_dir=args.output_dir,
         workers=args.workers,
         subtask_timeout_s=args.subtask_timeout,
+        max_sweep_points=args.max_sweep_points,
         mesh_cache_dir=args.mesh_cache_dir,
         log_json=args.log_json,
-        extra_allowed_hosts=(args.host,),
+        extra_allowed_hosts=(args.host, *args.allow_host),
     ))
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

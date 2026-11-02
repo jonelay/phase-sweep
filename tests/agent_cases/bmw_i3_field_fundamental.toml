@@ -1,0 +1,27 @@
+# Agent case: BMW i3 air-gap field fundamental.
+#
+# The i3 is an inset-magnet IPM. The closed-form field solver assumes air
+# between the magnet arcs and rejects it; the FEM solver handles it. An
+# agent should learn that from list_models(motor=) and submit FEM first
+# time, not discover it from a failed analytical submit.
+#
+# tests/test_agent_cases.py replays the applicability check over MCP (no
+# LLM; the FEM run itself is too slow for every push).
+
+id = "bmw_i3_field_fundamental"
+motor = "bmw_i3"
+prompt = "What is the air-gap flux density fundamental of the BMW i3 motor?"
+
+[applicability]
+runnable = ["fem"]
+blocked = { analytical = "inset rotors" }
+
+# Grading for a live agent given `prompt` (not read by the Tier 0 test).
+# Patterns are Python regexes over the agent's final answer.
+[agent]
+max_tool_errors = 0
+call_before_submit = ["list_models"]
+answer_must = [
+    '\d\.\d+\s*T\b',
+    '(?i)inset|interpole|analytical',
+]

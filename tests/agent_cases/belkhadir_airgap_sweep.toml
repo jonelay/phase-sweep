@@ -1,0 +1,35 @@
+# Agent case: Belkhadir outrunner air-gap sweep with FEM.
+#
+# FEM sub-tasks take seconds to minutes each on a shared worker pool. An
+# agent asked for an FEM sweep should dry-run it first (sub-task count and
+# time estimate) before queueing it.
+#
+# tests/test_agent_cases.py replays the dry run over MCP (no LLM, nothing
+# queued); the FEM solves belong to the live agent run.
+
+id = "belkhadir_airgap_sweep"
+motor = "belkhadir_outrunner"
+prompt = """How does the air-gap flux density fundamental of the Belkhadir \
+outrunner change as the air gap goes from 1 mm to 2 mm? Use the FEM model \
+with three gap values."""
+
+[applicability]
+runnable = ["fem", "analytical"]
+blocked = { torque_speed = "needs R_s" }
+
+# submit_job(motor, "sweep", params, dry_run=True): the plan an agent sees.
+[plan]
+model = "sweep"
+params = { model_keys = ["fem"], axes = [
+    { field = "airgap", start = 0.001, stop = 0.002, steps = 3 },
+] }
+subtasks = 3
+
+# Grading for a live agent given `prompt` (not read by the Tier 0 test).
+[agent]
+max_tool_errors = 0
+require_dry_run = true
+answer_must = [
+    '\d\.\d+\s*T\b',
+    '(?i)decreas|drops|falls|lower|reduc|weaker',
+]

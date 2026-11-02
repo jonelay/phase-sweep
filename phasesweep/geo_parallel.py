@@ -40,6 +40,7 @@ __all__ = [
     "SweepResult",
     "apply_axis",
     "apply_sweep_point",
+    "axis_value",
     "execute_generic",
     "execute_parallel",
     "generate_grid",
@@ -518,6 +519,26 @@ def apply_axis(
         return dataclasses.replace(geo, back_iron_thickness=value), base_L_stk
 
     raise ValueError(f"unknown sweep field: {axis.field}")
+
+
+def axis_value(motor: Motor, field: str) -> float | None:
+    """The value of sweep-axis `field` as realized on `motor`, in m.
+
+    Read back from the motor, not from the axis grid: a proportional
+    r_outer step also moves the airgap, so this is the design's actual
+    dimension. None when the motor has no such value."""
+    geo = motor.geometry
+    if field == "L_stk":
+        return motor.L_stk
+    if not isinstance(geo, Geometry):
+        return None
+    if field == "r_outer":
+        return geo.r_outer
+    if field == "airgap":
+        return abs(geo.r_stator - geo.r_magnet)
+    if field == "back_iron_thickness":
+        return geo.back_iron_thickness
+    raise ValueError(f"unknown sweep field: {field}")
 
 
 def generate_grid(

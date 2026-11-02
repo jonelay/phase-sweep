@@ -28,6 +28,7 @@ from phasesweep.machines.configs import load_motor
 from phasesweep.machines.motor import Motor
 from phasesweep.result_store import ResultStore
 from phasesweep.server.jobs import JobManager
+from phasesweep.server.mcp import McpActivity, build_mcp, mcp_routes
 from phasesweep.server.routes import api
 
 __all__ = [
@@ -47,6 +48,7 @@ class ServerSettings:
     output_dir: Path = Path("output")
     workers: int = 4
     subtask_timeout_s: float = 600.0
+    max_sweep_points: int = 500
     mesh_cache_dir: str | None = None
     log_json: bool = False
     extra_allowed_hosts: tuple[str, ...] = ()
@@ -91,8 +93,10 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
             workers=settings.workers,
             subtask_timeout_s=settings.subtask_timeout_s,
             mesh_cache_dir=settings.mesh_cache_dir,
+            max_sweep_points=settings.max_sweep_points,
         )
         app.state.manager = manager
+        manager.on_terminal(app.state.mcp_activity.record_job)
         app.state.settings = settings
         app.state.user_config_names = user_names
         ws_manager = app.state.ws_manager  # created by view-sweep before us
@@ -106,16 +110,27 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
             await manager.stop()
             log.info("server_stopped")
 
+    @asynccontextmanager
+    async def lifespan_with_mcp(app: FastAPI) -> AsyncIterator[None]:
+        async with lifespan(app), mcp_server.session_manager.run():
+            yield
+
     # Dashboard static mount
     dashboard = Path(__file__).resolve().parent.parent / "dashboard"
-    return create_view_sweep_app(AppConfig(
+    app = create_view_sweep_app(AppConfig(
         title="phase-sweep server",
         routers=[api],
-        lifespan=lifespan,
+        lifespan=lifespan_with_mcp,
         static_dir=dashboard,
         allowed_hosts=settings.extra_allowed_hosts,
         log_json=settings.log_json,
     ))
+    # view-sweep mounts the dashboard at "/" last; /mcp must precede it
+    # or the catch-all static mount shadows it.
+    app.state.mcp_activity = McpActivity()
+    mcp_server = build_mcp(app, app.state.mcp_activity)
+    app.router.routes[0:0] = mcp_routes(mcp_server)
+    return app
 
 
 def _cancel_hook(manager: JobManager):

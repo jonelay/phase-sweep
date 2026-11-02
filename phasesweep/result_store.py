@@ -89,6 +89,7 @@ class SlimResult(NamedTuple):
     source: Source = "computed"
     motor_name: str = ""
     timestamp: str = ""
+    elapsed_s: float = 0.0
 
 
 class ResultStore:
@@ -232,5 +233,6 @@ class ResultStore:
                 source=d_source,
                 motor_name=name,
                 timestamp=d.get("timestamp", ""),
+                elapsed_s=d.get("elapsed_s") or 0.0,
             )
         return out

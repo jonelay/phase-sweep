@@ -17,8 +17,7 @@ treatment of both internal (inrunner) and external (outrunner) rotor
 topologies. Our `zhu_howe_Br()` implements the 2002 model: open-circuit,
 PM-only field with square-wave radial magnetization and infinite iron
 permeability at boundary surfaces. Solves the 2×2 interface-matching system
-numerically. Current implementation-verification results belong in the
-validation report rather than this source bibliography.
+numerically.
 
 ### Zhu & Howe (1993) — original four-part series
 Four-part series, all in *IEEE Transactions on Magnetics*, 29(1), Jan. 1993.
@@ -29,6 +28,8 @@ Four-part series, all in *IEEE Transactions on Magnetics*, 29(1), Jan. 1993.
   https://doi.org/10.1109/20.195558 — pp. 136–142
 - **Part III — Effect of Stator Slotting**
   https://doi.org/10.1109/20.195559 — pp. 143–151
+- **Part IV — Magnetic Field on Load**
+  https://doi.org/10.1109/20.195560 — pp. 152–158
 
 Part III (slotting) is the primary reference for the Carter factor
 correction. Eqs 15–17 define k_c using the effective airgap
@@ -57,7 +58,7 @@ and the back-EMF (Eq. 2.28). Chapter 3 documents the 5 kW / 300 rpm
 single-plane (r_mean) case; `fem_axial` implements the multi-plane
 case with the planes solved by FEM rather than the layer expression.
 
-### Chung & Kim (2002) / Hanselman (2003) — Cartesian layer field
+### Chung & Kim (2002) / Hanselman (2006) — Cartesian layer field
 Source form of thesis Eq. (2.18): per-harmonic air-gap flux density of
 a linear PM machine with iron boundaries on both sides — equivalent to
 the hyperbolic transfer
@@ -170,40 +171,24 @@ For N42 grade at rated temperature range:
 - `α_Br ≈ −0.12 %/°C` (B_rem temperature coefficient)
 - `β_Hcj ≈ −0.55 %/°C` (coercivity temperature coefficient)
 
-Temperature coefficients are grade-specific. N42 is a medium-grade reference;
-N52 has higher B_rem but worse temperature performance; grades ending in
-"H", "SH", "UH" have better high-temperature coercivity.
-
-**Caution:** The knee field `H_knee` is geometry-dependent and typically read
-from the second-quadrant B-H curve at the inflection point. The temperature
-dependence of the knee is steeper than that of B_rem.
+Temperature coefficients are grade-specific; the knee temperature
+dependence is steeper than that of B_rem. **What we use:** `alpha_Br`,
+`B_knee` and `alpha_B_knee` in `[materials]` are taken per motor from the
+grade datasheet, not from these N42 values.
 
 ---
 
 ## FEM Formulation
 
-### Nonlinear iteration for iron permeability
+### Silvester & Ferrari (1996) — nonlinear iteration
+**Silvester, P. P., & Ferrari, R. L. (1996).** *Finite Elements for
+Electrical Engineers.* 3rd ed. Cambridge University Press. Chapter 7
+(nonlinear problems).
 
-The v0.5 default is line-search-damped Newton with two relaxed-Picard
-startup steps and automatic Picard fallback. Newton stops at an algebraic
-relative residual of 1e-4. The fallback/fixed-point method updates
-reluctivity from local flux density as follows:
-
-1. Solve linear system with current ν(B) distribution
-2. Compute |B| per element from the solution
-3. Update ν from B-H curve lookup (iron elements only)
-4. Under-relax: ν_new = α·ν_BH + (1−α)·ν_old, with α = 0.2 (defaults.toml)
-
-Picard uses a 1e-4 raw-step tolerance and adaptive relaxation. It remains
-selectable with `nonlinear_solver="picard"`.
-
-**Standard reference:**
-Silvester, P. P., & Ferrari, R. L. (1996). *Finite Elements for Electrical
-Engineers.* 3rd ed. Cambridge University Press. Chapter 7 (nonlinear problems).
-
-The implemented B-H curve is a generic soft-magnetic-steel composite rather
-than a grade-specific material model. For grade-specific data, see the M19
-datasheet entry above.
+**What we use:** the damped-Newton default and relaxed-Picard
+startup/fallback for the B-H iteration in the 2D and axial FEM solvers
+(`RunConfig.nonlinear_solver`). The built-in B-H curve is a generic
+soft-steel composite; grade-specific data is the M19 entry above.
 
 ### NGSolve documentation
 **Schöberl, J. (2014–present).** NGSolve finite element library.
@@ -471,43 +456,61 @@ BMW's own presentation of the i3 traction motor. Source for system-level
 parameters: phase resistance R_s = 5.3 mΩ, max phase current 565.7 A,
 max phase voltage 159.2 V, max speed 11400 rpm.
 
+**What we use:** R_s and drive limits in `motors/bmw_i3.toml`.
+
 ### Tikadar, Kumar, Joshi & Kumar (2020) — BMW i3 electro-thermal model (`[thermal_network]` R_WFe)
 **Tikadar, A., Kumar, N., Joshi, Y., & Kumar, S. (2020).** "Coupled
 Electro-Thermal Analysis of Permanent Magnet Synchronous Motor for
 Electric Vehicles." *19th IEEE ITherm*, pp. 249–256. OSTI 1843426.
 https://www.osti.gov/servlets/purl/1843426
-(Georgia Tech; earlier cited in this repo as "Kumar 2023" and "Kumar et al., InterPACK
-2019" — same paper.)
 
-Two-way coupled Motor-CAD + Fluent model of the jacket-cooled i3 motor:
-coolant 70 °C, jacket h = 1000–9000 W/m²K, liner 0.3 mm, air gap 0.5 mm.
-Fig. 4 gives losses vs torque at four speeds, Fig. 5 the winding hot
-spot vs torque at h = 5000 W/m²K. Two points at 4500 rpm — (35 N·m:
-p_cu ≈ 0.1 kW, p_fe ≈ 0.8 kW, T_max ≈ 75 °C) and (250 N·m: p_cu ≈ 3.7 kW,
-p_fe ≈ 2.05 kW, T_max ≈ 174 °C) — solve the two-resistance form to
-R_WFe = 0.0235 K/W and R_FeS = 0.0029 K/W. A numerical model's hot spot
-at an assumed h, not a measurement or a lumped mean.
+Two-way coupled Motor-CAD + Fluent model of the jacket-cooled i3 motor.
 
-**What we use:** `R_WFe` (1/`G_WFe`) in the i3 `[thermal_network]`
-block, and `R_FeS` as a consistency check on the measured-fit value
-(`scripts/fit_i3_thermal_network.py`), not as the anchor. Also states
-that rotor core and magnet loss are a small share, which is why the
-magnet node carries no source.
+**What we use:** winding-to-iron resistance `R_WFe` (1/`G_WFe`) in the
+i3 `[thermal_network]` block, back-solved from two points of the paper's
+hot-spot curve; derivation in `data/bmw_i3/README.md`.
 
 ### Becker & Kaye (1962) — air-gap heat transfer (`[thermal_network]` G_FeM)
 **Becker, K. M., & Kaye, J. (1962).** "Measurements of Diabatic Flow in an
 Annulus With an Inner Rotating Cylinder." *ASME J. Heat Transfer*, 84(2),
 pp. 97–104.
 
-Taylor–Couette correlation for the rotor–stator gap: Nu = 2 for
-Ta < 1700 (conduction), Nu = 0.128 Ta^0.367 for 1700 < Ta < 10⁴,
-Nu = 0.409 Ta^0.241 above, with Nu = h·2δ/k and Ta = Re_δ²·δ/r,
-Re_δ = ω r δ/ν. For the i3 at 7000 rpm (δ = 0.7 mm, r = 89.3 mm,
-L = 132.3 mm, air at ~80 °C: ν = 2.1×10⁻⁵ m²/s, k = 0.030 W/mK):
-ω r = 65.5 m/s, Re_δ ≈ 2.2×10³, Ta ≈ 3.7×10⁴, Nu ≈ 5.2, h ≈ 110 W/m²K
-over 2π r L = 0.0742 m² gives G_FeM ≈ 8.2 W/K.
+Taylor–Couette Nusselt correlation for the rotor–stator gap.
 
-**What we use:** `G_FeM` in the i3 block — invisible at steady state
-(`T_M = T_Fe`), so a literature estimate is recorded rather than fitted.
+**What we use:** `G_FeM` in the i3 block (≈ 8.2 W/K at 7000 rpm;
+derivation in `data/bmw_i3/README.md`).
 
-**What we use:** R_s and drive limits in `motors/bmw_i3.toml`.
+### CREATOR open benchmark — PMSM and IM datasets (`motors/creator_case_pmsm.toml`, `data/creator_case_im/`)
+**Muetze, A., Heidarikani, K., Dhakal, P. K., Seebacher, R., & Schöps, S.
+(2025).** CREATOR Case open benchmark. *COMPEL*,
+https://doi.org/10.1108/compel-11-2024-0462 (preprint
+arXiv:2501.15921). Datasets: PMSM DOI 10.3217/sns1d-77m43 (CC BY-NC-ND
+4.0), IM DOI 10.3217/kh3v7-dhn98 (CC BY-NC 4.0).
+
+**What we use:** measured back-EMF, MTPA angle, rated torque, cogging and
+no-load loss for the sintered-ferrite inset PMSM; locked-rotor sweeps,
+nameplate and no-load tests for the induction machine. Attribution and
+what is and is not shipped: `data/creator_case_pmsm/README.md`,
+`data/creator_case_im/README.md`.
+
+### Belkhadir et al. (2023) — 22p/24s external-rotor PMSM (`motors/belkhadir_outrunner.toml`)
+"Electromagnetic Design and Optimization of a New 22-Pole/24-Slot
+External Rotor PMSM." *IECON 2023*.
+https://doi.org/10.1109/IECON51785.2023.10312419
+
+**What we use:** published air-gap flux density, back-EMF, flux linkage
+and rated torque as the outrunner analytical/FEM anchor.
+
+### Deylami et al. (2024) — 8p/12s outer-rotor cooling fan (`motors/deylami_fan.toml`)
+TechRxiv preprint, https://doi.org/10.36227/techrxiv.171439839.97768997/v1
+
+**What we use:** the paper's 2D ANSYS Maxwell air-gap peak as a
+model-vs-model anchor for the slotted FEM path.
+
+### ORNL Prius 2004 reports (`motors/prius_2004.toml`)
+ORNL/TM-2004/137 (teardown, https://doi.org/10.2172/885676),
+ORNL/TM-2004/185 (back-EMF, https://doi.org/10.2172/921782),
+ORNL/TM-2004/247 (dynamometer, https://doi.org/10.2172/890029).
+
+**What we use:** circuit parameters and the 340 N·m stall-torque bound;
+sources and assumptions in `data/prius_2004/README.md`.

@@ -22,10 +22,11 @@ docstrings (or, for asset-only directories, their entry-point source):
 | `simulation/` | Time-domain drive-simulation models. |
 | `validation/` | Measurement comparison, cross-validation, and calibration. |
 | `audit/` | Advisory induction-machine design checks against published diagnostic bands. |
-| `server/` | Local FastAPI job manager, result-query API, and WebSocket progress service. |
+| `server/` | Local FastAPI job manager, result-query API, WebSocket progress service, and MCP endpoint. |
 | `dashboard/` | Static browser UI for configuration, jobs, results, sweeps, and validation. |
 | `vis/` | Visualization utilities. |
 | `registry.py` | Model metadata and execution-function registry. |
+| `trust.py` | Read-time headline metrics and trust caveats for one result. |
 | `solver_params.py` | Shared solver-parameter derivation and motor-completeness validation. |
 | `sweep_types.py` | Validated run configuration and result types. |
 | `geo_parallel.py` | Geometry sweep generation and parallel execution. |
@@ -37,21 +38,15 @@ docstrings (or, for asset-only directories, their entry-point source):
 
 ![Pipeline spine — TOML through solver params, registry, and store to the consumers](images/architecture_pipeline.png)
 
-A motor TOML loads into a frozen `Motor` (validation at the boundary,
-see [`motor-toml.md`](motor-toml.md)). `RunConfig` pairs that `Motor`
-with a model key and solver params; the `prepare_*` factories (each
-living next to its model's run function, on the shared derivation
-utilities in `solver_params.py`) validate completeness and derive
-`psi_f` ↔ `B_rem`,
-so holding a params object means the `Motor` is ready for that solver.
-`MODEL_REGISTRY` maps model keys to `ModelInfo` metadata and executable
-model functions over their declared `produces` quantities. Results land in the `ResultStore`
-carrying `motor_config_id`, `model`, and `source`; the crossval
-comparison surface is derived from `produces` intersections rather than
-hardcoded, and deltas are computed on request, never stored.
+A motor TOML loads into a validated, immutable `Motor`; see
+[`motor-toml.md`](motor-toml.md). `RunConfig` pairs the motor with a model key
+and solver settings. Each model's `prepare_*` function checks that its inputs
+are complete and, when possible, derives `psi_f` from `B_rem` or vice versa.
 
-The figure is a full-width landscape (3.2:1); labels are legible at
-docs-page width but not at README inline width.
+`MODEL_REGISTRY` maps model keys to their metadata and run functions. Results
+are written to `ResultStore` with their motor ID, model, and source.
+Cross-validation compares only quantities that both records declare, and it
+computes differences when requested rather than storing them.
 
 ## Model inventory
 
@@ -100,18 +95,25 @@ validation evidence, and manage editable user configurations. The static
 payloads to present job progress, run history, field and simulation waveforms,
 sweep tables, model comparisons, validation summaries, and the config editor.
 
+`server/mcp.py` mounts an MCP endpoint at `/mcp` on the same app. Its tools
+read the shared job manager at call time, so agent jobs use the same worker
+pool, job list, cache, and store as the dashboard; it adds no compute or
+persistence path. Results reach the agent with headline metrics and caveats
+from `trust.py`, which derives them from each model's `ModelInfo.headline`,
+`units`, and `limits` and from provenance outputs the result already holds,
+so nothing extra is stored. The server records each MCP request in memory for
+the dashboard's Agent tab. Tool reference and usage: [mcp.md](mcp.md).
+
 ## Provenance and run identity
 
 ![Three-tier hashing — Geometry, Motor, RunConfig](images/architecture_provenance.png)
 
-Identity is hashed in three tiers: `Geometry.config_id` over the
-geometry fields, `Motor.config_id` over that plus `n_p`, populated
-optionals, and materials (excluding name and drive), then
-`compute_run_id` over the motor's id, the model key, and only the
-solver params in that model's `hash_fields`. Two side-inputs modify the
-run id — `model_v=N` when a model's version exceeds 1, and `dataset_id`
-unconditionally when set, so repeat captures of one test cannot
-collide.
+Result identity has three levels. `Geometry.config_id` hashes the geometry.
+`Motor.config_id` adds `n_p`, materials, and populated optional fields, but
+excludes the motor name and drive settings. `compute_run_id` then adds the
+model key and that model's `hash_fields`. A model version greater than one
+adds `model_v=N`; a supplied `dataset_id` is always included so repeated test
+captures cannot collide.
 
 Two staleness mechanisms sit outside the hash and need explicit
 handling: version-stale records are purged by comparing the stamp
@@ -128,14 +130,12 @@ downstream consumers.
 
 ![Model coverage matrix — motors against computed models](images/model_coverage_matrix.png)
 
-Rows are `motors/*.toml`, columns are the computed models in the
-registry. Three states, one hue plus glyphs: a current-version record
-in the store, runnable but no record yet, or the motor lacking fields
-the model requires. The ◆ counts are measured and published records —
-matched by motor *name*, not `motor_config_id`, because an imported
-record pins the config id at import time and the TOML drifts past it as
-it gains fields. The anchor belongs to the physical motor, not to a
-config revision.
+Rows are `motors/*.toml`; columns are computed models in the registry. A cell
+shows whether the store contains a current result, the model can run but has
+no stored result, or the motor lacks required fields. The ◆ counts are
+measured and published records. They attach by motor *name* rather than
+`motor_config_id`, so they remain associated with the physical motor when its
+TOML configuration changes.
 
 **This is a snapshot of one local store, not a project invariant.**
 `output/` is gitignored, so the committed image reflects whichever
