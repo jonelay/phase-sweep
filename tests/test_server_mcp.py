@@ -7,8 +7,10 @@ import time
 
 import pytest
 
-pytest.importorskip("fastapi")
-pytest.importorskip("mcp")
+from tests.conftest import SERVER_SKIP
+
+pytest.importorskip("fastapi", reason=SERVER_SKIP)
+pytest.importorskip("mcp", reason=SERVER_SKIP)
 
 from phasesweep.server.mcp import MCP_PATH, summarize_arrays
 from tests.test_server import make_client, workspace  # noqa: F401  (fixture)

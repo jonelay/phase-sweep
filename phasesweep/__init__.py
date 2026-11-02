@@ -1,4 +1,4 @@
-"""phasesweep — motor design sweeps: analytical, FEM, and drive models.
+"""phasesweep — electromagnetic design sweeps: analytical, FEM, and drive models.
 
 Public API: motor/geometry types, TOML loaders, validated solver-param
 factories, the model registry, and run/result types. The dict shape of

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "phasesweep"
 version = "0.7.0"
-description = "Motor design sweeps: analytical, FEM, and drive models"
+description = "Electromagnetic design sweeps: analytical, FEM, and drive models, checked against measured data"
 requires-python = ">=3.12"
 authors = [{name = "Jone Lay", email = "jlay.dev@pm.me"}]
 license = "Apache-2.0"

@@ -4,13 +4,13 @@
 #   Tier 0 — every push/MR, `test` + `core` below. FEM-free by policy:
 #            `-m "not fem"` is explicit, not an artifact of ngsolve
 #            failing to load.
-#   Tier 1 — scheduled pipeline, the `fem` job below.
+#   Tier 1 — on demand (Run pipeline), the `fem` job below.
 #   Tier 2 — release gate, the release-cut checklist. Not automated here.
 
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
     - if: $CI_COMMIT_BRANCH == "main"
 
 image: ghcr.io/astral-sh/uv:python3.12-bookworm
@@ -27,8 +27,10 @@ cache:
     - .uv-cache
 
 test:
+  # Explicit rules: a job without any falls back to only/except defaults,
+  # which exclude merge-request pipelines.
   rules:
-    - if: $CI_PIPELINE_SOURCE != "schedule"
+    - when: on_success
   variables:
     PHASESWEEP_STRICT_SKIP: "1"
   script:
@@ -42,17 +44,17 @@ test:
       uv run pytest -m "not fem and not slow" -q -rs
       --cov=phasesweep --cov-report=html:coverage-html --cov-report=term
   artifacts:
+    when: always
     paths:
       - coverage-html/
     expire_in: 30 days
 
 lint-js:
   rules:
-    - if: $CI_PIPELINE_SOURCE != "schedule"
-      changes:
+    - changes:
         - phasesweep/dashboard/**/*.js
         - phasesweep/dashboard/.eslintrc.json
-  image: node:18-bookworm-slim
+  image: node:22-bookworm-slim
   script:
     - npm install -g eslint@8
     - >-
@@ -61,8 +63,10 @@ lint-js:
       phasesweep/dashboard/panels/*.js
 
 core:
+  # Explicit rules: a job without any falls back to only/except defaults,
+  # which exclude merge-request pipelines.
   rules:
-    - if: $CI_PIPELINE_SOURCE != "schedule"
+    - when: on_success
   variables:
     PHASESWEEP_STRICT_SKIP: "1"
     PHASESWEEP_CORE_LANE: "1"
@@ -72,10 +76,10 @@ core:
     - uv run pytest -m "not fem and not slow" -q -rs
 
 fem:
-  # Too slow for every push (~10 min of solves). Scheduled or run-pipeline
-  # only — "web" is GitLab's equivalent of GitHub's workflow_dispatch.
+  # Too slow for every push (~10 min of solves). On demand only: "web"
+  # (Run pipeline) is GitLab's equivalent of GitHub's workflow_dispatch,
+  # and also runs Tier 0.
   rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"
   timeout: 60m
   variables:

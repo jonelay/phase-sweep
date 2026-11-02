@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import requires_server
+
 ROOT = Path(__file__).parent.parent
 
 
@@ -33,10 +35,13 @@ def test_hint_never_names_the_pypi_distribution():
     assert hits == ""
 
 
+# The server rows assert the error names the *hidden* module, which holds only
+# when the rest of the server extra is installed; without it (the core lane)
+# the first missing dependency is named instead.
 @pytest.mark.parametrize(("hidden", "module", "extra"), [
-    ("fastapi", "phasesweep.server.app", "server"),
-    ("structlog", "phasesweep.server.jobs", "server"),
-    ("tomli_w", "phasesweep.server.routes", "server"),
+    pytest.param("fastapi", "phasesweep.server.app", "server", marks=requires_server),
+    pytest.param("structlog", "phasesweep.server.jobs", "server", marks=requires_server),
+    pytest.param("tomli_w", "phasesweep.server.routes", "server", marks=requires_server),
     ("matplotlib", "phasesweep.vis.plots", "viz"),
     ("motulator", "phasesweep.simulation.sim", "sim"),
 ])

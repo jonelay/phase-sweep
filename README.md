@@ -1,7 +1,8 @@
 # phase-sweep
 
-Motor design sweeps: analytical, FEM, and drive models. Covers PMSM and
-induction machines, and integrates with
+Electromagnetic design sweeps: analytical, FEM, and drive models, checked
+against measured data. Use them from a Python API, web dashboard, or MCP
+server. Covers PMSM and induction machines, and integrates with
 [motulator](https://github.com/Aalto-Electric-Drives/motulator) and
 [NGSolve](https://ngsolve.org/) through optional dependencies.
 
@@ -378,8 +379,8 @@ Questions and discrepancy reports:
 
 If you use phasesweep in a report or publication:
 
-> J. Lay, *phasesweep: Motor design sweeps — analytical, FEM, and drive
-> models*, 2026. https://github.com/jonelay/phase-sweep
+> J. Lay, *phasesweep: Electromagnetic design sweeps — analytical, FEM, and
+> drive models*, 2026. https://github.com/jonelay/phase-sweep
 
 ## License
 

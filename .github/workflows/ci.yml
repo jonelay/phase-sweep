@@ -3,27 +3,22 @@ name: CI
 # Test tiers:
 #   Tier 0 — every push/PR, below. FEM-free by policy: `-m "not fem"` is
 #            explicit, not an artifact of ngsolve failing to load.
-#   Tier 1 — nightly + manual dispatch, the `fem` job below.
+#   Tier 1 — on demand (manual dispatch), the `fem` job below.
 #   Tier 2 — release gate, the release-cut checklist. Not automated here.
 
 on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    - cron: "0 3 * * *"
   workflow_dispatch:
 
 jobs:
   test:
     name: Tier 0 — full extras
-    # The nightly schedule exists for Tier 1; Tier 0 already ran on the day's
-    # pushes. Manual dispatch still runs everything.
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -43,7 +38,7 @@ jobs:
           PHASESWEEP_STRICT_SKIP: "1"
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-html
           path: coverage-html/
@@ -51,13 +46,12 @@ jobs:
 
   lint-js:
     name: Dashboard ESLint
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 18
+          node-version: 22
       - run: npm install -g eslint@8
       - name: ESLint dashboard
         run: >-
@@ -67,11 +61,10 @@ jobs:
 
   core:
     name: Tier 0 — core only
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.12"
       - name: Install core + test deps only
@@ -86,13 +79,14 @@ jobs:
 
   fem:
     name: Tier 1 — FEM
-    # Too slow for every push (~10 min of solves). Nightly, or on demand.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Too slow for every push (~10 min of solves). On demand only; a dispatch
+    # also runs Tier 0.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.12"
       - name: Install dependencies
