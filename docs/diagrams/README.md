@@ -20,7 +20,7 @@ factual diagram element is mapped to a source in the claim tables below.
 | measured import edge | CLI `phasesweep-import` and `POST /api/measured/{motor_name}`; source = measured/published | `phasesweep/validation/` |
 | `metrics dict` edge | `fn: RunConfig -> dict` of the model's `produces` quantities | `phasesweep/registry.py` |
 | `ResultStore` block | every record carries motor_config_id, model, source | `phasesweep/result_store.py` |
-| crossval loop edge | comparison surface derived from registry `produces` intersections, not hardcoded; deltas computed on request, never stored | `phasesweep/validation/calibration.py` |
+| crossval loop edge | cross-validation compares quantities declared by both registry entries; deltas are computed on request and never stored | `phasesweep/validation/crossval.py` |
 | server consumer | FastAPI REST (jobs/results/configs/measured) + WebSocket | `phasesweep/dashboard/` |
 | dashboard consumer | no-build-step JS; panels auto-discover applicable models via `produces` | `phasesweep/dashboard/app.js` |
 | CLI consumers | phasesweep-crossval, phasesweep-import, calibrate loop | `phasesweep/validation/` |

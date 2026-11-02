@@ -58,400 +58,110 @@ No model versions change.
 
 ## [0.6.0] - 2026-10-31
 
-Model versions: a model whose version changes below re-keys its cached
-runs. Additive outputs, append-only input fields (existing `config_id`s
-hold) and guards that only reject bad input do not bump
-`ModelInfo.version`; rows cached before them lack the new keys.
+Model version changes re-key cached runs: `drive_sim` 3→4, `drive_sim_two_mass` 1→2, `rated_torque` 4→6, `stall_torque` 4→6, and `torque_speed` 3→5. New `im_fem_harmonic` and `im_fem_locked_rotor` models ship at v3; `operating_point` and `motor_thermal` ship at v2. Additive outputs, append-only inputs, and new invalid-input guards do not bump `ModelInfo.version`; older cached rows omit new keys.
 
 ### Added
-- **Induction-machine circuit tier**. `Motor.induction`
-  (`InductionParams`, TOML `[induction]`) is the topology discriminator,
-  mutually exclusive with the synchronous d-q fields and hashed
-  append-only. `im_equivalent_circuit` solves the per-phase IEEE
-  steady-state circuit at `RunConfig.slip` (no default, motoring range);
-  `im_torque_slip` sweeps a fixed slip grid with breakdown, starting and
-  rated-point extracts plus the constant-parameter Thevenin closed form.
-  Both apply deep-bar `R_2_vs_f` and leakage tables (keyed on rotor vs
-  supply frequency) and the `L_m_vs_i` saturation fixed point. Outputs
-  are per-phase rms (`_rms` suffix), not the PM tier's peak convention;
-  `eta_circuit` counts circuit losses only. An optional `[induction] R_fe`
-  core-loss shunt across L_m reports `p_fe = 3|V_m|²/R_fe`, `R_fe_used`
-  and the Boldea ratio `r_fe_over_x_m`; with R_fe beside measured
-  `R_2(f)` tables, iron and stray loss may be counted twice. Synchronous
-  `prepare_*` factories reject `[induction]` motors and vice versa;
-  `perturb_motor` accepts the four induction scalars. `[winding]
-  connection` is validated (every phase voltage is V_LL/√3).
-- **Induction parameter identification**.
-  `im_circuit.identify_from_tests()` recovers the circuit from DC,
-  no-load and locked-rotor tests (IEEE-112 short form), with
-  `separate_no_load_losses()` for the friction-and-windage split. On the
-  CREATOR IM dataset: deep-bar R_2(f) within 9 %, leakage tables within
-  5.5 %, L_m on the published saturation curve within 1.5 %, P_fw within
-  8 %, and the raw-tests circuit within +2.6 % torque / +3.7 % current
-  of the published-parameter circuit at nameplate slip (pinned). The
-  Jurkovic MIT teaching note is the independent algebra fixture (~1 %).
-- **CREATOR Case IM validation anchor**
-  (`data/creator_case_im/creator_case_im.toml`). Stator current within
-  2.5 % at all 45 measured locked-rotor points (10–50 Hz); torque within
-  3.5 % at each frequency's top-current point, the residual pinned as a
-  0.01–0.03 Nm core-loss-branch deficit. The constant-parameter circuit
-  under-predicts locked-rotor torque ~30 % (pinned), which the deep-bar
-  table earns. The 20 °C dataset resistances over-predict nameplate
-  torque by +34 % (pinned temperature-trap finding); current at the
-  nameplate-torque slip agrees within 8 %. The 31 Nm published maximum
-  is a power limit, so breakdown is bounded one-sided. Tests skip without
-  the external dataset.
-- Induction circuit parameters (`R_2`, `L_m`, `L_sigma_s`, `L_sigma_r`)
-  are fittable in `calibrate()` and the calibration CLI; the calibrated
-  TOML round-trips `[induction]`. Validation-report sensitivity grids
-  carry them on a `τ_rated_im` track, and the report accepts
-  geometry-less motors and includes the CREATOR induction machine.
-- `iron_loss` accepts induction machines as a stator-core lump at
-  `f_rated` (no `W_REF`; `f_rotor_Hz` when `s_rated` is set). The CREATOR
-  induction machine ships a derived `[iron]` block whose ~3.9× shortfall
-  against the measured no-load separation is pinned.
-- **Squirrel-cage FEM.** `[geometry] n_bars`, `bar_*`, `end_ring_*` and
-  `[induction] sigma_bar` describe a cage; `fem_mesh.get_or_build_cage_mesh`
-  meshes it with one region per bar, cached apart from the PM meshes
-  (PM geometries hash and mesh as before). A cage whose bar count
-  divides the pole-pair count, an end ring reaching the rotor radius, or
-  an end-ring section too large for Alger's permeance is rejected. The
-  CREATOR induction machine ships its transcribed geometry and
-  `[winding]` block.
-- Time-harmonic eddy-current solver (`solvers/fem_harmonic.py`): complex
-  A_z with linear materials, a stator-frame velocity term for solid
-  rotors, and per-bar axial-voltage unknowns closed by a cage circuit
-  (prescribed currents, ideal ring, or end-ring segment impedance),
-  eliminated by static condensation (36/28 production solve 255 s →
-  13 s). Verified against Field's deep-bar solution, the bar/ring circuit
-  identities and TEAM Problem 30a through an in-repo exact series
-  solution (`solvers/team30a.py`, tables in `data/team30a/`). The
-  magnetostatic PM solver is untouched.
-- `im_bar_impedance` model: predicted deep-bar `R_2_list` /
-  `L_sigma_r_list` vs rotor frequency, in the `[induction]` table shape,
-  from a Bloch-periodic single-slot-pitch harmonic solve with the lumped
-  end-ring segment; differential leakage reported separately. The
-  circuit models keep reading the motor's measured tables.
-- `im_fem_harmonic` (v3) and `im_fem_locked_rotor` (v3): full-machine 2D
-  time-harmonic solves on the cage mesh with a per-slot double-layer
-  winding (`[winding] coil_pitch_slots`, default full pitch; the layout
-  must reproduce `k_w`). Both require the end-ring section. The first
-  reports the operating point at `RunConfig.slip` and the rated supply
-  (per-phase rms current, power factor, Maxwell-stress `tau` beside
-  `tau_power`, loss split, `B_mag_grid`); the second runs virtual
-  blocked-rotor tests at the motor's table frequencies through
-  `im_circuit.identify_locked_rotor` and reports the linear-iron no-load
-  current as a labeled diagnostic. One function owns the stator
-  circuit: the 2D internal impedance Z_int = jωψ/I in series with
-  `R_1 + jωL_ew`, shunted by `[induction] R_fe` when set. L_ew is a
-  Boldea end-winding leakage (end-turn ratio π/2 default; CREATOR
-  1.42 mH, closing ~50 % of the 2.8 mH leakage deficit at 50 Hz) the 2D
-  section cannot see; it is in every terminal quantity and in the
-  identified `L_sigma_s` after the IEEE-112 split, but not in L_m. With
-  R_fe, terminal quantities include the shunt and air-gap quantities
-  scale with the FEM-branch current; `p_in = p_cu_s + p_fe + p_ag`.
-  CREATOR: locked-rotor current over-predicted 3–5 % (10 Hz) to 16–17 %
-  (50 Hz), torque at the top-current points within ±10 %, identified
-  `R_2(f)` 11–32 % under the published table with the same +26 % rise
-  `im_bar_impedance` finds — pinned as findings, the circuit anchor
-  untouched.
-- Saturation under harmonic excitation (`RunConfig.nonlinear`) for both
-  `im_fem_*` models. `[materials] bh_curve` carries a per-motor B-H curve
-  (`fem_materials.BHCurve`, PCHIP; a curve ending above 3 T is rejected
-  as swapped columns), append-only in `config_id`; motors without one
-  keep the generic curve. Each iron element takes the energy-equivalent
-  reluctivity ⟨ν|B|²⟩/⟨|B|²⟩ over its elliptic flux locus; the fixed
-  point iterates on the current the stator circuit sends through the
-  FEM branch, steps in log space with a per-element trust region, and
-  raises on non-convergence. `im_fem_locked_rotor` adds a virtual
-  no-load voltage sweep reporting L_m(I_m). CREATOR: the saturated
-  no-load current sits on the measured reactive current at 0.5 and 1.1
-  of rated voltage and up to 18 % under it in between, a gap a stacking
-  factor of ~0.94 closes (not pinned); at rated slip saturation is a 2 % correction,
-  at standstill it lifts current 30 % and torque 76 % — pinned as
-  findings.
-- Rotor-bar skew (`Geometry.skew_angle`, mechanical rad; TOML
-  alternative `skew_slots`) for the `im_fem_*` models: five decoupled 2D
-  slices with impedance, torque and powers averaged and the phase spread
-  and worst bar current taken as maxima. This captures
-  rotor-position-dependent slotting effects, not the classical
-  sin(x)/x coupling (no axial bar-current continuity). Outputs
-  `skew_model`, `n_skew_slices`; unskewed machines take the single-solve
-  path unchanged; skew with `nonlinear = true` is rejected.
-- `operating_point` model (v2): minimum-current (i_d, i_q) for
-  a `(w_mech, tau_ref)` demand on `RunConfig` (hashed only when set).
-  Constant-L MTPA with three-stage constant-torque field weakening (pole
-  floor, MTPV, bisection to the voltage limit), or a bracketed contour
-  search on the `[flux_map]` surface when it covers the current limit.
-  Outputs dq currents, voltages and flux linkages (`psi_d`, `psi_q`),
-  `m_index = 2·u_mag/U_DC`, power factor, regime, copper and shaft
-  power, and the surface used. `R_s` is taken at `winding_temp`
-  (default the motor's `winding_temp_limit`), PM flux at `magnet_temp`,
-  on the map through `flux_map_at_magnet_temp` against the optional
-  `[flux_map] magnet_temp_ref_C` (20 °C default).
-  `cold_operating_point_params(motor, winding_temp, magnet_temp)` sets
-  both explicitly. Not submittable as a server job (no job param sets
-  the demand); use the Python API.
-- `motor_thermal` model (v2): three-node lumped network
-  (winding, iron, magnet; `[thermal_network]`, hashed append-only)
-  coupled to `operating_point` as a fixed point — copper loss at the
-  winding temperature, magnet flux at the magnet temperature, iron loss
-  scaled by `|psi_s|/psi_ref`. Coolant temperature is
-  `RunConfig.T_coolant`. Temperature limits (`[thermal]`
-  `magnet_temp_max`, basis/source tags) give `headroom_winding_K`,
-  `headroom_magnet_K`, `binding_limit` and `within_s1`; exceeding a limit
-  is a result, not an error. `coupled_steady(..., limits=..., U_DC=...)`
-  overrides limits and drive bus per run. Failures raise
-  `InfeasibleDemand`, `ThermalRunaway` or `NoConvergence` (all
-  `CoupledSolveError`, a `ValueError`) with the iterate state; the type
-  is diagnostic and can depend on `relax` / `max_iter`. The n-node
-  functions (`steady_temps`, `segment_map`, `periodic_start`,
-  `periodic_peak`) reduce to `thermal_duty.transient_peak` on one node.
-  Not submittable as a server job.
-- `iron_loss.iron_loss_at(...)`: the lumped Bertotti loss at a
-  mechanical speed and stator flux ratio.
-- **`[flux_map]`** (`FluxMap`): tabulated ψ_d(i_d, i_q), ψ_q(i_d, i_q)
-  for saturated synchronous machines, append-only in `config_id`.
-  `rated_torque` and `stall_torque` run a numeric MTPA on the surface
-  where it covers the current circle (`flux_map.map_covers`) and report
-  `mtpa_source` (`stall_torque` also `mtpa_source_electromagnetic`). A
-  map extracted hot (`magnet_temp_ref_C`) is referred to 20 °C before
-  derating. `drive_sim` / `drive_sim_two_mass` run on the surface when it
-  covers the drive current limit (`make_dq_maps` → motulator
-  `SaturatedSynchronousMachinePars`), output `machine_model`, and fall
-  back to constant L otherwise; non-salient or reverse-salient surfaces
-  are rejected (motulator's MTPA bracket returns a zero-torque
-  sentinel).
-- **BMW i3 2016 IPM anchor data.** The Gierczynski 7×7 flux map: numeric
-  MTPA within 1 % of the source torque sheet at (−396, 404) A where the
-  secant-L MTPA over-predicts ~8 %; drive-sim steady state on the map
-  MTPA to 0.5 % in current (measured, not pinned). The map publishes no
-  extraction temperature, so hot-magnet peak torque is a bracket: at
-  100 °C magnets the envelope is 243 N·m against a 20 °C reference and
-  the 250 N·m nameplate holds against a 100 °C reference (pinned). An
-  `[iron]` block fitted to the M-19 29 Ga catalog core-loss table
-  (50–2000 Hz, B ≤ 1.5 T, ~5 % median residual; the CC BY-NC-SA table is
-  cited, not redistributed) with ORNL core mass and an uncalibrated
-  geometric `B_core` (`iron_loss` runs on the i3 given a `W_REF`). A `[thermal_network]` block whose `G_FeS` is
-  fitted through the coupled solve to the digitized Burress 2017
-  continuous test at 7000 rpm (assumed 60 °C coolant, 55–63 °C bracket
-  recorded, residuals about ±4 K) — a pin, not a validation;
-  `scripts/check_i3_thermal_transient.py` marches the block through the
-  whole trace. These blocks re-key every i3 run ID.
-- `torque_speed` emits the envelope currents `i_d_curve_peak` /
-  `i_q_curve_peak` (and `_cont`).
-- `analytical`, `analytical_axial` and `fem_axial` emit `backemf_source`
-  (`"psi_f"`, `"computed"` or `None`): which input set
-  `backemf_fundamental`.
-- `phasesweep-check-motor`: staged configuration checks with an optional
-  `--fem quick` analytical/FEM cross-check (one-process pool, 300 s
-  deadline; a solver exception or timeout is a failed check).
-- **Record schema and vectors.** `phasesweep.record_schema` exports
-  TypedDicts for the stored-record envelope (`MotorDict`,
-  `RunConfigDict`, `RunResultDict`, `StoredRecord`), and
-  `_vectors/record_vectors.json` freezes real rows so `to_dict()` drift
-  is caught (`scripts/gen_record_vectors.py` regenerates them). With
-  `docs/result-store-contract.md` it is the documented consumer
-  contract.
+
+- **Induction-machine circuit tier:** `Motor.induction` / `InductionParams` / TOML `[induction]` select an append-only, hashed topology mutually exclusive with synchronous d-q fields.
+- `im_equivalent_circuit` solves the per-phase IEEE circuit at required motoring `RunConfig.slip`; `im_torque_slip` adds a fixed slip grid, starting/rated/breakdown points, and the Thevenin closed form.
+- Both induction circuit models apply deep-bar `R_2_vs_f` and leakage tables at rotor or supply frequency plus `L_m_vs_i` saturation; outputs use the per-phase `_rms` convention and `eta_circuit` includes circuit losses only.
+- Optional `[induction] R_fe` is a core-loss shunt across `L_m` and reports `p_fe = 3|V_m|²/R_fe`, `R_fe_used`, and `r_fe_over_x_m`; combining it with measured `R_2(f)` tables may double-count iron and stray loss.
+- Synchronous and induction `prepare_*` factories reject the other topology; `perturb_motor` supports all four induction scalars, and validated `[winding] connection` always uses V_LL/√3 phase voltage.
+- **Induction identification:** `im_circuit.identify_from_tests()` fits IEEE-112 short-form DC, no-load, and locked-rotor tests; `separate_no_load_losses()` splits friction and windage. Pinned results agree with CREATOR IM parameters and the Jurkovic MIT note.
+- **CREATOR Case IM anchor:** `data/creator_case_im/creator_case_im.toml` provides measured 45-point locked-rotor, torque-slip, nameplate, and no-load data. Current agrees within 2.5 %; the pinned circuit findings are ~30 % low torque at locked rotor and +34 % high torque at nameplate with 20 °C resistances. Tests skip without the external dataset.
+- `calibrate()` and its CLI fit `R_2`, `L_m`, `L_sigma_s`, and `L_sigma_r`, round-trip `[induction]`, and feed the validation report's `τ_rated_im` sensitivity track; geometry-less motors and CREATOR IM are supported.
+- `iron_loss` supports induction stator-core loss at `f_rated` without `W_REF`, plus `f_rotor_Hz` when `s_rated` is set. CREATOR's derived `[iron]` block is pinned at ~3.9× below measured no-load separation.
+- **Squirrel-cage FEM:** `[geometry] n_bars`, `bar_*`, `end_ring_*`, and `[induction] sigma_bar` define separately cached cage meshes; CREATOR includes transcribed geometry and winding data.
+- Cage validation rejects `n_bars` divisible by pole-pair count, end rings reaching rotor radius, and end-ring sections beyond Alger's permeance range; PM mesh hashes are unchanged.
+- The time-harmonic eddy-current solver supports complex A_z, solid-rotor frame velocity, and prescribed-current, ideal-ring, or impedance-ring cage circuits. Static condensation reduced the 36/28 production solve from 255 s to 13 s.
+- Harmonic FEM is cross-checked against Field's deep-bar solution, cage circuit identities, and TEAM Problem 30a in `solvers/team30a.py` / `data/team30a/`; magnetostatic PM FEM is unchanged.
+- `im_bar_impedance` predicts deep-bar `R_2_list` and `L_sigma_r_list` versus rotor frequency, in `[induction]` table form, with differential leakage separate; circuit models still use measured tables.
+- `im_fem_harmonic` v3 and `im_fem_locked_rotor` v3 run full-machine 2D harmonic cage FEM with `[winding] coil_pitch_slots` (default full pitch); the layout must reproduce `k_w`, and an end-ring section is required.
+- `im_fem_harmonic` reports the rated-supply point at `RunConfig.slip`: rms current, power factor, `tau`, `tau_power`, losses, and `B_mag_grid`.
+- `im_fem_locked_rotor` runs virtual blocked-rotor tests at the motor's table frequencies through `im_circuit.identify_locked_rotor` and reports labeled linear-iron no-load current and identified tables.
+- The induction FEM terminal circuit uses 2D `Z_int` with `R_1 + jωL_ew` (Boldea end-winding leakage) and optional `R_fe`; `p_in = p_cu_s + p_fe + p_ag`. CREATOR current is 3–17 % high and rises with frequency, torque is within ±10 %, and identified `R_2(f)` is below the published table; the circuit anchor is unchanged.
+- `RunConfig.nonlinear` adds harmonic saturation to both `im_fem_*` models. Per-motor `[materials] bh_curve` is append-only; the generic curve remains the default, curves ending above 3 T are rejected as swapped columns, and non-convergence raises.
+- Nonlinear `im_fem_locked_rotor` adds a virtual no-load voltage sweep reporting `L_m(I_m)`.
+- On CREATOR, saturation changes the rated-slip result by 2 %, raises standstill current 30 % and torque 76 % (pinned), and puts the unpinned no-load current within 18 % of the measured curve.
+- `Geometry.skew_angle` (mechanical rad) or TOML `skew_slots` runs five 2D slices, averaging impedance/torque/power and taking maximum phase spread/bar current. It captures position-dependent slotting and reports `skew_model` / `n_skew_slices`; nonlinear skew is rejected, unskewed machines keep one solve, and there is no axial continuity or sin(x)/x coupling.
+- **`operating_point` v2:** minimum-current (i_d, i_q) for a `(w_mech, tau_ref)` demand hashed only when set on `RunConfig`, using constant-L MTPA/field weakening or bracketed `[flux_map]` contours within the current limit.
+- Operating-point outputs include dq current/voltage/flux (`psi_d`, `psi_q`), `m_index = 2·u_mag/U_DC`, power factor, regime, copper/shaft power, and surface source. `R_s` uses `winding_temp` (default `winding_temp_limit`); PM/map flux uses `magnet_temp`, with `magnet_temp_ref_C` defaulting to 20 °C.
+- `cold_operating_point_params(motor, winding_temp, magnet_temp)` sets both temperatures. `operating_point` is Python-only because server jobs have no demand parameters.
+- **`motor_thermal` v2:** an append-only, hashed `[thermal_network]` couples winding, iron, and magnet temperatures to `operating_point` at `RunConfig.T_coolant`; iron loss scales by `|psi_s|/psi_ref`.
+- `[thermal] magnet_temp_max` and winding limits retain basis/source tags and report `headroom_winding_K`, `headroom_magnet_K`, `binding_limit`, and `within_s1`; exceeding a limit is a result. `coupled_steady(..., limits=..., U_DC=...)` overrides limits and bus voltage.
+- Thermal failures raise `InfeasibleDemand`, `ThermalRunaway`, or `NoConvergence` under `CoupledSolveError` / `ValueError`; classification may depend on `relax` and `max_iter`. The model is not a server job.
+- `steady_temps`, `segment_map`, `periodic_start`, and `periodic_peak` generalize the thermal network and reduce to `thermal_duty.transient_peak` for one node.
+- `iron_loss.iron_loss_at(...)` evaluates lumped Bertotti loss at a mechanical speed and stator-flux ratio.
+- **`[flux_map]` / `FluxMap`:** tabulated ψ_d(i_d, i_q) and ψ_q(i_d, i_q) are append-only; `rated_torque` and `stall_torque` use numeric MTPA when `flux_map.map_covers` the current circle and report `mtpa_source` / `mtpa_source_electromagnetic`.
+- Maps with `magnet_temp_ref_C` are referred to 20 °C before derating. `drive_sim` and `drive_sim_two_mass` use `SaturatedSynchronousMachinePars` when the map covers the drive limit, report `machine_model`, and otherwise use constant L; non- or reverse-salient maps are rejected.
+- **BMW i3 2016 IPM anchor:** a 7×7 Gierczynski flux map gives numeric MTPA within 1 % of the source sheet; hot-magnet peak torque remains a bracket because extraction temperature is unpublished.
+- BMW i3 also adds a fitted M-19 29 Ga `[iron]` block from a cited, non-redistributed catalog table with uncalibrated `B_core`, and a `[thermal_network]` whose `G_FeS` is fitted to the digitized Burress 2017 7000 rpm continuous test as a pin, not a validation. These blocks re-key every i3 run ID; see `data/bmw_i3/README.md`.
+- `torque_speed` adds `i_d_curve_peak`, `i_q_curve_peak`, `i_d_curve_cont`, and `i_q_curve_cont`; `analytical`, `analytical_axial`, and `fem_axial` add `backemf_source` (`"psi_f"`, `"computed"`, or `None`) for `backemf_fundamental`.
+- `phasesweep-check-motor` adds staged checks and optional `--fem quick` analytical/FEM comparison with a one-process pool and 300 s deadline; exceptions and timeouts fail the check.
+- `phasesweep.record_schema` exports `MotorDict`, `RunConfigDict`, `RunResultDict`, and `StoredRecord`; `_vectors/record_vectors.json` and `docs/result-store-contract.md` define the stored-record consumer contract.
 
 ### Changed
-- **License changed from LGPL-2.1-only to Apache-2.0** (`LICENSE`,
-  `pyproject.toml`, `README.md`, `CONTRIBUTING.md`, and the statements
-  about our own transcription files). Third-party terms are unchanged:
-  NGSolve stays LGPL-2.1 as an optional dependency, the CREATOR PMSM and
-  IM datasets stay CC BY-NC-ND 4.0 and CC BY-NC 4.0, and the Pyleecan
-  geometry keeps its attribution in `data/prius_2004/NOTICE`. No
-  `config_id` changes.
-- **One temperature rule for every circuit model** — `torque_speed` v5,
-  `rated_torque` v6, `stall_torque` v6, `drive_sim` v4,
-  `drive_sim_two_mass` v2: `R_s` at `winding_temp_limit`, `psi_f` and the
-  `[flux_map]` surface at `magnet_temp`, through one shared
-  `solver_params.derate` and `flux_map.derated_flux_map`. `thermal_duty`
-  and `demag_screen` gain the same range guard (derated `psi_f` > 0,
-  `R_s` ≥ 0). Motors without the thermal fields are output-identical.
-  With them: the BMW i3 at 100 °C magnets reports 243 N·m peak from
-  `rated_torque`, `stall_torque`, `torque_speed` and the
-  `operating_point` envelope alike (was 258 N·m from the first three);
-  the ETEL TMB sheets (130 °C coil limit) run at +43 % `R_s`, base speed
-  at In 3–9 % lower than cold, and the TMB0450 VA refuses `torque_speed` at its
-  peak current — the hot resistive drop 353 V exceeds U_DC/√3 = 346 V
-  (pinned; the sheet's Ip is a short-duty rating).
-- The gap-thickness sweep axis is `SweepAxis("airgap", ...)`; the old
-  `"r_ag"` raises (`r_ag` is the mid-gap sampling radius, never swept).
-  The axis moves the stator surface and keeps the magnet fixed, as
-  `perturb_motor` does; it used to split the change between bore and
-  magnet face, changing magnet thickness. Points on that axis get new
-  run IDs. The `proportional` strategy also scales
-  `back_iron_thickness`, `bridge_thickness`, the cage bar dimensions and
-  `end_ring_radial_height`; axial lengths stay fixed with `L_stk`.
-- **Motor TOML keys are validated.** `load_motor` and the dashboard
-  config editor reject an unknown key inside a loader section (with a
-  near-miss hint, `pis_f` → `psi_f`) and any unknown top-level section
-  (`[loss] k_h = ...` used to load with `k_h` unset). Descriptive labels
-  (`[motor] type`, `[winding] layers/connection/q/turns_per_phase/
-  turns_per_tooth`, `[materials] magnet_type/steel_grade/
-  rotor_yoke_material`) stay accepted; `[rated]`, `[provenance]`,
-  `[validation]`, `[envelope]`, `[electrical]`, `[columns]`, `[magnets]`
-  and `[mass]` stay free-form. Setting both `I_rated` and `I_rated_rms`
-  is an error. **Migration:** move datasheet dimensions the model does
-  not use from `[geometry]` into `[provenance.geometry]`, and `topology`
-  into `[motor]` (see `docs/motor-toml.md`, "Other sections").
-- **ResultStore wraps a vendored `sweepstore`** (`phasesweep._sweepstore`,
-  sweepstore 0.1.1; staleness vectors ship with it). Public API and run
-  IDs unchanged; the store stays in the core install and `[store]` is an
-  empty extra. `load_slim` trusts a stored `run_id` (rows carrying
-  `run_id` and `motor_config_id` skip re-hashing; legacy rows
-  recompute), which also fixes an `ImportError` loading a `drive_sim`
-  row without `motulator`. `load_results(current_only=True)` applies the
-  same superseded-version rule; the validation summary,
-  `phasesweep-crossval` and the single-result route share one
-  `record_is_current` helper.
-- **Server generic layer from a vendored `view-sweep-server` 0.3.0**
-  (`phasesweep._view_sweep_server`): `ConnectionManager` and `/ws`,
-  local-only Host/Origin middleware, logging, NaN-safe JSON, and the WS
-  protocol TypedDicts (now in `phasesweep._view_sweep_server.protocol`,
-  a private API; `phasesweep.server.protocol` is removed).
-  `phasesweep.server.app` keeps `ServerSettings`/`create_app`. Tauri
-  origins are accepted by default; WS `cancel` frames reach
-  `JobManager.cancel`; a malformed subscribe frame is dropped whole. The
-  `/view-sweep/` dashboard assets ship in the wheel, and the `server`
-  extra adds only FastAPI, uvicorn, structlog and tomli-w.
-- Dashboard migrated onto view-sweep (served at `/view-sweep/`): theme,
-  plots, chrome, composite export and data providers come from
-  view-sweep; `style.css` keeps only domain rules on `--vs-` tokens.
-  Persisted `ps-*` localStorage keys are unchanged; topbar controls are
-  one right-aligned group.
-- Cross-validation: when both datasets carry a tolerance for a quantity,
-  the tighter one applies (was the wider); no shipped verdict changes.
-  Curve comparisons reject a `curve_x` that is not strictly ascending.
-- A PM `[geometry]` without `alpha_p` logs a warning when it defaults to
-  full pitch (cage rotors and Halbach arrays stay silent).
-- `geo_parallel.run_sweep(..., fem_nonlinear=True)` documents the
-  saturating solve a sweep forced for `"fem"`; `False` gives linear iron.
-- `Motor` accepts `n_p = 1` (2-pole induction machines); the PM field and
-  torque models keep their `n_p >= 2` guard.
-- The analytical runner raises `RuntimeError` if |r·B_r1| at mid-gap is
-  below its value at the iron surface (a Laplace-solution invariant).
-- One-sided saliency (`L_d` without `L_q` or vice versa) is a
-  `ValueError` in `rated_torque`, `stall_torque`, `thermal_duty` and the
-  dashboard's derived rated torque instead of silently running the
-  non-salient form.
-- `arkkio_torque` rejects `r_outer <= r_inner`; `demag_screen` rejects
-  `i_fault <= 0` and non-finite values.
-- `fem_wedge` and `fem_axial_3d` are marked research code (offline
-  studies outside the public API); their tests carry the `slow` marker.
-- `numpy>=2.0` is declared.
+
+- License changed from LGPL-2.1-only to Apache-2.0 in `LICENSE`, `pyproject.toml`, `README.md`, `CONTRIBUTING.md`, and project transcriptions. No `config_id` changes.
+- Third-party terms are unchanged: NGSolve is LGPL-2.1, CREATOR PMSM is CC BY-NC-ND 4.0, CREATOR IM is CC BY-NC 4.0, and Pyleecan attribution remains in `data/prius_2004/NOTICE`.
+- `torque_speed` 3→5, `rated_torque` 4→6, `stall_torque` 4→6, `drive_sim` 3→4, and `drive_sim_two_mass` 1→2 now use `R_s` at `winding_temp_limit` and PM/`[flux_map]` flux at `magnet_temp`.
+- `thermal_duty` and `demag_screen` now reject derated `psi_f <= 0` or `R_s < 0`; motors without thermal fields are output-identical. Pinned results show BMW i3 peak torque at 100 °C falling 258→243 N·m, while ETEL TMB0450 VA rejects its hot short-duty peak in `torque_speed`.
+- Gap sweeps use `SweepAxis("airgap", ...)`; `"r_ag"` remains the mid-gap sampling radius and now raises as a sweep axis. The stator surface moves while magnet thickness stays fixed, and affected points get new run IDs.
+- The `proportional` strategy also scales `back_iron_thickness`, `bridge_thickness`, cage bar dimensions, and `end_ring_radial_height`; `L_stk` leaves axial lengths fixed.
+- `load_motor` and the dashboard editor reject unknown loader keys/sections with near-miss hints, and reject simultaneous `I_rated` / `I_rated_rms`.
+- Accepted labels remain `[motor] type`, `[winding] layers/connection/q/turns_per_phase/turns_per_tooth`, and `[materials] magnet_type/steel_grade/rotor_yoke_material`; `[rated]`, `[provenance]`, `[validation]`, `[envelope]`, `[electrical]`, `[columns]`, `[magnets]`, and `[mass]` remain free-form.
+- **Migration:** move unused datasheet dimensions from `[geometry]` to `[provenance.geometry]`, and `topology` to `[motor]`; see `docs/motor-toml.md`, “Other sections”.
+- `ResultStore` now wraps vendored `phasesweep._sweepstore` 0.1.1. Public API/run IDs stay stable, the core install includes it, and `[store]` is empty.
+- `load_slim` trusts stored `run_id` plus `motor_config_id`, legacy rows re-hash, and `load_results(current_only=True)` uses the superseded-version rule shared by the validation summary, `phasesweep-crossval`, and single-result route; `drive_sim` rows load without `motulator`.
+- The server uses vendored `phasesweep._view_sweep_server` 0.3.0 for `ConnectionManager`, `/ws`, local Host/Origin checks, logging, NaN-safe JSON, and private protocol types; the `server` extra contains FastAPI, uvicorn, structlog, and tomli-w.
+- `phasesweep.server.protocol` is removed; protocol types move to private `phasesweep._view_sweep_server.protocol`, while `phasesweep.server.app` retains `ServerSettings` / `create_app`. Tauri origins and WS `cancel` through `JobManager.cancel` are supported; malformed subscribe frames are dropped whole, and `/view-sweep/` assets ship in the wheel.
+- The dashboard at `/view-sweep/` now uses view-sweep theme, plots, chrome, composite export, and providers; `style.css` keeps domain rules on `--vs-` tokens, `ps-*` localStorage keys remain stable, and topbar controls form one right-aligned group.
+- Cross-validation uses the tighter tolerance when both datasets specify one, and requires strictly ascending `curve_x`; shipped verdicts are unchanged.
+- Missing PM `[geometry] alpha_p` now warns before full-pitch defaulting; cage and Halbach motors remain silent.
+- `geo_parallel.run_sweep(..., fem_nonlinear=True)` selects saturating `"fem"`; `False` selects linear iron.
+- `Motor` accepts `n_p = 1` for 2-pole induction machines; PM field and torque models still require `n_p >= 2`.
+- The analytical runner raises `RuntimeError` when mid-gap `|r·B_r1|` is below the iron-surface value.
+- One-sided `L_d` / `L_q` raises `ValueError` in `rated_torque`, `stall_torque`, `thermal_duty`, and dashboard rated torque.
+- `arkkio_torque` rejects `r_outer <= r_inner`; `demag_screen` rejects non-finite or non-positive `i_fault`.
+- `fem_wedge` and `fem_axial_3d` are research-only studies outside the public API, with tests marked `slow`.
+- The minimum NumPy version is `numpy>=2.0`.
 
 ### Removed
-- `run_fem_safe`, `run_cogging_safe`, `run_sim_safe` and the
-  `python -m` entry points of `solvers.fem_runner`, `solvers.cogging`
-  and `simulation.sim_runner`. The registry runners are the public
-  `run_fem`, `run_cogging` and `run_drive_sim`; timeouts belong to the
-  job pool.
-- The `PHASESWEEP_MESH_CACHE` environment fallback; use
-  `set_disk_cache_dir`.
-- `ResultStore.get_stats`, `ResultStore.mark_pending` and the in-memory
-  index cache.
-- `ModelInfo.fundamental_only` (no model has used it since analytical
-  v4).
-- `fem_mesh._build_geometry` / `_build_slotted_geometry`; use
-  `_build_motor_geometry`.
+
+- Removed `run_fem_safe`, `run_cogging_safe`, `run_sim_safe`, and the `python -m` entries for `solvers.fem_runner`, `solvers.cogging`, and `simulation.sim_runner`; use registry `run_fem`, `run_cogging`, and `run_drive_sim`.
+- Removed the `PHASESWEEP_MESH_CACHE` fallback; use `set_disk_cache_dir`.
+- Removed `ResultStore.get_stats`, `ResultStore.mark_pending`, and the in-memory index cache.
+- Removed `ModelInfo.fundamental_only`.
+- Removed `fem_mesh._build_geometry` and `fem_mesh._build_slotted_geometry`; use `_build_motor_geometry`.
 
 ### Fixed
-- Missing-extra errors no longer say `pip install phasesweep[...]` (the
-  PyPI name belongs to an unrelated project): they read
-  `pip install -e ".[<extra>]"` from a source checkout and name the
-  missing module. `phasesweep-server` without the extra exits with one
-  line, and `phasesweep.server` modules raise an `ImportError` naming the
-  extra.
-- `execute_parallel` / `run_sweep` with two or more workers applied a
-  hidden 600 s pool deadline when no `timeout_s` was given, so long FEM
-  sweeps timed out only in parallel. No `timeout_s` now means no
-  deadline. With `workers=1` and a `timeout_s`, a one-process pool now
-  enforces the deadline (the server's sub-task budget applies at
-  `--workers 1`).
-- `phasesweep-crossval --strict` passed when nothing was compared; it now
-  exits 1 with "no comparisons were made".
-- `RunConfig` validates every field: non-bool `nonlinear` (`"false"` ran
-  nonlinear), unknown `nonlinear_solver` (`"Newton"` ran Picard in
-  `fem_axial`), non-integer counts, non-finite `maxh_fraction`, `j_s`,
-  `rotation`, `i_fault`, `slip`, and non-finite or zero-duration
-  `duty_profile` segments raise; integral floats normalize to `int`. The
-  server parses string params and returns 400 for unparseable values.
-  Only already-mistyped inputs get new run IDs.
-- Non-finite inputs are rejected by `RatedTorqueParams`,
-  `StallTorqueParams`, `ThermalDutyParams` (a NaN duty segment stored
-  `p_cu_avg = nan` with status OK), `IronLossParams`, and `Motor`
-  (`ambient_temp`, `B_knee`, `alpha_B_knee`, `winding_temp_limit`,
-  `magnet_temp`).
-- Measured-data import validates values: a string, boolean, NaN or
-  infinite quantity, uncertainty, tolerance or numeric condition raises
-  `MeasuredFormatError` (a `ValueError`), and `POST /api/measured/{motor}`
-  returns 400 before saving. String quantities used to drop out of
-  comparison and string tolerances made the validation route 500.
-- `BoundRef.relation` and `CurveRef.extract` are checked on construction
-  (an unknown relation compared as `lt`, an unknown extract as RMS;
-  `extract = "interp"` without `at_x` now raises).
-- `RunResult.from_dict` and `ResultStore.load_slim` validate `status` and
-  `source`; a legacy descriptive source (`"published (ANSYS FEM)"`) reads
-  as `published`.
-- A quoted number in a motor TOML (`R_s = "0.2"`) raised a bare
-  `TypeError` that stopped server startup; it is a `ValueError` naming
-  the field, and both loaders skip the file with a warning.
-- `perturb_motor` OD and gap rebuilt the geometry through the builders,
-  dropping `magnet_mount`, the bridge, `magnet_overhang`, back iron,
-  cage, skew and a custom `r_ag` (CREATOR ψ_f 0.1144 → 0.1223 Wb at zero
-  delta; i3 0.0436 → 0.0859 Wb). Only the radii change now. OD/gap return
-  `None` (logged) where ψ_f cannot be re-derived from geometry (inset,
-  bridged, Halbach, `[flux_map]`), and a `[flux_map]` motor refuses
-  `L_stk`, `B_rem` and `k_w`; calibration and sensitivity show n/a
-  instead of a wrong number.
-- `scripts/populate_cache.py --verify` reported NaN or infinite metrics
-  as matching (and `inf` as `-inf`); it now reports them, and flags a
-  row whose stored config no longer hashes to its `run_id`.
-- Server jobs: an executor exception left sub-tasks `pending` and the job
-  reported the wrong outcome; those sub-tasks are now `ERROR` with the
-  message. Sub-tasks canceled before starting no longer persist an
-  `ERROR` row. Server sweeps no longer force `nonlinear=True` for
-  `cogging_torque` (one grid got two sets of run IDs).
-- Stored `drive_sim` rows failed to load without the `[sim]` extra;
-  `SimPlan` now lives in `simulation.params`.
-- `write_motor_toml` dropped `[flux_map]`, `[thermal_network]`, the
-  Halbach fields, skew and the temperature-limit tags, so a calibrated
-  TOML hashed differently from its record's `calibrated_config_id`. It
-  now writes from `motor_to_toml_dict`, which every shipped motor
-  round-trips. A geometry-less motor setting `L_stk`, `k_end`, `alpha_p`
-  or Halbach fields raises.
-- `produces` now lists every key a model may emit (`mtpa_source`,
-  `f_rotor_Hz` and the `fem` nonlinear diagnostics were missing), so
-  calibration and measured import can select them.
-- Integral count fields (`n_slots`, `n_bars`, `n_p`, `N`,
-  `coils_series`, `coil_pitch_slots`) are coerced to `int`, so `12.0`
-  hashes like `12`; a non-integral count raises.
-- `end_effect_factor` and `end_effect_factor_pole_pitch` return the
-  documented limit 0 at `L_stk = 0` (was 1.0; unreachable from `Motor`).
-- `resolve_psi_f` / `resolve_b_rem` errors name the missing geometry as
-  well as missing winding inputs.
-- `analytical_axial` raises on a zigzag leakage factor `k_zz <= 0`
-  instead of multiplying it into `flux_linkage_peak`.
-- `fem` runner: a B_r fundamental below 1e-9 of the peak is a failed
-  solve (slot-harmonic percentages divided by a stand-in 1.0).
-- `solve_field_fem` rejects `n_p < 1`, an `n_slots` override that
-  disagrees with the geometry while `slot_opening_width` is set, and an
-  interpole gap below the 0.5 mm OCC limit for surface magnets (it solved
-  a full ring behind a warning; `info["arcs_collapsed"]` is removed). No
-  shipped motor is below the limit.
+
+- Missing-extra errors now name the module and source-checkout command `pip install -e ".[<extra>]"`; `phasesweep-server` exits with one line, and `phasesweep.server` imports raise `ImportError` naming the required extra.
+- Parallel `execute_parallel` / `run_sweep` no longer applies a hidden 600 s deadline when `timeout_s` is omitted; `workers=1` enforces an explicit timeout through a one-process pool, including the server budget at `--workers 1`.
+- `phasesweep-crossval --strict` now exits 1 with “no comparisons were made” when no quantities are compared.
+- `RunConfig` rejects non-boolean `nonlinear`, unknown `nonlinear_solver`, non-integral counts, non-finite `maxh_fraction`, `j_s`, `rotation`, `i_fault`, and `slip`, plus zero/non-finite `duty_profile` segments; integral floats normalize to `int`, and server string-parse failures return 400.
+- `RatedTorqueParams`, `StallTorqueParams`, `ThermalDutyParams`, `IronLossParams`, and `Motor` reject non-finite inputs, including `ambient_temp`, `B_knee`, `alpha_B_knee`, `winding_temp_limit`, and `magnet_temp`.
+- Measured-data import rejects strings, booleans, NaN, and infinity in quantities, uncertainty, tolerance, and numeric conditions with `MeasuredFormatError`; `POST /api/measured/{motor}` returns 400 before saving.
+- `BoundRef.relation` and `CurveRef.extract` validate at construction; `extract = "interp"` requires `at_x`.
+- `RunResult.from_dict` and `ResultStore.load_slim` validate `status` / `source`; legacy descriptive sources such as `"published (ANSYS FEM)"` normalize to `published`.
+- Quoted numeric motor fields such as `R_s = "0.2"` now raise a field-specific `ValueError`; both loaders warn and skip the file instead of stopping startup.
+- `perturb_motor` OD/gap changes preserve `magnet_mount`, `bridge_thickness`, `magnet_overhang`, `back_iron_thickness`, cage, skew, and custom `r_ag`; CREATOR ψ_f no longer shifts 0.1144→0.1223 Wb at zero delta, nor BMW i3 0.0436→0.0859 Wb.
+- OD/gap perturbation returns logged `None` when ψ_f cannot be geometry-derived for inset, bridged, Halbach, or `[flux_map]` motors; `[flux_map]` motors reject `L_stk`, `B_rem`, and `k_w`, and reports show n/a rather than a wrong result.
+- `scripts/populate_cache.py --verify` now flags NaN/infinite metrics and rows whose stored config no longer hashes to `run_id`.
+- Server executor failures mark pending sub-tasks `ERROR`; pre-start cancellations leave no error row, and `cogging_torque` sweeps no longer force `nonlinear=True`.
+- Stored `drive_sim` rows load without `[sim]`; `SimPlan` is available from `simulation.params`.
+- `write_motor_toml` preserves `[flux_map]`, `[thermal_network]`, Halbach, skew, and temperature-limit data, so shipped motors round-trip and their hashes match the record's `calibrated_config_id`; geometry-less motors reject `L_stk`, `k_end`, `alpha_p`, and Halbach fields.
+- Model `produces` declarations now include all optional keys, including `mtpa_source`, `f_rotor_Hz`, and nonlinear `fem` diagnostics.
+- Integral `n_slots`, `n_bars`, `n_p`, `N`, `coils_series`, and `coil_pitch_slots` normalize to `int`, so `12.0` hashes like `12`; non-integral values raise.
+- `end_effect_factor` and `end_effect_factor_pole_pitch` return the documented 0 at `L_stk = 0` (was 1.0).
+- `resolve_psi_f` / `resolve_b_rem` errors now name missing geometry and winding inputs.
+- `analytical_axial` rejects zigzag leakage `k_zz <= 0` instead of applying it to `flux_linkage_peak`.
+- The `fem` runner fails when the B_r fundamental is below 1e-9 of the peak.
+- `solve_field_fem` rejects `n_p < 1`, inconsistent `n_slots` overrides with `slot_opening_width`, and surface-magnet interpole gaps below the 0.5 mm OCC limit; `info["arcs_collapsed"]` is removed. No shipped motor is below the limit.
 
 ## [0.5.0] - 2026-08-30
 
 ### Added
-- **`scripts/check_motor.py` - staged motor check with explicit evidence
-  levels.** Structural checks, `psi_f`/`B_rem` authority report, model
-  applicability, fast-model execution with finite-output checks, and
-  optional `--fem quick` analytical/FEM cross-check. Five-dimension status
-  summary (CONFIG / EXECUTION / CONSISTENCY / CROSS-CHECK / MEASUREMENT).
-  Exit code is nonzero only for objective failures; engineering concerns
-  stay warnings.
 - Hypothetical radial-SPM starter (`motors/examples/`) for the new-motor
   workflow.
 - **Axial end-effect correction.** `Geometry.magnet_overhang` and
@@ -506,14 +216,14 @@ hold) and guards that only reject bad input do not bump
   checkouts without the external dataset.
 
 ### Changed
-- `ModelInfo.needs_runtime` declares which `RunConfig` fields a model
-  needs beyond the motor.
-- New-motor documentation: `psi_f`/`B_rem` authority, FEM excitation,
-  test lane distinction.
-- README validation language: CREATOR back-EMF identified as a
-  consistency check, not independent validation.
-- Public guides and release notes tightened; no model-limit or
-  configuration changes.
+- `ModelInfo.needs_runtime` declares which `RunConfig` fields a model needs
+  beyond the motor.
+- New-motor documentation: `psi_f`/`B_rem` authority, FEM excitation, test
+  lane distinction.
+- README validation language: CREATOR back-EMF identified as a consistency
+  check, not independent validation.
+- Public guides and release notes tightened; no model-limit or configuration
+  changes.
 - **Nonlinear FEM: monotone BH spline + Newton default (fem v7 → v8;
   fem_axial, cogging_torque, demag_screen v1 → v2).** PCHIP spline
   replaces piecewise-linear B-H interpolation, and Newton replaces
@@ -570,12 +280,14 @@ hold) and guards that only reject bad input do not bump
 ## [0.4.0] - 2026-08-18
 
 ### Changed
-- **Extras split.** Core install (`pip install phasesweep`) requires
-  only numpy + scipy. FEM, drive simulation, plotting, and the server
-  are optional extras (`[fem]`, `[sim]`, `[viz]`, `[server]`). Install
-  everything with `pip install "phasesweep[all]"`. Missing extras raise
-  `ImportError` with an install hint. **Migration:** existing installs
-  should switch to `"phasesweep[all]"`.
+- **Extras split.** Core install requires only numpy + scipy. FEM, drive
+  simulation, plotting, and the server are optional extras (`[fem]`,
+  `[sim]`, `[viz]`, `[server]`). Install everything with the `[all]`
+  extra. Missing extras raise `ImportError` with an install hint.
+  **Migration:** existing installs should add `[all]`. [The original
+  entry read `pip install "phasesweep[all]"`; that PyPI name belongs to
+  an unrelated project — install from a source checkout as the README
+  shows.]
 - CI now runs three lanes: full (`[all]`), core-only, and a scheduled
   Tier-1 FEM job, with strict-skip gating to catch silent coverage
   erosion.
@@ -879,10 +591,22 @@ hold) and guards that only reject bad input do not bump
   The Morimoto + root is the global MTPA optimum for both saliency
   signs. Model versions bumped.
 
+### Model versions
+Recorded retroactively: these bumps landed in this release with the
+registry comment as their only record.
+- v3 (`fem`, `analytical`, `drive_sim`, `rated_torque`, `stall_torque`):
+  Carter-consistent `psi_f` resolution; BH vacuum-slope extrapolation
+  past 2.2 T in the nonlinear FEM solve; analytical waveform evaluated at
+  `geo.r_ag` to match the FEM sampling radius.
+- `fem` v4: raw-residual Picard stop criterion with relaxation
+  recovery. Every nonlinear FEM output shifts.
+- `fem` v5: per-face airgap mesh refinement (maxh = gap/3) and direct
+  `sample_Br` evaluation without L2 projection. FEM outputs shift
+  slightly (about 0.1 % B1 on thin-gap motors, ~1e-5 T elsewhere).
+
 ## [0.2.0] - 2026-06-11
 
 ### BREAKING - magnetization convention change
-
 Both solvers now model **square-wave radial magnetization** (uniformly
 magnetized arcs with per-pole sign alternation), and `B_rem` means
 physical remanence. The previous sinusoidal-ring model made `B_rem` an
