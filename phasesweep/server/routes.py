@@ -8,14 +8,14 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from phasesweep._extras import install_hint
+from phasesweep._extras import MissingExtra
 
 try:
     import structlog
     import tomli_w
     from fastapi import APIRouter, HTTPException, Request, Response
 except ImportError as e:
-    raise ImportError(f"phasesweep.server needs {e.name}; {install_hint('server')}") from None
+    raise MissingExtra(f"phasesweep.server needs {e.name}", "server") from None
 
 from phasesweep._view_sweep_server import FiniteJSONResponse
 from phasesweep.machines.configs import motor_from_dict
@@ -81,6 +81,8 @@ async def submit_job(request: Request, body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(404, f"unknown motor config {motor!r}") from None
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e)) from None
+    except MissingExtra as e:
+        raise HTTPException(501, str(e)) from None
     return job.to_dict()
 
 
@@ -243,6 +245,7 @@ def _applicability(key: str, info: Any, needs: list[str], motor: Any) -> dict[st
     `applicable` (the model's validate passes), `missing_params` (needed
     params the server cannot derive for this motor), and `reason` when
     either blocks a bare submit."""
+    from phasesweep.registry import require_model_extra
     from phasesweep.server.jobs import derive_model_defaults
 
     if info.validate is not None:
@@ -252,10 +255,14 @@ def _applicability(key: str, info: Any, needs: list[str], motor: Any) -> dict[st
             return {"applicable": False, "missing_params": [],
                     "reason": _strip_motor_prefix(str(e), motor)}
     try:
+        # The model fits the motor, but this server may lack its extra.
+        require_model_extra(key)
         derived = set(derive_model_defaults(motor, key))
         reason = None
     except ValueError as e:
         derived, reason = set(), _strip_motor_prefix(str(e), motor)
+    except MissingExtra as e:
+        return {"applicable": False, "missing_params": [], "reason": str(e)}
     # sim_plan for the two-mass sim derives from load_mech at submit.
     if key == "drive_sim_two_mass":
         derived.add("sim_plan")
@@ -340,6 +347,8 @@ async def model_defaults(
         return _derive_model_defaults(motor, model_key)
     except (ValueError, KeyError, TypeError) as e:
         raise HTTPException(400, str(e)) from None
+    except MissingExtra as e:
+        raise HTTPException(501, str(e)) from None
 
 
 def _derive_model_defaults(motor: Any, model_key: str) -> dict[str, Any]:

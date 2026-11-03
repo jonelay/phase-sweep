@@ -9,6 +9,37 @@ stated development host at release time; they are not test-pinned and will
 vary. Accuracy figures marked "measured, not pinned" were likewise observed
 at release; the tests gate looser committed thresholds, not these values.
 
+## [0.7.1] - 2026-11-02
+
+No model versions change.
+
+### Fixed
+- A server installed without the `sim` extra no longer fails
+  `list_models(motor=)` with a bare tool error. `drive_sim` and
+  `drive_sim_two_mass` are reported `applicable: false` with an install
+  hint, and `model_defaults` and `submit_job` (MCP and REST) return 501
+  naming the missing extra. A missing extra now raises `MissingExtra`, an
+  `ImportError` subclass, so an import error inside phasesweep is not
+  misreported as one. `docs/mcp.md` states which extras each model family
+  needs; a missing `fem` extra still surfaces only when the job runs.
+- Headline units state the current convention: `k_T` is `N·m/A_peak`,
+  `I_stall` is `A_peak`, `backemf_fundamental` is `V_peak`, and the
+  induction and operating-point rms currents are `A_rms`, matching the
+  glossary. Units are read-time metadata; no model versions change.
+- The glossary, motor TOML guide and MCP instructions called induction
+  power and torque per-phase; the models return whole-machine
+  (three-phase) totals, and the docs now say so.
+- `docs/validation-report.md` claimed more than its tests assert. Each
+  row now says whether its reference is measured, published, computed or
+  fitted; tolerances match the asserted ones (BMW i3 MTPA is 5 %, not
+  1 %); dataset-integrity and closed-form checks (JMT 1806, SynRM, NWPU
+  Halbach) are no longer called cross-validation; an unasserted
+  Belkhadir flux-linkage row is removed; and the CREATOR MTPA angles are
+  described as FEM-derived.
+- The Prius 2004 dynamometer data cites its report, ORNL/TM-2006/423.
+- The README's verification and validation section opens with what the
+  evidence is.
+
 ## [0.7.0] - 2026-11-01
 
 No model versions change.

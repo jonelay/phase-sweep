@@ -9,8 +9,8 @@ TOML fields, result keys, and validation report.
 
 **Peak vs RMS:** PM-tier current and flux-linkage values follow motulator's
 peak-value convention; outputs with an `_rms` suffix (e.g. `k_T_rms`,
-`I_s_rms`) are the RMS companions. The induction tier is per-phase RMS
-throughout (see [Induction-Machine Circuit Tier](#induction-machine-circuit-tier-im_-models)). TOML files may specify `I_rated_rms`
+`I_s_rms`) are the RMS companions. Induction-tier voltages and currents
+are per-phase RMS, and its power and torque are whole-machine totals (see [Induction-Machine Circuit Tier](#induction-machine-circuit-tier-im_-models)). TOML files may specify `I_rated_rms`
 which is converted to peak via `I_rated = I_rated_rms × √2` at load time
 (`machines/configs.py`). Torque formulas use the 3/2 factor that pairs with
 peak values: `τ = 1.5 × n_p × (ψ_f × i_q + (L_d − L_q) × i_d × i_q)`.
@@ -131,7 +131,7 @@ covered under [Thermal](#thermal).
 | saliency | — | L_q/L_d ratio; >1 = salient (IPM), ~1 = non-salient |
 | i_d_curve_peak / i_q_curve_peak | A_peak | `torque_speed`: envelope currents at each `speed_curve` point (`_cont` at I_rated) |
 | w_mech / tau_ref | rad/s, N·m | `operating_point` demand on the RunConfig (mechanical speed, torque) |
-| I_s_peak / I_s_rms | A | `operating_point`: stator current magnitude, peak and rms |
+| I_s_peak / I_s_rms | A_peak / A_rms | `operating_point`: stator current magnitude, peak and rms |
 | u_d / u_q / u_mag / u_max | V_peak | `operating_point`: dq voltage components, magnitude, and the limit U_DC/√3 |
 | m_index | — | `operating_point`: modulation index 2·u_mag/U_DC (≤ 1 SPWM linear, ≤ 2/√3 SVPWM linear) |
 | pf | — | `operating_point`: power factor cos∠(u, i); `None` at zero current |
@@ -190,18 +190,19 @@ resistance, continuous loss budget and first-order transient) and
 
 ## Induction-Machine Circuit Tier (im_* models)
 
-Per-phase RMS convention — every output is suffixed `_rms` or is a
-per-phase power/torque, not the PM tier's peak convention.
+Voltages and currents are per-phase RMS (suffixed `_rms`), not the PM
+tier's peak convention. Power and torque are whole-machine (three-phase)
+totals: `p_ag = 3·|I_2|²·R_2/s`, `tau = p_ag/ω_s`.
 
 | Symbol | Units | Meaning |
 |--------|-------|---------|
 | s (slip) | — | (n_sync − n) / n_sync; RunConfig.slip, motoring range (0, 1] |
 | f_rotor_Hz | Hz | Rotor (slip) frequency s·f — the deep-bar table key |
 | R_2 | Ω | Rotor resistance referred to the stator (DC reference; R_2_vs_f table above it) |
-| tau | N·m | Electromagnetic torque = p_ag / ω_s (ω_s = 2πf/n_p mechanical synchronous) |
+| tau | N·m | Machine electromagnetic torque = p_ag / ω_s (ω_s = 2πf/n_p mechanical synchronous) |
 | tau_breakdown / slip_breakdown | N·m / — | Swept curve maximum (deep-bar-aware); `_thevenin` variants are the constant-parameter closed form |
-| tau_starting / I_locked_rotor_rms | N·m / A rms | s = 1 point of the sweep |
-| p_ag / p_cu_s / p_cu_r / p_mech | W | Air-gap power, stator/rotor copper loss (p_cu_r = s·p_ag), gross mechanical power |
+| tau_starting / I_locked_rotor_rms | N·m / A_rms | s = 1 point of the sweep |
+| p_ag / p_cu_s / p_cu_r / p_mech | W | Three-phase totals: air-gap power, stator/rotor copper loss (p_cu_r = s·p_ag), gross mechanical power |
 | eta_circuit | — | p_mech / p_in: circuit losses only (no iron, friction, windage; documented over-estimate) |
 
 ## Drive Simulation
@@ -234,7 +235,7 @@ per-phase power/torque, not the PM tier's peak convention.
 | k_w | — | Winding factor (= k_d × k_p in general) | Zhu: K_dpν (Eq 22, combined distribution × pitch factor) |
 | coils_series | — | Coils in series per phase (required explicitly when N/k_w are set; no auto-derivation) | — |
 | R_s | Ω | Stator winding resistance | motulator: `R_s` on SynchronousMachinePars |
-| backemf_fundamental | V | Fundamental back-EMF (peak) = ω_e × ψ_f | — |
+| backemf_fundamental | V_peak | Fundamental phase back-EMF (peak) = ω_e × ψ_f | — |
 | k_end | — | 3D axial end-effect factor on B_rem-derived flux linkage; computed offline by `scripts/compute_k_end.py` (never applied to a measured ψ_f). Bounds are documented in the motor TOML guide | — |
 
 > **N vs W:** Zhu's W = total series turns per phase. Our N = turns per coil.

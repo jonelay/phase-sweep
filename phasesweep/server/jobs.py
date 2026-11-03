@@ -26,12 +26,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
-from phasesweep._extras import install_hint
+from phasesweep._extras import MissingExtra
 
 try:
     import structlog
 except ImportError as e:
-    raise ImportError(f"phasesweep.server needs {e.name}; {install_hint('server')}") from None
+    raise MissingExtra(f"phasesweep.server needs {e.name}", "server") from None
 
 from phasesweep._view_sweep_server.protocol import JobStatus, ServerMsg
 from phasesweep.geo_parallel import (

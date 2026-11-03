@@ -28,7 +28,7 @@ omissions.
 ## Features
 
 **Field solvers**
-- Closed-form air-gap field (Zhu & Howe 2002), inrunner and outrunner
+- Closed-form air-gap field (Zhu, Howe & Chan 2002), inrunner and outrunner
 - NGSolve 2D FEM: slotted or smooth-bore stators, linear or nonlinear iron,
   Maxwell-stress torque
 - Cogging torque and demagnetization screening
@@ -47,8 +47,8 @@ omissions.
 **Sweeps and validation**
 - Parallel parameter sweeps into a crash-safe JSONL result store
 - Sensitivity analysis and bounded calibration against measurements
-- Measured-data import and cross-validation; FEM checked against Zhu & Howe
-  and [ElmerFEM](https://www.elmerfem.org/)
+- Measured-data import and cross-validation; FEM checked against Zhu, Howe &
+  Chan and [ElmerFEM](https://www.elmerfem.org/)
   ([validation report](docs/validation-report.md))
 
 **Dashboard**
@@ -144,7 +144,7 @@ print(f"Peak power:  {envelope['p_max_peak']/1000:.0f} kW")
 ```
 
 Both numbers are constant-inductance over-predictions - see the
-[saturation caveat](#torque-speed-envelope-prius-2004-ipm) below.
+[saturation caveat](#known-limit-prius-2004-stall-torque) below.
 
 Compute the air-gap field of a motor with full geometry - analytically,
 then with the 2D FEM solver, and compare:
@@ -283,25 +283,31 @@ and `phasesweep-check-motor`.
 
 ## Verification and validation
 
-### Torque-speed envelope (Prius 2004 IPM)
+Each model builds on a published formulation ([references](docs/references.md))
+and is tested two ways:
 
-The Prius 2004 case exercises stall torque, MTPA angle, and the
-torque-speed envelope for a 50 kW, 8-pole, V-shape NdFeB traction motor.
-Circuit parameters come from ORNL teardown and dynamometer reports
-([OSTI 885676](https://www.osti.gov/biblio/885676),
-[OSTI 890029](https://www.osti.gov/biblio/890029)). It is not a validation
-at high current: the constant-inductance model predicts about 905 N·m stall
-torque against about 340 N·m measured on the ORNL dynamometer at 250 A
-(+166 %), because L_q saturates. The test suite pins that prediction as a
-regression value and checks the one-sided bound against the measurement;
-the MTPA angle is checked against a plausible band, not a measured value.
-See [docs/validation-report.md](docs/validation-report.md) for details.
+- **Verification:** the solver computes its equations correctly. FEM is
+  compared with closed-form solutions and an independent FEM code.
+- **Validation:** the model describes a real machine. Results are compared
+  with measured and published data for the reference machines in `data/`.
 
-### Solver verification (Zhu & Howe)
+![Verification and validation: FEM air-gap field against the Zhu, Howe & Chan closed form, and CREATOR back-EMF against the measured waveform](docs/images/multimotor_validation.png)
 
-The NGSolve FEM solver is verified against the Zhu & Howe (2002) closed-form
-air-gap field solution across reference inrunner and outrunner configurations.
-Acceptance bounds and current results are documented in the
+Every comparison runs in the test suite. Three examples follow, one of each
+kind of result; the [validation report](docs/validation-report.md) covers more
+machines, their sources, and what each comparison tests.
+
+### Verification: FEM against TEAM 30a, Zhu, Howe & Chan, and ElmerFEM
+
+The time-harmonic FEM solver is verified against
+[TEAM Problem 30a](https://www.compumag.org/wp/team/), the Compumag benchmark
+for induction-machine field codes. Torque, phase voltage, and rotor and steel
+losses agree with the problem's exact solution within 0.5 %, and the
+three-phase results also match the published tables at every tabulated speed.
+
+The magnetostatic FEM solver is verified against the Zhu, Howe & Chan (2002)
+closed-form air-gap field across reference inrunner and outrunner
+configurations. Acceptance bounds and current results are documented in the
 [validation report](docs/validation-report.md).
 
 Radial and axial FEM results are also cross-checked against
@@ -309,7 +315,7 @@ Radial and axial FEM results are also cross-checked against
 `scripts/elmer_radial/` and `scripts/elmer_axial/` are exercised by the core
 test suite; regenerating them requires a local ElmerSolver.
 
-### Back-EMF and torque checks (CREATOR benchmark)
+### Validation: back-EMF against the CREATOR benchmark
 
 The [CREATOR](https://doi.org/10.3217/sns1d-77m43) open-benchmark PMSM
 (sintered-ferrite inrunner; Muetze et al., COMPEL 2025) supplies measured
@@ -329,7 +335,20 @@ ferrite magnets and the square-wave magnetization used by both field solvers.
 The current comparison covers only the fundamental because the model does not
 yet produce a back-EMF waveform.
 
-![Verification and validation summary](docs/images/multimotor_validation.png)
+### Known limit: Prius 2004 stall torque
+
+The Prius 2004 case exercises stall torque, MTPA angle, and the
+torque-speed envelope for a 50 kW, 8-pole, V-shape NdFeB traction motor.
+Circuit parameters come from ORNL teardown and dynamometer reports
+([OSTI 885676](https://www.osti.gov/biblio/885676),
+[OSTI 890029](https://www.osti.gov/biblio/890029)). It is not a validation
+at high current: the constant-inductance model predicts about 905 N·m stall
+torque against about 340 N·m measured in ORNL's locked-rotor test at 250 A
+([OSTI 921782](https://www.osti.gov/biblio/921782); +166 %), because L_q
+saturates. The test suite pins that prediction as a regression value and
+checks the one-sided bound against the measurement;
+the MTPA angle is checked against a plausible band, not a measured value.
+See [docs/validation-report.md](docs/validation-report.md) for details.
 
 ## Reference data
 

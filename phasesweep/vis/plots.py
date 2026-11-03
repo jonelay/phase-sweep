@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from phasesweep._extras import install_hint
+from phasesweep._extras import MissingExtra
 
 try:
     import matplotlib
@@ -13,7 +13,7 @@ try:
     import matplotlib.pyplot as plt
     from matplotlib.patches import Wedge
 except ImportError as e:
-    raise ImportError(f"phasesweep.plots needs {e.name}; {install_hint('viz')}") from None
+    raise MissingExtra(f"phasesweep.plots needs {e.name}", "viz") from None
 
 if TYPE_CHECKING:
     from phasesweep.machines.geometry import Geometry

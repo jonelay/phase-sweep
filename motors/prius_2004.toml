@@ -4,7 +4,7 @@
 # Primary source (physical teardown + electrical measurements):
 #   Hsu et al., ORNL/TM-2004/137, DOI 10.2172/885676 (teardown, geometry)
 #   Hsu et al., ORNL/TM-2004/185 rev. 2007, DOI 10.2172/921782 (back-EMF)
-#   Staunton et al., ORNL/TM-2004/247, DOI 10.2172/890029 (dynamometer)
+#   Staunton et al., ORNL/TM-2006/423, DOI 10.2172/890029 (dynamometer)
 # Circuit parameters consistent with:
 #   Kuptsov et al., Machines 7(4):75, 2019, DOI 10.3390/machines7040075
 #
@@ -69,7 +69,7 @@ doi = "10.3390/machines7040075"
 references = [
     "Hsu et al., ORNL/TM-2004/137, OSTI 885676, 2004 (teardown)",
     "Hsu et al., ORNL/TM-2004/185 rev. 2007, OSTI 921782 (back-EMF)",
-    "Staunton et al., ORNL/TM-2004/247, OSTI 890029, 2004 (dynamometer)",
+    "Staunton et al., ORNL/TM-2006/423, OSTI 890029, 2005 (dynamometer)",
     "Kuptsov et al., Machines 7(4):75, 2019 (FEM validation)",
 ]
 notes = """

@@ -9,7 +9,7 @@ The Prius is the most-reproduced IPM benchmark; its saliency
 test case for IPM torque and field-weakening models.
 
 Sources: ORNL/TM-2004/137 (teardown), TM-2004/185 rev. 2007 (back-EMF,
-         locked-rotor torque), TM-2004/247 (dynamometer).
+         locked-rotor torque), TM-2006/423 (dynamometer).
 """
 
 import pytest

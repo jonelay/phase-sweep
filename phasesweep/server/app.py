@@ -14,13 +14,13 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from phasesweep._extras import install_hint
+from phasesweep._extras import MissingExtra
 
 try:
     import structlog
     from fastapi import FastAPI
 except ImportError as e:
-    raise ImportError(f"phasesweep.server needs {e.name}; {install_hint('server')}") from None
+    raise MissingExtra(f"phasesweep.server needs {e.name}", "server") from None
 
 from phasesweep._view_sweep_server import AppConfig
 from phasesweep._view_sweep_server import create_app as create_view_sweep_app

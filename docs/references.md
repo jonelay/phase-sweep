@@ -510,7 +510,7 @@ model-vs-model anchor for the slotted FEM path.
 ### ORNL Prius 2004 reports (`motors/prius_2004.toml`)
 ORNL/TM-2004/137 (teardown, https://doi.org/10.2172/885676),
 ORNL/TM-2004/185 (back-EMF, https://doi.org/10.2172/921782),
-ORNL/TM-2004/247 (dynamometer, https://doi.org/10.2172/890029).
+ORNL/TM-2006/423 (dynamometer, https://doi.org/10.2172/890029).
 
 **What we use:** circuit parameters and the 340 N·m stall-torque bound;
 sources and assumptions in `data/prius_2004/README.md`.

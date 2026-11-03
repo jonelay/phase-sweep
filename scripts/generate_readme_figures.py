@@ -99,10 +99,9 @@ def fig_fem_hero() -> Path:
 # ---------------------------------------------------------------------------
 
 def fig_backemf_waveform() -> Path:
-    """CREATOR back-EMF at 2000 RPM: measured oscilloscope data vs analytical fundamental."""
+    """CREATOR back-EMF at 2000 RPM: measured oscilloscope data vs circuit-model fundamental."""
     from phasesweep.machines.configs import load_motor
-    from phasesweep.solvers.analytical import run_analytical
-    from phasesweep.sweep_types import RunConfig
+    from phasesweep.solver_params import backemf_from_flux
 
     print("Figure 2: loading CREATOR back-EMF measurement data…")
 
@@ -122,11 +121,11 @@ def fig_backemf_waveform() -> Path:
     meas_fund_amp = float(abs(fund_complex))
     meas_fund_phase = float(np.angle(fund_complex))  # rad, in mech-angle frame
 
-    # Analytical fundamental from the model
+    # Circuit-model fundamental E = w_e * psi_f. CREATOR is an inset rotor, which
+    # the analytical field solver rejects; the benchmark supplies psi_f.
     motor = load_motor(ROOT / "motors" / "creator_case_pmsm.toml")
-    cfg = RunConfig(motor=motor, model="analytical", n_theta=720)
-    ana = run_analytical(cfg)
-    ana_fund_amp = float(ana["backemf_fundamental"])
+    ana_fund_amp = backemf_from_flux(motor, None)
+    assert ana_fund_amp is not None
 
     # Convert to electrical angle; show two electrical periods
     angle_elec = angle_mech * n_p              # degrees
@@ -145,7 +144,7 @@ def fig_backemf_waveform() -> Path:
     ax.plot(theta_e, v_meas, lw=1.0, color=GRAY, alpha=0.85,
             label="Measured (Phase U, 2000 RPM)")
     ax.plot(theta_e, v_ana, lw=2.0, color=BLUE,
-            label=f"Analytical fundamental  ({ana_fund_amp:.1f} V)")
+            label=f"Circuit-model fundamental  ({ana_fund_amp:.1f} V)")
     ax.plot(theta_e, v_meas_fund, lw=1.5, ls="--", color=ORANGE,
             label=f"Measured fundamental  ({meas_fund_amp:.1f} V)")
 
@@ -175,10 +174,9 @@ def fig_validation_chart() -> Path:
     model validation (CREATOR measured back-EMF)."""
     from phasesweep.machines.configs import load_motor
     from phasesweep.machines.geometry import default_inrunner
-    from phasesweep.solvers.analytical import run_analytical
+    from phasesweep.solver_params import backemf_from_flux
     from phasesweep.solvers.field_solution import zhu_howe_Br
     from phasesweep.solvers.harmonics import harmonics_1sided
-    from phasesweep.sweep_types import RunConfig
 
     # --- Row 1: solver verification — Zhu & Howe 4-pole inrunner, α_p = 1 ---
     # Load the cached FEM result produced by scripts/capture_reference_br.py.
@@ -205,22 +203,20 @@ def fig_validation_chart() -> Path:
     B1_ana = float(amps_ana[n_p_zhu])
     fem_vs_ana_pct = (B1_fem - B1_ana) / B1_ana * 100
 
-    # --- Row 2: model validation — CREATOR analytical vs oscilloscope ---
-    print("  running CREATOR analytical…")
+    # --- Row 2: model validation — CREATOR circuit model vs oscilloscope ---
     motor = load_motor(ROOT / "motors" / "creator_case_pmsm.toml")
-    cfg = RunConfig(motor=motor, model="analytical", n_theta=720)
-    ana = run_analytical(cfg)
-    ana_backemf = float(ana["backemf_fundamental"])
+    ana_backemf = backemf_from_flux(motor, None)
+    assert ana_backemf is not None
     ana_vs_meas_pct = (ana_backemf - 47.37) / 47.37 * 100
 
     rows = [
         # (stage_label, metric_label, computed, ref, pct, tol, ref_source)
-        ("Solver verification\n(Zhu & Howe 4p inrunner, α_p=1)",
+        ("Solver verification\n(Zhu, Howe & Chan 4p inrunner, α_p=1)",
          "FEM B₁ vs analytical",
          B1_fem, B1_ana, fem_vs_ana_pct, 1.0,
-         "Zhu & Howe (1993) closed-form"),
+         "Zhu, Howe & Chan (2002) closed-form"),
         ("Model validation\n(CREATOR 4p/6s ferrite benchmark)",
-         "Analytical back-EMF vs oscilloscope",
+         "Circuit-model back-EMF vs oscilloscope",
          ana_backemf, 47.37, ana_vs_meas_pct, 5.0,
          "Measured (oscilloscope, 2000 rpm)"),
     ]
@@ -258,7 +254,7 @@ def fig_validation_chart() -> Path:
 
     ax.axvline(0, color="black", lw=0.9, ls="--", alpha=0.5, zorder=0)
     ax.set_xlabel("Deviation (%)", fontsize=10)
-    ax.set_title("CREATOR benchmark — verification and validation",
+    ax.set_title("Verification and validation",
                  fontsize=11, pad=10)
 
     ax.set_xlim(-(max(rows, key=lambda r: r[5])[5] + 3),

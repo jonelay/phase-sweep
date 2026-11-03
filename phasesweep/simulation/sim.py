@@ -3,7 +3,7 @@ from __future__ import annotations
 import warnings
 from typing import TYPE_CHECKING, Any
 
-from phasesweep._extras import install_hint
+from phasesweep._extras import MissingExtra
 
 if TYPE_CHECKING:
     from phasesweep.simulation.params import DriveSimParams, TwoMassLoad
@@ -29,7 +29,7 @@ try:
     )
     from motulator.drive.utils import Step
 except ImportError as e:
-    raise ImportError(f"phasesweep.sim needs {e.name}; {install_hint('sim')}") from None
+    raise MissingExtra(f"phasesweep.sim needs {e.name}", "sim") from None
 
 from phasesweep.models.flux_map import make_dq_maps
 from phasesweep.models.rated_torque import (

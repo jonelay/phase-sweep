@@ -77,6 +77,51 @@ def test_motor_and_model_listing(mcp):
         mcp.call("list_models", motor="nope")
 
 
+@pytest.fixture
+def no_sim(monkeypatch):
+    """A server installed without the sim extra: motulator unimportable."""
+    import sys
+    for name in [n for n in sys.modules
+                 if n == "motulator" or n.startswith("motulator.")
+                 or n == "phasesweep.simulation.sim"]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setitem(sys.modules, "motulator", None)
+
+
+def test_missing_sim_extra_is_explicit(mcp, no_sim):
+    """drive_sim validates on the test motor but cannot run without motulator:
+    list_models reports it, model_defaults and submit_job return 501, and the
+    REST endpoints agree."""
+    by_key = {m["key"]: m for m in mcp.call("list_models", motor="test_inrunner")}
+    for key in ("drive_sim", "drive_sim_two_mass"):
+        assert by_key[key]["applicable"] is False, key
+        assert "sim extra" in by_key[key]["reason"], key
+    assert by_key["analytical"]["applicable"] is True
+    with pytest.raises(RuntimeError, match="501: .*sim extra"):
+        mcp.call("model_defaults", motor="test_inrunner", model="drive_sim")
+    with pytest.raises(RuntimeError, match="501: .*sim extra"):
+        mcp.call("submit_job", motor="test_inrunner", model="drive_sim")
+    r = mcp.client.get("/api/model-defaults/test_inrunner/drive_sim")
+    assert r.status_code == 501 and "sim extra" in r.json()["detail"]
+    r = mcp.client.post("/api/jobs", json={"motor": "test_inrunner",
+                                           "model": "drive_sim"})
+    assert r.status_code == 501 and "sim extra" in r.json()["detail"]
+
+
+def test_internal_import_error_is_not_a_missing_extra(mcp, monkeypatch):
+    """Only MissingExtra maps to 501; an import bug inside phasesweep stays
+    an internal error instead of telling the user to install an extra."""
+    from phasesweep.server import jobs
+
+    def broken(motor, key):
+        raise ImportError("cannot import name 'x' from 'phasesweep.models'")
+
+    monkeypatch.setattr(jobs, "derive_model_defaults", broken)
+    with pytest.raises(RuntimeError) as exc:
+        mcp.call("model_defaults", motor="test_inrunner", model="drive_sim")
+    assert "501" not in str(exc.value)
+
+
 def test_job_lifecycle_and_result(mcp):
     job = mcp.call("submit_job", motor="test_inrunner", model="analytical")
     deadline = time.monotonic() + 30

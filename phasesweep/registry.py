@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
 
-from phasesweep._extras import install_hint
+from phasesweep._extras import MissingExtra, require_extra
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -243,13 +243,13 @@ def _check_fem(model_name: str) -> None:
         return
     from importlib.util import find_spec
     if find_spec("ngsolve") is None:
-        raise ImportError(f"model '{model_name}' needs ngsolve; {install_hint('fem')}")
+        raise MissingExtra(f"model '{model_name}' needs ngsolve", "fem")
     _ensure_ngsolve_libs()
     try:
         import ngsolve  # noqa: F401
     except ImportError as e:
-        raise ImportError(
-            f"model '{model_name}': ngsolve found but failed to load ({e}); {install_hint('fem')}"
+        raise MissingExtra(
+            f"model '{model_name}': ngsolve found but failed to load ({e})", "fem"
         ) from e
     _fem_checked = True
 
@@ -273,11 +273,21 @@ def _lazy_cogging(config: RunConfig) -> dict[str, Any]:
 
 
 def _lazy_sim(config: RunConfig) -> dict[str, Any]:
-    from importlib.util import find_spec
-    if find_spec("motulator") is None:
-        raise ImportError(f"model 'drive_sim' needs motulator; {install_hint('sim')}")
+    require_extra("sim", _SIM_MODULES, f"model {config.model!r}")
     from phasesweep.simulation.sim_runner import run_drive_sim
     return run_drive_sim(config)
+
+
+_SIM_MODULES = ("motulator",)
+
+
+def require_model_extra(key: str) -> None:
+    """Raise MissingExtra if model *key* runs through an extra that is not
+    installed. Covers the drive-sim models; the FEM models check ngsolve
+    only when they run."""
+    info = MODEL_REGISTRY.get(key)
+    if info is not None and info.fn is _lazy_sim:
+        require_extra("sim", _SIM_MODULES, f"model {key!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -850,8 +860,9 @@ MODEL_REGISTRY: dict[str, ModelInfo] = {
 # ---------------------------------------------------------------------------
 # Units verified against the producing code. Conventions the unit strings
 # do not repeat: PM-machine currents, voltages and flux linkages are peak
-# per phase unless the key ends in _rms; induction-machine quantities are
-# rms per phase; speeds are mechanical rad/s. "1" = dimensionless (ratios
+# per phase unless the key ends in _rms; induction-machine currents and
+# voltages are rms per phase, power and torque machine totals; speeds are
+# mechanical rad/s. "1" = dimensionless (ratios
 # and fractions, not percent); "" = string or boolean.
 # Limits restate README "Scope and limitations", docs/validation-report.md,
 # or the entry's own comment above — no new claims.
@@ -867,12 +878,12 @@ _LIM_LOSSES = "AC winding losses and magnet eddy-current losses are not implemen
 
 _TRUST: dict[str, tuple[dict[str, str], tuple[str, ...]]] = {
     "analytical": (
-        {"fundamental": "T", "thd_pct": "%", "backemf_fundamental": "V",
+        {"fundamental": "T", "thd_pct": "%", "backemf_fundamental": "V_peak",
          "flux_linkage_peak": "Wb"},
         ("two-dimensional field model; 3D end effects enter only through k_end",),
     ),
     "analytical_axial": (
-        {"fundamental": "T", "thd_pct": "%", "backemf_fundamental": "V",
+        {"fundamental": "T", "thd_pct": "%", "backemf_fundamental": "V_peak",
          "flux_linkage_peak": "Wb"},
         (_LIM_QUASI_3D,),
     ),
@@ -881,7 +892,7 @@ _TRUST: dict[str, tuple[dict[str, str], tuple[str, ...]]] = {
         (_LIM_2D,),
     ),
     "fem_axial": (
-        {"fundamental": "T", "thd_pct": "%", "backemf_fundamental": "V"},
+        {"fundamental": "T", "thd_pct": "%", "backemf_fundamental": "V_peak"},
         (_LIM_QUASI_3D,),
     ),
     "cogging_torque": (
@@ -893,11 +904,11 @@ _TRUST: dict[str, tuple[dict[str, str], tuple[str, ...]]] = {
         (_LIM_2D,),
     ),
     "rated_torque": (
-        {"tau_mtpa": "N·m", "k_T": "N·m/A", "gamma_opt_deg": "deg"},
+        {"tau_mtpa": "N·m", "k_T": "N·m/A_peak", "gamma_opt_deg": "deg"},
         (_LIM_PM_SAT,),
     ),
     "stall_torque": (
-        {"tau_stall": "N·m", "I_stall": "A", "saturation_ratio": "1"},
+        {"tau_stall": "N·m", "I_stall": "A_peak", "saturation_ratio": "1"},
         (_LIM_PM_SAT,),
     ),
     "torque_speed": (
@@ -906,7 +917,7 @@ _TRUST: dict[str, tuple[dict[str, str], tuple[str, ...]]] = {
         (_LIM_PM_SAT,),
     ),
     "operating_point": (
-        {"I_s_rms": "A", "pf": "1", "m_index": "1", "regime": ""},
+        {"I_s_rms": "A_rms", "pf": "1", "m_index": "1", "regime": ""},
         (_LIM_PM_SAT,),
     ),
     "thermal_duty": (
@@ -931,11 +942,11 @@ _TRUST: dict[str, tuple[dict[str, str], tuple[str, ...]]] = {
         (_LIM_PM_SAT,),
     ),
     "im_equivalent_circuit": (
-        {"tau": "N·m", "I_1_rms": "A", "pf": "1", "eta_circuit": "1"},
+        {"tau": "N·m", "I_1_rms": "A_rms", "pf": "1", "eta_circuit": "1"},
         (_LIM_IM_SAT, "eta_circuit excludes friction and windage"),
     ),
     "im_fem_harmonic": (
-        {"tau": "N·m", "I_1_rms": "A", "pf": "1", "eta_circuit": "1"},
+        {"tau": "N·m", "I_1_rms": "A_rms", "pf": "1", "eta_circuit": "1"},
         (_LIM_2D,),
     ),
     "im_torque_slip": (
@@ -949,7 +960,7 @@ _TRUST: dict[str, tuple[dict[str, str], tuple[str, ...]]] = {
                   "separately (L_sigma_r_diff)"),
     ),
     "im_fem_locked_rotor": (
-        {"I_no_load_rms_linear_iron": "A", "L_no_load_linear_iron": "H",
+        {"I_no_load_rms_linear_iron": "A_rms", "L_no_load_linear_iron": "H",
          "phase_asymmetry_max": "1"},
         (_LIM_2D, "the locked-rotor tables and the *_linear_iron no-load values "
                   "always use linear iron; the latter are a diagnostic, not an "

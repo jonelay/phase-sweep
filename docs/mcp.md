@@ -21,6 +21,10 @@ claude mcp add --transport http phase-sweep http://127.0.0.1:8000/mcp
 
 Other clients take the same URL as an HTTP (streamable) MCP server.
 
+`[server]` covers the analytical and circuit models. `drive_sim` and
+`drive_sim_two_mass` also need the `sim` extra, and the FEM models need `fem`;
+`pip install -e ".[server,sim,fem]"` installs all three.
+
 The server has **no authentication**. The Host/Origin check guards a local
 browser against DNS rebinding; it is not access control. Binding a
 non-loopback address (`--host 0.0.0.0`) or naming a proxy hostname
@@ -88,7 +92,8 @@ flux linkage and voltage; see `data/bmw_i3/README.md`).
 | `validation_summary(motor)` | Computed vs measured/published comparison for a motor |
 
 Errors come back as tool errors prefixed with an HTTP-style status
-(`404: unknown motor config 'x'`, `400: ...`).
+(`404: unknown motor config 'x'`, `400: ...`). `501` means the server lacks
+an extra the model needs; the message names it.
 
 The MCP surface does not edit motor configs; use the dashboard config editor
 or the TOML files.
@@ -103,8 +108,11 @@ the motor:
  "applicable": false, "missing_params": [], "reason": "rated_torque needs I_rated"}
 ```
 
-- `applicable: false`: the motor lacks something the model needs. `reason`
-  names it; fix the motor file or pick another model.
+- `applicable: false`: the motor lacks something the model needs, or the
+  server lacks the `sim` extra a drive-sim model needs. `reason` names it;
+  fix the motor file, install the extra, or pick another model. A missing
+  `fem` extra is not listed here; the FEM job fails when it runs, with the
+  install hint in its error.
 - `missing_params`: required per-run params the server cannot derive for this
   motor (for example `load_mech` for `drive_sim_two_mass`). Pass them in
   `params`.

@@ -232,8 +232,9 @@ reference anchors x = 0). 2-pole (3000/3600 rpm) machines are accepted
 (`n_p = 1`). The `im_equivalent_circuit` model solves the per-phase
 circuit at `RunConfig.slip` (required, no default); `im_torque_slip`
 sweeps slip at
-the rated supply. Model outputs are per-phase RMS (suffixed `_rms`) —
-not the peak convention the PM circuit tier uses. See
+the rated supply. Voltage and current outputs are per-phase RMS
+(suffixed `_rms`), not the peak convention the PM circuit tier uses;
+power and torque are whole-machine totals. See
 `data/creator_case_im/creator_case_im.toml` for a fully-annotated
 example including the convention traps. The four scalars are fittable
 through the calibration workflow and appear in the validation-report

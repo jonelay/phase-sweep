@@ -21,7 +21,7 @@ from collections import deque
 from datetime import UTC, datetime
 from typing import Any
 
-from phasesweep._extras import install_hint
+from phasesweep._extras import MissingExtra
 
 try:
     from fastapi import FastAPI, HTTPException
@@ -32,7 +32,7 @@ try:
     from pydantic import BaseModel
     from starlette.routing import BaseRoute
 except ImportError as e:
-    raise ImportError(f"phasesweep.server needs {e.name}; {install_hint('server')}") from None
+    raise MissingExtra(f"phasesweep.server needs {e.name}", "server") from None
 
 from phasesweep.server import jobs as jobs_mod
 from phasesweep.server import routes
@@ -73,7 +73,8 @@ Costs: fast models finish in about a second; 'slow' FEM models can take
 minutes per sub-task. Identical runs are served from the result-store
 cache. Units are SI unless a field name says otherwise. PM-machine
 currents, voltages and flux linkages are peak per phase unless the key
-ends in _rms; induction-machine quantities are rms per phase; speeds are
+ends in _rms; induction-machine currents and voltages are rms per phase
+and their power and torque are machine totals; speeds are
 mechanical rad/s.
 Every OK result carries `headline` (the model's key metrics with units)
 and `caveats` (severity info|warn, derived from the result's own
@@ -309,6 +310,8 @@ def build_mcp(app: FastAPI, activity: McpActivity | None = None) -> MCPServer:
             return routes._derive_model_defaults(m, model)
         except (ValueError, KeyError, TypeError) as e:
             raise ToolError(f"400: {e}") from None
+        except MissingExtra as e:
+            raise ToolError(f"501: {e}") from None
 
     @server.tool()
     def submit_job(
@@ -348,6 +351,8 @@ def build_mcp(app: FastAPI, activity: McpActivity | None = None) -> MCPServer:
             raise ToolError(f"404: unknown motor config {motor!r}") from None
         except (ValueError, TypeError) as e:
             raise ToolError(f"400: {e}") from None
+        except MissingExtra as e:
+            raise ToolError(f"501: {e}") from None
         return _job_view(job)
 
     @server.tool()
